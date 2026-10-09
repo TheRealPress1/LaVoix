@@ -28,82 +28,6 @@ struct OnboardingModelInfoTooltip: View {
     }
 }
 
-struct FluidOnboardingLandingHero<Actions: View>: View {
-    @Environment(\.theme) private var theme
-
-    let eyebrow: String
-    let title: String
-    let accentTitle: String
-    let firstDetail: String
-    let secondDetail: String
-    let actions: Actions
-
-    init(
-        eyebrow: String,
-        title: String,
-        accentTitle: String,
-        firstDetail: String,
-        secondDetail: String,
-        @ViewBuilder actions: () -> Actions
-    ) {
-        self.eyebrow = eyebrow
-        self.title = title
-        self.accentTitle = accentTitle
-        self.firstDetail = firstDetail
-        self.secondDetail = secondDetail
-        self.actions = actions()
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            FluidOnboardingAppIconMark()
-                .padding(.bottom, self.eyebrow.isEmpty ? 40 : 26)
-
-            if !self.eyebrow.isEmpty {
-                Text(self.eyebrow)
-                    .font(.fluidSystem(size: 14, weight: .bold))
-                    .tracking(4.2)
-                    .foregroundStyle(FluidOnboardingLandingColors.blue.opacity(0.72))
-                    .textCase(.uppercase)
-                    .padding(.bottom, 16)
-            }
-
-            VStack(spacing: 4) {
-                Text(self.title)
-                    .font(.fluidSystem(size: 52, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .multilineTextAlignment(.center)
-                    .minimumScaleFactor(0.82)
-
-                Text(self.accentTitle)
-                    .font(.fluidSystem(size: 50, weight: .semibold))
-                    .italic()
-                    .foregroundStyle(FluidOnboardingLandingColors.blue)
-                    .multilineTextAlignment(.center)
-                    .minimumScaleFactor(0.76)
-            }
-            .lineLimit(1)
-            .shadow(color: .black.opacity(0.34), radius: 10, x: 0, y: 5)
-            .padding(.bottom, 28)
-
-            VStack(spacing: 8) {
-                Text(self.firstDetail)
-                Text(self.secondDetail)
-            }
-            .font(.fluidSystem(size: 22, weight: .medium))
-            .foregroundStyle(Color.white.opacity(0.70))
-            .multilineTextAlignment(.center)
-            .lineLimit(1)
-            .minimumScaleFactor(0.82)
-            .padding(.bottom, 42)
-
-            self.actions
-        }
-        .padding(.horizontal, self.theme.metrics.onboardingSurface.landing.heroPadding)
-        .frame(maxWidth: .infinity, alignment: .center)
-    }
-}
-
 struct FluidOnboardingLandingBackdrop: View {
     let glowCenter: UnitPoint
 
@@ -137,6 +61,10 @@ private final class FluidOnboardingWindowTransparencyView: NSView {
         let isOpaque: Bool
         let backgroundColor: NSColor
         let hasShadow: Bool
+        let titlebarAppearsTransparent: Bool
+        let titleVisibility: NSWindow.TitleVisibility
+        let styleMask: NSWindow.StyleMask
+        let isMovableByWindowBackground: Bool
         let hiddenButtons: [NSWindow.ButtonType: Bool]
     }
 
@@ -166,6 +94,10 @@ private final class FluidOnboardingWindowTransparencyView: NSView {
                 isOpaque: window.isOpaque,
                 backgroundColor: window.backgroundColor,
                 hasShadow: window.hasShadow,
+                titlebarAppearsTransparent: window.titlebarAppearsTransparent,
+                titleVisibility: window.titleVisibility,
+                styleMask: window.styleMask,
+                isMovableByWindowBackground: window.isMovableByWindowBackground,
                 hiddenButtons: Dictionary(uniqueKeysWithValues: Self.windowButtons.map {
                     ($0, window.standardWindowButton($0)?.isHidden ?? false)
                 })
@@ -175,6 +107,10 @@ private final class FluidOnboardingWindowTransparencyView: NSView {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = true
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.styleMask.insert(.fullSizeContentView)
+        window.isMovableByWindowBackground = true
         // Onboarding is a single guided flow; the traffic lights only break the card illusion.
         for button in Self.windowButtons {
             window.standardWindowButton(button)?.isHidden = true
@@ -186,6 +122,10 @@ private final class FluidOnboardingWindowTransparencyView: NSView {
         window.isOpaque = snapshot.isOpaque
         window.backgroundColor = snapshot.backgroundColor
         window.hasShadow = snapshot.hasShadow
+        window.titlebarAppearsTransparent = snapshot.titlebarAppearsTransparent
+        window.titleVisibility = snapshot.titleVisibility
+        window.styleMask = snapshot.styleMask
+        window.isMovableByWindowBackground = snapshot.isMovableByWindowBackground
         for (button, wasHidden) in snapshot.hiddenButtons {
             window.standardWindowButton(button)?.isHidden = wasHidden
         }
@@ -363,9 +303,9 @@ struct FluidOnboardingLandingPrimaryButton: NSViewRepresentable {
 }
 
 private final class LandingPrimaryNSButton: NSButton {
-    private static let normalColor = NSColor(srgbRed: 0.16, green: 0.49, blue: 1.0, alpha: 1.0)
-    private static let highlightedColor = NSColor(srgbRed: 0.10, green: 0.40, blue: 0.92, alpha: 1.0)
-    private static let hoverColor = NSColor(srgbRed: 0.20, green: 0.54, blue: 1.0, alpha: 1.0)
+    private static let normalColor = NSColor(white: 0.96, alpha: 1.0)
+    private static let highlightedColor = NSColor(white: 0.78, alpha: 1.0)
+    private static let hoverColor = NSColor(white: 1.0, alpha: 1.0)
     private var trackingArea: NSTrackingArea?
     private var isHovering = false
 
@@ -423,7 +363,7 @@ private final class LandingPrimaryNSButton: NSButton {
             string: title,
             attributes: [
                 .font: NSFont.fluidSystemFont(ofSize: 18, weight: .semibold),
-                .foregroundColor: NSColor.white,
+                .foregroundColor: NSColor.black,
             ]
         )
         self.alignment = .center
@@ -431,7 +371,7 @@ private final class LandingPrimaryNSButton: NSButton {
         self.layer?.backgroundColor = self.backgroundColor(isHighlighted: isHighlighted).cgColor
         self.layer?.cornerRadius = self.bounds.height > 0 ? self.bounds.height / 2 : 28
         self.layer?.shadowColor = Self.normalColor.withAlphaComponent(0.34).cgColor
-        self.layer?.shadowOpacity = isHighlighted ? 0.20 : 0.34
+        self.layer?.shadowOpacity = 0
         self.layer?.shadowRadius = isHighlighted ? 8 : 14
         self.layer?.shadowOffset = NSSize(width: 0, height: isHighlighted ? 4 : 7)
     }
@@ -445,20 +385,8 @@ private final class LandingPrimaryNSButton: NSButton {
     }
 }
 
-private struct FluidOnboardingAppIconMark: View {
-    var body: some View {
-        Image("OnboardingLogo")
-            .resizable()
-            .interpolation(.high)
-            .aspectRatio(contentMode: .fit)
-            .frame(width: 128, height: 128)
-            .frame(width: 360, height: 176)
-            .accessibilityHidden(true)
-    }
-}
-
 enum FluidOnboardingLandingColors {
-    static let blue = FluidBrandColors.blue
+    static let blue = Color.white
 }
 
 private struct OnboardingSelectableSurfaceModifier: ViewModifier {

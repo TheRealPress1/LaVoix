@@ -163,20 +163,20 @@ struct OnboardingFlowView: View {
             case .aiEnhancement:
                 return "Set Up AI Enhancement"
             case .playground:
-                return "Try FluidVoice"
+                return "Try LaVoix"
             }
         }
 
         var subtitle: String {
             switch self {
             case .landing:
-                return "Talk anywhere. FluidVoice types for you."
+                return "Talk anywhere. LaVoix types for you."
             case .language:
                 return "Pick the language you speak most."
             case .voiceModel:
                 return "Choose the best local engine for your language."
             case .permissions:
-                return "Allow FluidVoice to listen and type into other apps."
+                return "Allow LaVoix to listen and type into other apps."
             case .aiEnhancement:
                 return "Optional: Configure AI post-processing or skip this step."
             case .playground:
@@ -450,7 +450,7 @@ struct OnboardingFlowView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Welcome to FluidVoice")
+            Text("Welcome to LaVoix")
                 .font(self.theme.typography.title)
                 .foregroundStyle(self.theme.palette.primaryText)
 
@@ -493,54 +493,30 @@ struct OnboardingFlowView: View {
     }
 
     private var landingStep: some View {
-        GeometryReader { proxy in
-            let landing = self.theme.metrics.onboardingSurface.landing
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
 
-            ZStack {
-                VStack(spacing: 0) {
-                    OnboardingFittedContent(width: landing.contentWidth + 48) {
-                        FluidOnboardingLandingHero(
-                            eyebrow: "",
-                            title: "Just speak.",
-                            accentTitle: "We'll handle the rest.",
-                            firstDetail: "Accurate. Fast. Private. Free.",
-                            secondDetail: "Built for creators, thinkers, and builders."
-                        ) { EmptyView() }
-                            .padding(24)
-                    }
-                    HStack {
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 18) {
-                            Text("Your voice is your instrument.")
-                                .font(.fluidSystem(size: 17, weight: .medium))
-                                .italic()
-                                .foregroundStyle(Color.white.opacity(0.55))
-                            FluidOnboardingLandingPrimaryButton(title: "Next") { self.goNext() }
-                                .frame(
-                                    width: FluidOnboardingLandingPrimaryButton.size.width,
-                                    height: FluidOnboardingLandingPrimaryButton.size.height
-                                )
-                        }
-                    }
-                    .padding(.horizontal, FluidOnboardingLayout.footerHorizontalInset)
-                    .padding(.bottom, FluidOnboardingLayout.footerBottomInset)
-                }
+            FluidOnboardingCompactAppIconMark(size: 220)
 
-                FluidOnboardingLandingHoverTracker(
-                    onMove: { location, size in
-                        self.updateLandingGlow(location: location, in: size)
-                    },
-                    onExit: {
-                        self.resetLandingGlow()
-                    }
+            Text("Your voice is your instrument.")
+                .font(.system(size: 30, weight: .regular, design: .serif))
+                .italic()
+                .foregroundStyle(Color.white.opacity(0.88))
+                .multilineTextAlignment(.center)
+                .padding(.top, 36)
+
+            FluidOnboardingLandingPrimaryButton(title: "Next") { self.goNext() }
+                .frame(
+                    width: FluidOnboardingLandingPrimaryButton.size.width,
+                    height: FluidOnboardingLandingPrimaryButton.size.height
                 )
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .accessibilityHidden(true)
-                .zIndex(-1)
-            }
-            .background {
-                FluidOnboardingLandingBackdrop(glowCenter: self.landingGlowCenter)
-            }
+                .padding(.top, 56)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            FluidOnboardingLandingBackdrop(glowCenter: self.landingGlowCenter)
         }
     }
 
@@ -1123,7 +1099,7 @@ struct OnboardingFlowView: View {
                             .frame(width: 608)
 
                             if self.isModelPreparationInProgress {
-                                Label("First-time setup can take a few minutes while your Mac prepares the model. Please keep FluidVoice open.", systemImage: "clock.arrow.circlepath")
+                                Label("First-time setup can take a few minutes while your Mac prepares the model. Please keep LaVoix open.", systemImage: "clock.arrow.circlepath")
                                     .font(self.theme.typography.captionStrong)
                                     .foregroundStyle(self.theme.palette.warning)
                                     .labelStyle(.titleAndIcon)
@@ -1185,7 +1161,7 @@ struct OnboardingFlowView: View {
                             FluidOnboardingCompactAppIconMark(size: 66)
                                 .padding(.bottom, 22)
 
-                            Text("Let FluidVoice\nlisten and type")
+                            Text("Let LaVoix\nlisten and type")
                                 .font(.fluidSystem(size: 28, weight: .semibold))
                                 .foregroundStyle(.white)
                                 .multilineTextAlignment(.center)
@@ -1202,7 +1178,7 @@ struct OnboardingFlowView: View {
                                     stepNumber: 1,
                                     title: self.isMicrophoneReady ? "Microphone access allowed" : "Allow microphone",
                                     subtitle: self.isMicrophoneReady
-                                        ? "Choose the microphone you want FluidVoice to use."
+                                        ? "Choose the microphone you want LaVoix to use."
                                         : "macOS will ask once. Click Allow to start dictating.",
                                     systemImage: "mic.fill",
                                     isReady: self.isMicrophoneReady,
@@ -1235,7 +1211,7 @@ struct OnboardingFlowView: View {
                                 }
 
                                 if !self.isAccessibilityReady {
-                                    Text("Already enabled it? FluidVoice will update when macOS confirms access.")
+                                    Text("Already enabled it? LaVoix will update when macOS confirms access.")
                                         .font(.fluidSystem(size: 12, weight: .medium))
                                         .foregroundStyle(Color.white.opacity(0.42))
                                         .padding(.top, 2)
@@ -1284,7 +1260,7 @@ struct OnboardingFlowView: View {
                             FluidOnboardingCompactAppIconMark(size: 66)
                                 .padding(.bottom, 22)
 
-                            Text("FluidVoice is ready.")
+                            Text("LaVoix is ready.")
                                 .font(.fluidSystem(size: 28, weight: .semibold))
                                 .foregroundStyle(.white)
                                 .multilineTextAlignment(.center)
@@ -1544,7 +1520,7 @@ struct OnboardingFlowView: View {
         return VStack(alignment: .leading, spacing: isCompactModel ? self.theme.metrics.spacing.sm : 10) {
             HStack(alignment: .top, spacing: 10) {
                 if model.brandName == "FluidVoice" {
-                    FluidVoiceBrandIcon(size: 22)
+                    LaVoixBrandIcon(size: 22)
                 }
                 Text(self.onboardingModelTitle(for: model))
                     .font(self.theme.typography.sectionTitle)
@@ -2561,7 +2537,7 @@ private struct OnboardingMicrophoneSetupPanel: View {
                     .fluidDropdownStyle()
                     .frame(width: 248)
                     .tint(.white)
-                    .accessibilityHint("Moves the selected microphone to first in FluidVoice priority")
+                    .accessibilityHint("Moves the selected microphone to first in LaVoix priority")
                 }
             }
             .padding(.horizontal, 18)
