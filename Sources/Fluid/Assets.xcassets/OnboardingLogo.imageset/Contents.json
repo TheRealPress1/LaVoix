@@ -1,0 +1,7 @@
+{
+  "images" : [
+    { "idiom" : "mac", "filename" : "OnboardingLogo.png", "scale" : "1x" },
+    { "idiom" : "mac", "filename" : "OnboardingLogo@2x.png", "scale" : "2x" }
+  ],
+  "info" : { "author" : "xcode", "version" : 1 }
+}

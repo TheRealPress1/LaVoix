@@ -510,11 +510,17 @@ struct OnboardingFlowView: View {
                     }
                     HStack {
                         Spacer()
-                        FluidOnboardingLandingPrimaryButton(title: "Next") { self.goNext() }
-                            .frame(
-                                width: FluidOnboardingLandingPrimaryButton.size.width,
-                                height: FluidOnboardingLandingPrimaryButton.size.height
-                            )
+                        VStack(alignment: .trailing, spacing: 18) {
+                            Text("Your voice is your instrument.")
+                                .font(.fluidSystem(size: 17, weight: .medium))
+                                .italic()
+                                .foregroundStyle(Color.white.opacity(0.55))
+                            FluidOnboardingLandingPrimaryButton(title: "Next") { self.goNext() }
+                                .frame(
+                                    width: FluidOnboardingLandingPrimaryButton.size.width,
+                                    height: FluidOnboardingLandingPrimaryButton.size.height
+                                )
+                        }
                     }
                     .padding(.horizontal, FluidOnboardingLayout.footerHorizontalInset)
                     .padding(.bottom, FluidOnboardingLayout.footerBottomInset)

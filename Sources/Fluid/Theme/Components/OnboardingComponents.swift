@@ -112,42 +112,15 @@ struct FluidOnboardingLandingBackdrop: View {
     }
 
     var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-
-            Color(red: 0.012, green: 0.019, blue: 0.031)
-                .opacity(0.88)
-
-            RadialGradient(
-                colors: [
-                    FluidOnboardingLandingColors.blue.opacity(0.18),
-                    Color(red: 0.014, green: 0.032, blue: 0.068).opacity(0.30),
-                    .clear,
-                ],
-                center: self.glowCenter,
-                startRadius: 0,
-                endRadius: 620
-            )
-
-            RadialGradient(
-                colors: [
-                    Color.white.opacity(0.026),
-                    .clear,
-                ],
-                center: .center,
-                startRadius: 0,
-                endRadius: 520
-            )
-        }
-        // A crisp card edge: the old feathered mask let the window's rectangle show through
-        // the fade, which read as a second, uglier boundary on light desktops.
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-        }
-        .ignoresSafeArea()
+        Color.black
+            // A crisp card edge: the old feathered mask let the window's rectangle show through
+            // the fade, which read as a second, uglier boundary on light desktops.
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+            }
+            .ignoresSafeArea()
     }
 }
 
@@ -245,9 +218,6 @@ struct FluidOnboardingCompactProgress: View {
 }
 
 struct FluidOnboardingCompactAppIconMark: View {
-    private static let appIconImage: NSImage = NSApplication.shared.applicationIconImage
-        ?? NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
-
     let size: CGFloat
 
     init(size: CGFloat = 66) {
@@ -255,13 +225,11 @@ struct FluidOnboardingCompactAppIconMark: View {
     }
 
     var body: some View {
-        Image(nsImage: Self.appIconImage)
+        Image("OnboardingLogo")
             .resizable()
             .interpolation(.high)
             .aspectRatio(contentMode: .fit)
             .frame(width: self.size, height: self.size)
-            .shadow(color: FluidOnboardingLandingColors.blue.opacity(0.45), radius: 24, x: 0, y: 0)
-            .shadow(color: Color.black.opacity(0.42), radius: 14, x: 0, y: 9)
             .accessibilityHidden(true)
     }
 }
@@ -478,62 +446,14 @@ private final class LandingPrimaryNSButton: NSButton {
 }
 
 private struct FluidOnboardingAppIconMark: View {
-    private static let appIconImage: NSImage = NSApplication.shared.applicationIconImage
-        ?? NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
-
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(FluidOnboardingLandingColors.blue.opacity(0.28))
-                .blur(radius: 42)
-                .frame(width: 188, height: 188)
-                .offset(y: -16)
-
-            FluidOnboardingPortalGlow()
-                .offset(y: 58)
-
-            Image(nsImage: Self.appIconImage)
-                .resizable()
-                .interpolation(.high)
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 116, height: 116)
-                .shadow(color: Color.black.opacity(0.56), radius: 20, x: 0, y: 15)
-                .shadow(color: FluidOnboardingLandingColors.blue.opacity(0.58), radius: 36, x: 0, y: 0)
-        }
-        .frame(width: 360, height: 176)
-        .accessibilityHidden(true)
-    }
-}
-
-private struct FluidOnboardingPortalGlow: View {
-    var body: some View {
-        ZStack {
-            Ellipse()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            Color.white.opacity(0.74),
-                            FluidOnboardingLandingColors.blue.opacity(0.64),
-                            FluidOnboardingLandingColors.blue.opacity(0.05),
-                            .clear,
-                        ],
-                        center: .center,
-                        startRadius: 0,
-                        endRadius: 112
-                    )
-                )
-                .blur(radius: 7)
-                .frame(width: 230, height: 25)
-
-            Ellipse()
-                .stroke(FluidOnboardingLandingColors.blue.opacity(0.42), lineWidth: 3)
-                .blur(radius: 1.4)
-                .frame(width: 326, height: 35)
-
-            Ellipse()
-                .stroke(FluidOnboardingLandingColors.blue.opacity(0.24), lineWidth: 1.4)
-                .frame(width: 260, height: 22)
-        }
+        Image("OnboardingLogo")
+            .resizable()
+            .interpolation(.high)
+            .aspectRatio(contentMode: .fit)
+            .frame(width: 128, height: 128)
+            .frame(width: 360, height: 176)
+            .accessibilityHidden(true)
     }
 }
 
