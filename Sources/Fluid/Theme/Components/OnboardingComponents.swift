@@ -255,6 +255,84 @@ struct FluidOnboardingLandingHoverTracker: NSViewRepresentable {
     }
 }
 
+/// White pill with a single arrow. Hover: the arrow makes one slow counter-clockwise turn.
+/// Click: it snaps quickly back to 3 o'clock, then the action fires.
+struct FluidOnboardingArrowButton: View {
+    static let size = CGSize(width: 236, height: 56)
+    private static let spinDuration: Double = 2.6
+    private static let settleDuration: Double = 0.22
+
+    let action: () -> Void
+
+    @State private var angle: Double = 0
+    @State private var isHovering = false
+    @State private var spinStart: Date?
+    @State private var isFinishing = false
+
+    var body: some View {
+        Button(action: self.handleClick) {
+            ZStack {
+                Capsule()
+                    .fill(self.isHovering ? Color.white : Color(white: 0.94))
+
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(Color.black)
+                    .rotationEffect(.degrees(self.angle))
+            }
+            .frame(width: Self.size.width, height: Self.size.height)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut(.defaultAction)
+        .onHover { hovering in
+            guard !self.isFinishing else { return }
+            if hovering {
+                self.beginSpin()
+            } else {
+                self.settle(duration: 0.3)
+            }
+        }
+        .accessibilityLabel("Next")
+    }
+
+    private func beginSpin() {
+        self.isHovering = true
+        let base = (self.angle / 360).rounded() * 360
+        self.spinStart = Date()
+        withAnimation(.easeInOut(duration: Self.spinDuration)) {
+            self.angle = base - 360
+        }
+    }
+
+    /// Finish at the nearest 3 o'clock position: forward if past halfway, otherwise back.
+    private func settle(duration: Double) {
+        self.isHovering = false
+        guard let start = self.spinStart else { return }
+        self.spinStart = nil
+        let elapsed = Date().timeIntervalSince(start)
+        let t = min(max(elapsed / Self.spinDuration, 0), 1)
+        let eased = t * t * (3 - 2 * t)
+        let base = self.angle + 360
+        let target = eased > 0.5 ? base - 360 : base
+        withAnimation(.easeOut(duration: duration)) {
+            self.angle = target
+        }
+    }
+
+    private func handleClick() {
+        guard !self.isFinishing else { return }
+        self.isFinishing = true
+        if self.spinStart != nil {
+            self.settle(duration: Self.settleDuration)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleDuration) {
+            self.action()
+            self.isFinishing = false
+        }
+    }
+}
+
 struct FluidOnboardingLandingPrimaryButton: NSViewRepresentable {
     static let size = CGSize(width: 236, height: 56)
 

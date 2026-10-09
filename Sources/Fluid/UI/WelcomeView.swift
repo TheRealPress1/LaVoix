@@ -499,16 +499,12 @@ struct OnboardingFlowView: View {
             FluidOnboardingCompactAppIconMark(size: 220)
 
             Text("Your voice is your instrument.")
-                .font(LaVoixFonts.instrumentSerifItalic(size: 44))
+                .font(LaVoixFonts.tagline(size: 46))
                 .foregroundStyle(Color.white.opacity(0.92))
                 .multilineTextAlignment(.center)
                 .padding(.top, 36)
 
-            FluidOnboardingLandingPrimaryButton(title: "Next") { self.goNext() }
-                .frame(
-                    width: FluidOnboardingLandingPrimaryButton.size.width,
-                    height: FluidOnboardingLandingPrimaryButton.size.height
-                )
+            FluidOnboardingArrowButton { self.goNext() }
                 .padding(.top, 56)
 
             Spacer(minLength: 0)
