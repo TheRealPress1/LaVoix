@@ -419,7 +419,7 @@ struct MeetingRecordingSettingsSheet: View {
             {
                 MeetingAdaptiveSetupRow(
                     title: "Zoom window access needs repair",
-                    detail: "Screen Recording or Accessibility access is preventing FluidVoice from reading Zoom meeting windows. Recording has not started."
+                    detail: "Screen Recording or Accessibility access is preventing LaVoix from reading Zoom meeting windows. Recording has not started."
                 ) {
                     Button("Open Screen Recording Settings") {
                         self.onOpenScreenRecordingSettings()
@@ -450,7 +450,7 @@ struct MeetingRecordingSettingsSheet: View {
                 }
             }
 
-            Text("Expired audio is removed while FluidVoice is running.")
+            Text("Expired audio is removed while LaVoix is running.")
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
         }

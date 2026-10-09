@@ -40,7 +40,7 @@ struct FeedbackSubmission: Encodable {
     static var appDetails: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
-        return "FluidVoice \(version) (\(build))\nmacOS: \(ProcessInfo.processInfo.operatingSystemVersionString)"
+        return "LaVoix \(version) (\(build))\nmacOS: \(ProcessInfo.processInfo.operatingSystemVersionString)"
     }
 
     static func isValidEmail(_ value: String) -> Bool {

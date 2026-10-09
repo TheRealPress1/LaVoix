@@ -2128,8 +2128,8 @@ final class MeetingSessionCoordinator: ObservableObject {
                 kind: .captureStoppedUnexpectedly,
                 trackID: nil,
                 detail: previousState == .processing
-                    ? "FluidVoice restarted before transcription completed."
-                    : "FluidVoice restarted before capture finalized."
+                    ? "LaVoix restarted before transcription completed."
+                    : "LaVoix restarted before capture finalized."
             ))
         }
         if Self.shouldQueuePendingAttempt(for: session) {
@@ -2189,7 +2189,7 @@ enum MeetingCoordinatorError: LocalizedError {
         case .noCorrectionToUndo:
             return "There is nothing to undo."
         case .maintenanceInProgress:
-            return "FluidVoice is tidying up meeting storage. Try again in a moment."
+            return "LaVoix is tidying up meeting storage. Try again in a moment."
         }
     }
 }

@@ -182,7 +182,7 @@ struct OnboardingAIEnhancementStepView: View {
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
-            Text("Exclusive to FluidVoice. Optimized for your Mac. It turns your spoken words into clear, formatted text. Entirely on your device.")
+            Text("Exclusive to LaVoix. Optimized for your Mac. It turns your spoken words into clear, formatted text. Entirely on your device.")
                 .font(.fluidSystem(size: 15, weight: .medium))
                 .foregroundStyle(.white.opacity(0.64))
                 .multilineTextAlignment(.center)

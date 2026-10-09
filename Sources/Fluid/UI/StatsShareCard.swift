@@ -107,7 +107,7 @@ struct StatsShareCard: View {
                     .resizable()
                     .frame(width: 22, height: 22)
                     .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                Text("FluidVoice")
+                Text("LaVoix")
                     .font(.system(size: 14, weight: .semibold))
                 Spacer()
                 Text(Date.now.formatted(.dateTime.month(.wide).year()))
@@ -240,7 +240,7 @@ struct StatsShareSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Flex your FluidVoice stats").font(self.theme.typography.sectionTitle)
+                    Text("Flex your LaVoix stats").font(self.theme.typography.sectionTitle)
                     Text("Post it, send it to a friend, start a streak war.")
                         .font(self.theme.typography.caption).foregroundStyle(.secondary)
                 }
@@ -272,7 +272,7 @@ struct StatsShareSheet: View {
                 if let image {
                     ShareLink(
                         item: Image(nsImage: image),
-                        preview: SharePreview("My FluidVoice stats", image: Image(nsImage: image))
+                        preview: SharePreview("My LaVoix stats", image: Image(nsImage: image))
                     ) {
                         Label("Share…", systemImage: "square.and.arrow.up")
                     }
@@ -339,7 +339,7 @@ struct StatsShareSheet: View {
         else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
-        panel.nameFieldStringValue = "FluidVoice stats.png"
+        panel.nameFieldStringValue = "LaVoix stats.png"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         try? png.write(to: url)
     }

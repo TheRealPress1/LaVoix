@@ -274,7 +274,7 @@ final class CompactSpeechModelReleaseCatalog: ObservableObject {
     }
 
     nonisolated static func cacheFolderName(bundleIdentifier: String?, isDebug: Bool) -> String {
-        guard isDebug else { return "FluidVoice" }
+        guard isDebug else { return "LaVoix" }
         let identifier = bundleIdentifier ?? "debug"
         let valid = !identifier.isEmpty && identifier != "." && identifier != ".."
             && identifier.utf8.allSatisfy { (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 46 }

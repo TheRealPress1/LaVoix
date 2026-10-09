@@ -262,6 +262,7 @@ struct FluidOnboardingArrowButton: View {
     private static let spinDuration: Double = 2.6
     private static let settleDuration: Double = 0.22
 
+    var isEnabled: Bool = true
     let action: () -> Void
 
     @State private var angle: Double = 0
@@ -285,8 +286,10 @@ struct FluidOnboardingArrowButton: View {
         }
         .buttonStyle(.plain)
         .keyboardShortcut(.defaultAction)
+        .disabled(!self.isEnabled)
+        .opacity(self.isEnabled ? 1 : 0.3)
         .onHover { hovering in
-            guard !self.isFinishing else { return }
+            guard !self.isFinishing, self.isEnabled else { return }
             if hovering {
                 self.beginSpin()
             } else {

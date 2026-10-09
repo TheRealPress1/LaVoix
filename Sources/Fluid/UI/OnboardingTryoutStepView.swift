@@ -134,7 +134,7 @@ struct OnboardingTryoutStepView: View {
 
     private var placeholderText: String {
         if self.isReady {
-            return "Click here to test FluidVoice"
+            return "Click here to test LaVoix"
         }
         return self.isRunning ? "Listening..." : "Your dictation will appear here..."
     }

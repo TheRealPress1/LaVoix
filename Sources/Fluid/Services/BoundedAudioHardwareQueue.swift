@@ -17,7 +17,7 @@ final nonisolated class BoundedAudioHardwareQueue: @unchecked Sendable {
             case .timedOut, .recovering, .deviceStopped:
                 "The microphone is not responding. Try again shortly. If it remains unavailable, quit and reopen FluidVoice."
             case .cleanupFailed:
-                "The microphone could not be reset safely. Quit and reopen FluidVoice before recording again."
+                "The microphone could not be reset safely. Quit and reopen LaVoix before recording again."
             }
         }
     }

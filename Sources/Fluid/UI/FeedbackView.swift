@@ -34,7 +34,7 @@ struct FeedbackView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                    Text("Make FluidVoice better.")
+                    Text("Make LaVoix better.")
                         .font(self.theme.typography.title)
                         .foregroundStyle(self.theme.palette.primaryText)
                     Text("Something in your way? Have an idea? Tell us.")
@@ -223,7 +223,7 @@ struct FeedbackView: View {
                 .foregroundStyle(self.theme.palette.warning)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
-            Text(self.sending ? "Sending…" : "Goes straight to the FluidVoice team.")
+            Text(self.sending ? "Sending…" : "Goes straight to the LaVoix team.")
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.tertiaryText)
         }
@@ -270,7 +270,7 @@ struct FeedbackView: View {
 
     private var footer: some View {
         HStack(spacing: self.theme.metrics.spacing.sm) {
-            Text("Enjoying FluidVoice?")
+            Text("Enjoying LaVoix?")
             if let url = Self.starURL {
                 Link("Star it on GitHub", destination: url)
             }

@@ -191,7 +191,7 @@ final class MicrophonePreferenceCoordinator: ObservableObject {
         self.settings.microphoneSelectionMode = .manual
         self.settings.microphoneSelectionMigrationVersion = SettingsStore.microphonePriorityMigrationVersion
         DebugLogger.shared.info(
-            "Migrated FluidVoice microphone priority with '\(selectedInput.name)' first",
+            "Migrated LaVoix microphone priority with '\(selectedInput.name)' first",
             source: "MicrophonePreferenceCoordinator"
         )
     }

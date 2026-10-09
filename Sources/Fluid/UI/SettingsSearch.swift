@@ -232,7 +232,7 @@ enum SettingsSearchIndex {
         .init(
             target: .launchAtStartup,
             title: "Launch at startup",
-            terms: ["Automatically start FluidVoice when you log in", "login startup boot open"]
+            terms: ["Automatically start LaVoix when you log in", "login startup boot open"]
         ),
         .init(
             target: .showWindowAtLogin,

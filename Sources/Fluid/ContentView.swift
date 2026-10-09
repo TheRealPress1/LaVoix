@@ -1590,8 +1590,8 @@ struct ContentView: View {
                 reduceMotion: self.accessibilityReduceMotion
             ))
             .onHover { self.isSettingsBackHovered = $0 }
-            .help("Back to FluidVoice")
-            .accessibilityLabel("Back to FluidVoice")
+            .help("Back to LaVoix")
+            .accessibilityLabel("Back to LaVoix")
 
             SidebarSearchField(
                 text: Binding(
@@ -1759,7 +1759,7 @@ struct ContentView: View {
             reduceMotion: self.accessibilityReduceMotion
         ))
         .onHover { self.isHelpEntryHovered = $0 }
-        .help("Open FluidVoice Help")
+        .help("Open LaVoix Help")
         .accessibilityLabel("Help")
         .accessibilityHint("What’s new, documentation, Fluid Intelligence demo, and replay onboarding")
     }
@@ -1918,29 +1918,12 @@ struct ContentView: View {
     }
 
     private var onboardingOnlyView: some View {
-        OnboardingFlowView(
-            currentStep: Binding(
-                get: { self.settings.onboardingCurrentStep },
-                set: { self.settings.onboardingCurrentStep = $0 }
-            ),
+        LaVoixOnboardingView(
             accessibilityEnabled: self.accessibilityEnabled,
-            accessibilitySetupInProgress: self.didOpenAccessibilityPane,
-            markAISkipped: {
-                self.settings.onboardingAISkipped = true
-                self.settings.setDictationPromptSelection(.off)
-            },
+            openAccessibilitySettings: self.openAccessibilitySettings,
             finishOnboarding: {
                 self.completeOnboardingIfPossible()
-            },
-            finishOnboardingAtGettingStarted: {
-                self.completeOnboardingIfPossible(selecting: .welcome)
-            },
-            openAccessibilitySettings: self.openAccessibilitySettings,
-            restartApp: self.restartApp,
-            menuBarManager: self.menuBarManager,
-            activeShortcutRecordingTarget: self.$activeShortcutRecordingTarget,
-            shortcutRecordingMessage: self.$shortcutRecordingMessage,
-            theme: self.theme
+            }
         )
         .environmentObject(self.appServices)
         .ignoresSafeArea(.container, edges: .top)
@@ -2152,8 +2135,8 @@ struct ContentView: View {
                     self.instructionStep(number: "2", text: "Choose **Allow** in the system dialog")
                 } else if self.asr.micStatus == .denied {
                     self.instructionStep(number: "1", text: "Click **Open Settings** above")
-                    self.instructionStep(number: "2", text: "Find **FluidVoice** in the microphone list")
-                    self.instructionStep(number: "3", text: "Toggle **FluidVoice ON** to allow access")
+                    self.instructionStep(number: "2", text: "Find **LaVoix** in the microphone list")
+                    self.instructionStep(number: "3", text: "Toggle **LaVoix ON** to allow access")
                 }
             }
             .padding(.leading, 4)
@@ -5523,14 +5506,6 @@ extension ContentView {
         self.accessibilityEnabled
     }
 
-    private var onboardingAIReady: Bool {
-        self.settings.onboardingAISkipped || DictationAIPostProcessingGate.isOnboardingChoiceConfigured()
-    }
-
-    private var onboardingPlaygroundReady: Bool {
-        self.settings.onboardingPlaygroundValidated || self.settings.onboardingPlaygroundSkipped
-    }
-
     @MainActor
     private func revealAppInFinder() {
         let appPath = Bundle.main.bundlePath
@@ -5571,12 +5546,6 @@ extension ContentView {
         }
         if !self.onboardingAccessibilityReady {
             missing.append("Accessibility access")
-        }
-        if !self.onboardingAIReady {
-            missing.append("AI choice")
-        }
-        if !self.onboardingPlaygroundReady {
-            missing.append("test or skip")
         }
 
         return missing
@@ -5645,7 +5614,7 @@ extension ContentView {
     private func positionWindowBesideSystemSettings(requestID: UUID) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
             guard self.accessibilityGuideRequestID == requestID else { return }
-            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.title == "FluidVoice" }) ?? NSApp.keyWindow else {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.title == "LaVoix" }) ?? NSApp.keyWindow else {
                 return
             }
 
@@ -5814,7 +5783,7 @@ extension ContentView {
     private func cancelAccessibilityPermissionFlow() {
         self.finishAccessibilityPermissionFlow()
         NSApp.activate(ignoringOtherApps: true)
-        (NSApp.windows.first { $0.isVisible && $0.title == "FluidVoice" } ?? NSApp.keyWindow)?
+        (NSApp.windows.first { $0.isVisible && $0.title == "LaVoix" } ?? NSApp.keyWindow)?
             .makeKeyAndOrderFront(nil)
     }
 
@@ -5879,7 +5848,7 @@ extension ContentView {
             return runningAppURL
         }
 
-        let installedURL = URL(fileURLWithPath: "/Applications/FluidVoice.app")
+        let installedURL = URL(fileURLWithPath: "/Applications/LaVoix.app")
         if FileManager.default.fileExists(atPath: installedURL.path) {
             return installedURL
         }

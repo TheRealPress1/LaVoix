@@ -223,7 +223,7 @@ enum DictionaryTransferServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidJSON:
-            return "The selected file is not a valid FluidVoice dictionary file."
+            return "The selected file is not a valid LaVoix dictionary file."
         }
     }
 }

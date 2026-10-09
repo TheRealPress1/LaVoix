@@ -24,7 +24,7 @@ struct ReleaseHighlightsContent {
         Self(
             release: "1.6.10",
             title: "Say hello to what’s new.",
-            subtitle: "Three new ways to make FluidVoice yours.",
+            subtitle: "Three new ways to make LaVoix yours.",
             features: [
                 Feature(
                     id: "fluidmeet",

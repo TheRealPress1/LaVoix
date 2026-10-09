@@ -34,7 +34,7 @@ enum SimpleUpdateError: Error, LocalizedError {
         case .notAnAppBundle: return "Extracted content does not contain an app bundle."
         case .codesignMismatch: return "Downloaded app’s code signature does not match current app."
         case .backupFailed: return "The current app could not be backed up. Nothing was replaced."
-        case .installedAppChanged: return "The installed app changed. Restart FluidVoice before trying the update again."
+        case .installedAppChanged: return "The installed app changed. Restart LaVoix before trying the update again."
         case .rollbackUnavailable: return "No rollback backup is available."
         case .rollbackRestoreFailed: return "Failed to restore a previous version."
         }
@@ -460,7 +460,7 @@ final class SimpleUpdater: ObservableObject {
                 } else {
                     self.updatePrompts.dismissUpdateOffers()
                     if self.checkIsExplicit {
-                        self.showUpdateCheckResult(title: channel ? "No Beta Updates" : "No Updates", message: "You're already running the latest available version of FluidVoice.")
+                        self.showUpdateCheckResult(title: channel ? "No Beta Updates" : "No Updates", message: "You're already running the latest available version of LaVoix.")
                     }
                 }
             } catch {
@@ -505,7 +505,7 @@ final class SimpleUpdater: ObservableObject {
         let revision = self.channelRevision
         self.updatePrompts.presentFloatingPrompt(
             title: "Update Available",
-            message: "FluidVoice \(version) is now available. The app will restart automatically after installation.",
+            message: "LaVoix \(version) is now available. The app will restart automatically after installation.",
             actions: [
                 FloatingPromptAction(title: "Install Now") { [weak self] in
                     guard let self, self.availableUpdateVersion == version, self.channelRevision == revision, !self.isUpdateInProgress else { return }
@@ -540,7 +540,7 @@ final class SimpleUpdater: ObservableObject {
                 let cancelled = (error as? PMKError)?.isCancelled == true
                 self.showUpdateCheckResult(
                     title: cancelled ? "No Updates" : "Update Failed",
-                    message: cancelled ? "You're already running the latest available version of FluidVoice."
+                    message: cancelled ? "You're already running the latest available version of LaVoix."
                         : "Unable to install the update. Please try again later.\n\nError: \(error.localizedDescription)"
                 )
             }
@@ -698,7 +698,7 @@ final class SimpleUpdater: ObservableObject {
             backing: .buffered,
             defer: false
         )
-        panel.title = "Installing FluidVoice \(version)"
+        panel.title = "Installing LaVoix \(version)"
         panel.isReleasedWhenClosed = false
         panel.level = .floating
         panel.isOpaque = false
@@ -722,12 +722,12 @@ final class SimpleUpdater: ObservableObject {
         icon.imageScaling = .scaleProportionallyUpOrDown
         content.addSubview(icon)
 
-        let title = NSTextField(labelWithString: "Installing FluidVoice \(version)")
+        let title = NSTextField(labelWithString: "Installing LaVoix \(version)")
         title.frame = NSRect(x: 92, y: 76, width: 304, height: 24)
         title.font = .fluidSystemFont(ofSize: 16, weight: .semibold)
         content.addSubview(title)
 
-        let detail = NSTextField(wrappingLabelWithString: "Downloading the update. FluidVoice will restart automatically.")
+        let detail = NSTextField(wrappingLabelWithString: "Downloading the update. LaVoix will restart automatically.")
         detail.frame = NSRect(x: 92, y: 42, width: 304, height: 34)
         detail.font = .fluidSystemFont(ofSize: 13)
         detail.textColor = .secondaryLabelColor
