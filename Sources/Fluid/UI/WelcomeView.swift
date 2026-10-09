@@ -1520,7 +1520,7 @@ struct OnboardingFlowView: View {
         return VStack(alignment: .leading, spacing: isCompactModel ? self.theme.metrics.spacing.sm : 10) {
             HStack(alignment: .top, spacing: 10) {
                 if model.brandName == "FluidVoice" {
-                    LaVoixBrandIcon(size: 22)
+                    FluidVoiceBrandIcon(size: 22)
                 }
                 Text(self.onboardingModelTitle(for: model))
                     .font(self.theme.typography.sectionTitle)
