@@ -15,6 +15,7 @@ PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROFILE="${1:-${BUILD_PROFILE:-public}}"
 PRIVATE_FI_BUILD_SCRIPT="${PROJECT_DIR}/build_with_FI_incremental.sh"
 DERIVED_DATA_PATH="${FLUIDVOICE_DERIVED_DATA_PATH:-${PROJECT_DIR}/DerivedData}"
+CONFIGURATION="${LAVOIX_CONFIGURATION:-Debug}"
 
 resolve_development_team() {
     local identity
@@ -72,9 +73,10 @@ run_public_build() {
     local -a build_args=(
         -project Fluid.xcodeproj
         -scheme Fluid
-        -configuration Debug
+        -configuration "${CONFIGURATION}"
         -destination 'platform=macOS'
         -derivedDataPath "${DERIVED_DATA_PATH}"
+        -skipMacroValidation
         build
     )
 
@@ -121,10 +123,10 @@ EOF
     fi
 
     echo "Running signed public FluidVoice build..."
-    echo "Build product: ${DERIVED_DATA_PATH}/Build/Products/Debug/LaVoix.app"
+    echo "Build product: ${DERIVED_DATA_PATH}/Build/Products/${CONFIGURATION}/LaVoix.app"
     xcodebuild "${build_args[@]}" DEVELOPMENT_TEAM="${development_team}"
 
-    app_path="${DERIVED_DATA_PATH}/Build/Products/Debug/LaVoix.app"
+    app_path="${DERIVED_DATA_PATH}/Build/Products/${CONFIGURATION}/LaVoix.app"
     ctranscribe_framework="${app_path}/Contents/Frameworks/CTranscribe.framework"
     if [ ! -d "${app_path}" ]; then
         echo "Signed build product is missing: ${app_path}" >&2

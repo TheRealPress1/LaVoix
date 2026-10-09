@@ -26,6 +26,9 @@ struct DictationProviderRoute: Equatable {
             if selection == .off {
                 return Self(providerID: "", providerKey: "", baseURL: "", model: "", apiKey: "")
             }
+            if let local = self.localCleanupRoute() {
+                return local
+            }
             if selection == .privateAI {
                 return self.privateAIRoute(settings: settings)
             }
@@ -122,6 +125,22 @@ struct DictationProviderRoute: Equatable {
         return DictationAIPostProcessingGate.isProviderConfigured(providerID: route.providerID, model: route.model)
     }
 
+    /// The on-device model, when the user has turned it on. Overrides provider selection for dictation.
+    static func localCleanupRoute() -> Self? {
+        guard LocalCleanupSettings.isEnabled else { return nil }
+        return Self(
+            providerID: LocalCleanupProvider.providerID,
+            providerKey: LocalCleanupProvider.providerID,
+            baseURL: LocalCleanupProvider.pseudoBaseURL,
+            model: LocalCleanupSettings.modelID,
+            apiKey: ""
+        )
+    }
+
+    var usesLocalCleanup: Bool {
+        self.providerID == LocalCleanupProvider.providerID
+    }
+
     static func privateAIRoute(settings: SettingsStore) -> Self {
         guard let modelID = PrivateAIProviderPromptFormat.verifiedModelID(settings: settings) else {
             return Self(providerID: "", providerKey: "", baseURL: "", model: "", apiKey: "")
@@ -184,6 +203,9 @@ struct DictationProviderRoute: Equatable {
         settings: SettingsStore,
         dictationSlot: SettingsStore.DictationShortcutSlot
     ) -> Self {
+        if settings.dictationPromptSelection(for: dictationSlot) != .off, let local = self.localCleanupRoute() {
+            return local
+        }
         if settings.dictationPromptSelection(for: dictationSlot) == .privateAI {
             return self.privateAIRoute(settings: settings)
         }
@@ -271,6 +293,19 @@ final class DictationPostProcessingService {
 
         let promptText = settings.effectiveDictationSystemPrompt(for: dictationSlot, appBundleID: nil)
         let request = DictationPromptRequest(promptText: promptText, transcript: trimmed)
+
+        if resolved.usesLocalCleanup {
+            let output = try await LocalCleanupEngine.shared.generate(
+                system: LocalCleanupPrompt.resolve(appPrompt: request.systemPrompt),
+                user: request.userContent,
+                modelID: resolved.model
+            )
+            return Result(
+                text: ASRService.applyGAAVFormatting(output),
+                providerID: resolved.providerID,
+                model: resolved.model
+            )
+        }
 
         guard !resolved.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AIProcessingError.missingModel(provider: resolved.providerKey)

@@ -2786,6 +2786,21 @@ struct ContentView: View {
         let systemPrompt = request.systemPrompt
         let userMessageContent = request.userContent
 
+        if route.usesLocalCleanup {
+            let startedAt = ProcessInfo.processInfo.systemUptime
+            let output = try await LocalCleanupEngine.shared.generate(
+                system: LocalCleanupPrompt.resolve(appPrompt: systemPrompt),
+                user: userMessageContent,
+                modelID: route.model
+            )
+            self.appBench("ai_local_return")
+            return AITextProcessingResult(
+                text: output,
+                tokensPerSecond: nil,
+                fluidIntelligenceLatencyMilliseconds: Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded())
+            )
+        }
+
         // Skip API key validation for local endpoints
         let isLocal = self.isLocalEndpoint(derivedBaseURL)
         let apiKey = route.apiKey

@@ -133,6 +133,7 @@ struct AISettingsView: View {
                     settings: self.voiceViewModel.settings,
                     theme: self.theme
                 )
+                LocalCleanupCard(theme: self.theme)
                 AIEnhancementSettingsView(
                     viewModel: self.enhancementViewModel,
                     privateAIController: self.privateAIController,

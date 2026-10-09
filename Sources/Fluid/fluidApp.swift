@@ -15,6 +15,10 @@ struct FluidApp: App {
     @ObservedObject private var settings = SettingsStore.shared
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
+    init() {
+        LocalCleanupSelfTest.runIfRequested()
+    }
+
     var body: some Scene {
         WindowGroup(id: "main") {
             #if DEBUG
