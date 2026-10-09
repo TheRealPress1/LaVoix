@@ -1,6 +1,15 @@
 import AppKit
 import Foundation
 
+/// Double-tap-to-latch state for the primary dictation shortcut.
+/// idle: nothing pending. armed: a quick tap started recording and we are waiting for a second tap.
+/// latched: recording continues hands-free until the next tap.
+nonisolated enum DoubleTapLatchPhase {
+    case idle
+    case armed
+    case latched
+}
+
 nonisolated enum HotkeyHoldModeType: Hashable {
     case transcription
     case promptMode
@@ -250,6 +259,9 @@ private final nonisolated class HotkeyState: @unchecked Sendable {
     var automaticPressStartTimes: [HotkeyHoldModeType: Date] = [:]
     var automaticPressWasTargetActive: [HotkeyHoldModeType: Bool] = [:]
     var automaticPressStartedTypes: Set<HotkeyHoldModeType> = []
+    var latchPhase: DoubleTapLatchPhase = .idle
+    var latchSecondPressPending = false
+    var latchTimerToken: UUID?
     var activePrimaryShortcutPress: ActivePrimaryShortcutPress?
     var consumedPasteMouseButton: Int?
 
@@ -309,8 +321,17 @@ final class GlobalHotkeyManager: NSObject {
     private let isSessionLockedProvider: () -> Bool
     private var cancelCallback: (() -> CancelHandlingResult)?
     private var pasteLastTranscriptionCallback: (() -> Void)?
-    private var hotkeyMode: HotkeyActivationMode = SettingsStore.shared.hotkeyMode
+    private var hotkeyMode: HotkeyActivationMode = GlobalHotkeyManager.effectiveMode(for: SettingsStore.shared.hotkeyMode)
+    /// True when the user picked "Hold + Double-tap". The manager then runs Automatic mode for every
+    /// shortcut, with the double-tap latch layered onto primary dictation only.
+    private var doubleTapLatchEnabled = SettingsStore.shared.hotkeyMode == .doubleTapLatch
     private let automaticTapThresholdSeconds: TimeInterval = 0.4
+    /// How long after a quick tap a second tap still counts as a double-tap.
+    private let doubleTapWindowSeconds: TimeInterval = 0.4
+
+    nonisolated static func effectiveMode(for mode: HotkeyActivationMode) -> HotkeyActivationMode {
+        mode == .doubleTapLatch ? .automatic : mode
+    }
     private var currentInputTiming: HotkeyInputTiming?
     private var modifierPressReceivedAt: TimeInterval?
     private var currentStopPressReceivedAt: TimeInterval?
@@ -455,10 +476,64 @@ final class GlobalHotkeyManager: NSObject {
 
     private func beginAutomaticPress(for type: HotkeyHoldModeType, wasTargetActive: Bool) {
         self.cancelPendingReleaseStop(for: type)
+        let latchEnabled = type == .transcription && self.doubleTapLatchEnabled
         self.state.withLock {
             self.state.automaticPressStartTimes[type] = Date()
             self.state.automaticPressWasTargetActive[type] = wasTargetActive
             _ = self.state.automaticPressStartedTypes.remove(type)
+            guard latchEnabled else { return }
+            switch self.state.latchPhase {
+            case .armed:
+                // Second press inside the window: lock recording on. Its release must not stop it.
+                self.state.latchPhase = .latched
+                self.state.latchSecondPressPending = true
+                self.state.latchTimerToken = nil
+            case .latched where !wasTargetActive:
+                // Recording ended by some other route (cancel, error); forget the stale latch.
+                self.state.latchPhase = .idle
+            default:
+                break
+            }
+        }
+    }
+
+    /// True when the press currently being handled is the second tap of a double-tap.
+    private func isDoubleTapLatchSecondPress() -> Bool {
+        guard self.doubleTapLatchEnabled else { return false }
+        return self.state.withLock { self.state.latchSecondPressPending }
+    }
+
+    private func resetDoubleTapLatch() {
+        self.state.withLock {
+            self.state.latchPhase = .idle
+            self.state.latchSecondPressPending = false
+            self.state.latchTimerToken = nil
+        }
+    }
+
+    /// A quick tap started recording. Keep it running briefly; if no second tap arrives, discard it.
+    private func armDoubleTapWindow() {
+        let token = UUID()
+        self.state.withLock {
+            self.state.latchPhase = .armed
+            self.state.latchSecondPressPending = false
+            self.state.latchTimerToken = token
+        }
+        let window = self.doubleTapWindowSeconds
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(window * 1_000_000_000))
+            guard let self else { return }
+            let expired = self.state.withLock { () -> Bool in
+                guard self.state.latchTimerToken == token, self.state.latchPhase == .armed else { return false }
+                self.state.latchPhase = .idle
+                self.state.latchTimerToken = nil
+                return true
+            }
+            guard expired else { return }
+            DebugLogger.shared.info("Transcription single tap - no second tap, discarding", source: "GlobalHotkeyManager")
+            await MainActor.run {
+                Task { await self.asrService.stopWithoutTranscription() }
+            }
         }
     }
 
@@ -505,6 +580,9 @@ final class GlobalHotkeyManager: NSObject {
             self.state.automaticPressStartTimes.removeAll()
             self.state.automaticPressWasTargetActive.removeAll()
             self.state.automaticPressStartedTypes.removeAll()
+            self.state.latchPhase = .idle
+            self.state.latchSecondPressPending = false
+            self.state.latchTimerToken = nil
         }
     }
 
@@ -1328,7 +1406,7 @@ final class GlobalHotkeyManager: NSObject {
                         self.triggerPromptSelection(assignment.selection, shortcut: assignment.shortcut)
                         self.markHoldModeStartTriggered(for: .promptAssignment)
                     }
-                case .automatic:
+                case .automatic, .doubleTapLatch:
                     if !self.isPromptAssignmentKeyPressed {
                         self.activePromptAssignmentPress = assignment
                         self.isPromptAssignmentKeyPressed = true
@@ -1385,7 +1463,7 @@ final class GlobalHotkeyManager: NSObject {
                         self.triggerCommandMode()
                         self.markHoldModeStartTriggered(for: .commandMode)
                     }
-                case .automatic:
+                case .automatic, .doubleTapLatch:
                     if !self.isCommandModeKeyPressed {
                         self.isCommandModeKeyPressed = true
                         let isSameMode = self.asrService.isRunning && (self.isCommandRecordingProvider?() ?? false)
@@ -1437,7 +1515,7 @@ final class GlobalHotkeyManager: NSObject {
                             self.triggerRewriteMode()
                             self.markHoldModeStartTriggered(for: .rewriteMode)
                         }
-                    case .automatic:
+                    case .automatic, .doubleTapLatch:
                         if !self.isRewriteKeyPressed {
                             self.isRewriteKeyPressed = true
                             let isSameMode = self.asrService.isRunning && (self.isRewriteRecordingProvider?() ?? false)
@@ -1500,7 +1578,7 @@ final class GlobalHotkeyManager: NSObject {
                     _ = self.finishHoldModeStartTriggered(for: .commandMode)
                     DebugLogger.shared.info("Command mode shortcut released (hold mode) - stopping", source: "GlobalHotkeyManager")
                     self.stopRecordingAfterRelease(for: .commandMode, label: "Command mode")
-                case .automatic:
+                case .automatic, .doubleTapLatch:
                     self.isCommandModeKeyPressed = false
                     self.handleAutomaticKeyRelease(for: .commandMode, label: "Command mode")
                 case .toggle:
@@ -1518,7 +1596,7 @@ final class GlobalHotkeyManager: NSObject {
                     _ = self.finishHoldModeStartTriggered(for: .rewriteMode)
                     DebugLogger.shared.info("Rewrite mode shortcut released (hold mode) - stopping", source: "GlobalHotkeyManager")
                     self.stopRecordingAfterRelease(for: .rewriteMode, label: "Rewrite mode")
-                case .automatic:
+                case .automatic, .doubleTapLatch:
                     self.isRewriteKeyPressed = false
                     self.handleAutomaticKeyRelease(for: .rewriteMode, label: "Rewrite mode")
                 case .toggle:
@@ -1539,7 +1617,7 @@ final class GlobalHotkeyManager: NSObject {
                     _ = self.finishHoldModeStartTriggered(for: .promptAssignment)
                     DebugLogger.shared.info("Prompt shortcut released (hold mode) - stopping", source: "GlobalHotkeyManager")
                     self.stopRecordingAfterRelease(for: .promptAssignment, label: "Prompt shortcut")
-                case .automatic:
+                case .automatic, .doubleTapLatch:
                     self.isPromptAssignmentKeyPressed = false
                     self.handleAutomaticKeyRelease(for: .promptAssignment, label: "Prompt shortcut")
                 case .toggle:
@@ -1730,6 +1808,33 @@ final class GlobalHotkeyManager: NSObject {
         let press = self.finishAutomaticPress(for: type)
         let duration = String(format: "%.2f", press.duration)
 
+        if type == .transcription, self.doubleTapLatchEnabled {
+            let secondPress = self.state.withLock { () -> Bool in
+                let pending = self.state.latchSecondPressPending
+                self.state.latchSecondPressPending = false
+                return pending
+            }
+            if secondPress {
+                DebugLogger.shared.info("\(label) double-tap - latched, recording continues", source: "GlobalHotkeyManager")
+                return
+            }
+            if press.duration < self.automaticTapThresholdSeconds {
+                if press.wasTargetActive {
+                    self.resetDoubleTapLatch()
+                    DebugLogger.shared.info("\(label) tap (\(duration)s) while latched - stopping", source: "GlobalHotkeyManager")
+                    self.stopRecordingIfNeeded()
+                    return
+                }
+                if press.started {
+                    DebugLogger.shared.info("\(label) tap (\(duration)s) - waiting for second tap", source: "GlobalHotkeyManager")
+                    self.armDoubleTapWindow()
+                    return
+                }
+            } else {
+                self.resetDoubleTapLatch()
+            }
+        }
+
         if press.duration < self.automaticTapThresholdSeconds {
             if press.wasTargetActive {
                 DebugLogger.shared.info("\(label) tap (\(duration)s) - stopping", source: "GlobalHotkeyManager")
@@ -1780,11 +1885,12 @@ final class GlobalHotkeyManager: NSObject {
                 }
                 self.markHoldModeStartTriggered(for: .transcription)
             }
-        case .automatic:
+        case .automatic, .doubleTapLatch:
             if !self.isKeyPressed {
                 self.isKeyPressed = true
                 let isSameMode = self.asrService.isRunning && (self.isDictateRecordingProvider?() ?? false)
                 self.beginAutomaticPress(for: .transcription, wasTargetActive: isSameMode)
+                if self.isDoubleTapLatchSecondPress() { return }
                 if self.asrService.isRunning {
                     DebugLogger.shared.info(
                         "Hotkey route | pressed=dictate | active=\(isSameMode ? "dictate" : "other") | asrRunning=true | action=\(isSameMode ? "release-stop" : "switch")",
@@ -1814,7 +1920,7 @@ final class GlobalHotkeyManager: NSObject {
             self.isKeyPressed = false
             _ = self.finishHoldModeStartTriggered(for: .transcription)
             self.stopRecordingAfterRelease(for: .transcription, label: "Transcription")
-        case .automatic:
+        case .automatic, .doubleTapLatch:
             self.isKeyPressed = false
             self.handleAutomaticKeyRelease(for: .transcription, label: "Transcription")
         case .toggle:
@@ -1916,6 +2022,7 @@ final class GlobalHotkeyManager: NSObject {
         }
 
         guard self.hotkeyMode != .automatic || !wasTargetActive else { return }
+        if behavior.holdModeType == .transcription, self.isDoubleTapLatchSecondPress() { return }
         DebugLogger.shared.info(behavior.holdStartMessage, source: "GlobalHotkeyManager")
         if self.hotkeyMode == .hold {
             self.markHoldModeStartTriggered(for: behavior.holdModeType)
@@ -1940,7 +2047,7 @@ final class GlobalHotkeyManager: NSObject {
                     self.stopRecordingAfterRelease(for: behavior.holdModeType, label: self.label(for: behavior.holdModeType))
                 }
             }
-        case .automatic:
+        case .automatic, .doubleTapLatch:
             if behavior.isModeKeyPressed() {
                 behavior.setModeKeyPressed(false)
             }
@@ -2019,7 +2126,7 @@ final class GlobalHotkeyManager: NSObject {
                 self.triggerPromptMode()
                 self.markHoldModeStartTriggered(for: .promptMode)
             }
-        case .automatic:
+        case .automatic, .doubleTapLatch:
             if !self.isPromptModeKeyPressed {
                 self.isPromptModeKeyPressed = true
                 let isSameMode = self.asrService.isRunning && (self.isPromptModeRecordingProvider?() ?? false)
@@ -2064,7 +2171,7 @@ final class GlobalHotkeyManager: NSObject {
             _ = self.finishHoldModeStartTriggered(for: .promptMode)
             DebugLogger.shared.info("Prompt mode shortcut released (hold mode) - stopping", source: "GlobalHotkeyManager")
             self.stopRecordingAfterRelease(for: .promptMode, label: "Prompt mode")
-        case .automatic:
+        case .automatic, .doubleTapLatch:
             self.isPromptModeKeyPressed = false
             self.handleAutomaticKeyRelease(for: .promptMode, label: "Prompt mode")
         case .toggle:
@@ -2341,11 +2448,15 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     func setHotkeyMode(_ mode: HotkeyActivationMode) {
-        guard mode != self.hotkeyMode else { return }
+        let effective = Self.effectiveMode(for: mode)
+        let latch = mode == .doubleTapLatch
+        guard effective != self.hotkeyMode || latch != self.doubleTapLatchEnabled else { return }
         for type in [HotkeyHoldModeType.transcription, .promptMode, .commandMode, .rewriteMode, .promptAssignment] {
             self.discardShortcutPress(for: type)
         }
-        self.hotkeyMode = mode
+        self.resetDoubleTapLatch()
+        self.hotkeyMode = effective
+        self.doubleTapLatchEnabled = latch
         DebugLogger.shared.info("Hotkey activation mode set to \(mode.displayName)", source: "GlobalHotkeyManager")
         self.scheduleActiveShortcutLog(reason: "shortcuts updated")
     }
