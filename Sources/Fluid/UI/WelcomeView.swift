@@ -1928,7 +1928,7 @@ struct OnboardingFlowView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
             }
-            .foregroundStyle(.white.opacity(foregroundOpacity))
+            .foregroundStyle((configuration.tone == .primary ? Color.black : Color.white).opacity(foregroundOpacity))
             .frame(width: configuration.width, height: configuration.height)
             .frame(maxWidth: configuration.width == nil ? .infinity : nil)
             .background(
