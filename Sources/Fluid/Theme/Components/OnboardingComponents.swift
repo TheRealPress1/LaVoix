@@ -61,6 +61,7 @@ private final class FluidOnboardingWindowTransparencyView: NSView {
         let isOpaque: Bool
         let backgroundColor: NSColor
         let hasShadow: Bool
+        let appearance: NSAppearance?
         let titlebarAppearsTransparent: Bool
         let titleVisibility: NSWindow.TitleVisibility
         let styleMask: NSWindow.StyleMask
@@ -94,6 +95,7 @@ private final class FluidOnboardingWindowTransparencyView: NSView {
                 isOpaque: window.isOpaque,
                 backgroundColor: window.backgroundColor,
                 hasShadow: window.hasShadow,
+                appearance: window.appearance,
                 titlebarAppearsTransparent: window.titlebarAppearsTransparent,
                 titleVisibility: window.titleVisibility,
                 styleMask: window.styleMask,
@@ -104,8 +106,9 @@ private final class FluidOnboardingWindowTransparencyView: NSView {
             )
         }
 
-        window.isOpaque = false
-        window.backgroundColor = .clear
+        window.isOpaque = true
+        window.backgroundColor = .black
+        window.appearance = NSAppearance(named: .darkAqua)
         window.hasShadow = true
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
@@ -122,6 +125,7 @@ private final class FluidOnboardingWindowTransparencyView: NSView {
         window.isOpaque = snapshot.isOpaque
         window.backgroundColor = snapshot.backgroundColor
         window.hasShadow = snapshot.hasShadow
+        window.appearance = snapshot.appearance
         window.titlebarAppearsTransparent = snapshot.titlebarAppearsTransparent
         window.titleVisibility = snapshot.titleVisibility
         window.styleMask = snapshot.styleMask

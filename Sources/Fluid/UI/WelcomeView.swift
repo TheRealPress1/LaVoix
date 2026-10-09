@@ -499,9 +499,8 @@ struct OnboardingFlowView: View {
             FluidOnboardingCompactAppIconMark(size: 220)
 
             Text("Your voice is your instrument.")
-                .font(.system(size: 30, weight: .regular, design: .serif))
-                .italic()
-                .foregroundStyle(Color.white.opacity(0.88))
+                .font(LaVoixFonts.instrumentSerifItalic(size: 44))
+                .foregroundStyle(Color.white.opacity(0.92))
                 .multilineTextAlignment(.center)
                 .padding(.top, 36)
 
