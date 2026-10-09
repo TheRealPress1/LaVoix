@@ -5273,6 +5273,10 @@ final class SettingsStore: ObservableObject {
                 if model == .nemotronStreaming320 {
                     return false
                 }
+                // These models are hosted on FluidVoice's servers; LaVoix only offers models fetched from public hubs.
+                if model == .fluidParakeetMini || model == .fluidParakeetPico {
+                    return false
+                }
                 // Filter by Apple Silicon requirement
                 if model.requiresAppleSilicon, !CPUArchitecture.isAppleSilicon {
                     return false

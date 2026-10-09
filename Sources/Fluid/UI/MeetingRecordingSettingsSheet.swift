@@ -136,7 +136,7 @@ struct MeetingRecordingSettingsSheet: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-            Text("FluidMeet settings")
+            Text("Meetings settings")
                 .font(self.theme.typography.sectionTitle)
                 .foregroundStyle(self.theme.palette.primaryText)
             Text("Audio and transcripts stay on this Mac.")

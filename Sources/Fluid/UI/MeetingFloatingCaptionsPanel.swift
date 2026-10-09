@@ -247,7 +247,7 @@ struct MeetingFloatingCaptionsContent: View {
             if active { self.isStopping = false }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("FluidMeet live captions")
+        .accessibilityLabel("Meetings live captions")
     }
 
     private var header: some View {
@@ -258,7 +258,7 @@ struct MeetingFloatingCaptionsContent: View {
                 .frame(width: 18, height: 18)
                 .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 .accessibilityHidden(true)
-            Text("FluidMeet")
+            Text("Meetings")
                 .font(self.theme.typography.captionStrong)
                 .foregroundStyle(self.theme.palette.primaryText)
             Spacer(minLength: 8)

@@ -331,7 +331,6 @@ struct ContentView: View {
     @FocusState private var isSettingsSearchFocused: Bool
     @State private var playgroundUsed: Bool = SettingsStore.shared.playgroundUsed
     @State private var showsFluidIntelligenceDemo = false
-    @State private var showsReleaseHighlights = false
     @State private var recordingAppInfo: (name: String, bundleId: String, windowTitle: String)? = nil
     @State private var recordingPrecedingText: String = ""
     @State private var recordingFocusTarget: TypingService.CapturedFocusTarget? = nil
@@ -521,13 +520,6 @@ struct ContentView: View {
                 self.handleSpokenSendPartialTranscription(text)
             }
             .overlay(alignment: .center) {}
-            .modifier(ReleaseHighlightsPresenter(
-                requested: self.$showsReleaseHighlights,
-                isEligible: !self.settings.shouldShowOnboarding && !self.showsFluidIntelligenceDemo &&
-                    !self.asr.isRunningOrStarting && self.asr.activeExclusiveActivity == nil &&
-                    !self.asr.showError && !self.showRestartPrompt,
-                onExplore: self.navigateToApp
-            ))
             .sheet(isPresented: self.$showsFluidIntelligenceDemo) {
                 FluidIntelligenceDemoView(
                     asr: self.asr,
@@ -1403,11 +1395,6 @@ struct ContentView: View {
         NSWorkspace.shared.open(url)
     }
 
-    private func openHelpDocumentation() {
-        guard let url = URL(string: "https://docs.altic.dev/") else { return }
-        NSWorkspace.shared.open(url)
-    }
-
     private var sidebarContent: some View {
         ZStack {
             // Keep both sidebars mounted so navigation feedback never waits on view construction.
@@ -1498,19 +1485,13 @@ struct ContentView: View {
                 self.sidebarNavigationLink(.fileTranscription, title: "File Transcription", systemImage: "doc.text.fill")
                 self.sidebarNavigationLink(
                     .meetingTranscription,
-                    title: "FluidMeet",
+                    title: "Meetings",
                     systemImage: "person.2.fill"
                 )
             } header: {
                 self.sidebarSectionHeader("Use")
             }
 
-            Section {
-                self.sidebarNavigationLink(.changelog, title: "Change logs", systemImage: "doc.text.magnifyingglass")
-                self.sidebarNavigationLink(.feedback, title: "Feedback", systemImage: "envelope.fill")
-            } header: {
-                self.sidebarSectionHeader("Help")
-            }
         }
         .listStyle(.sidebar)
         .accentColor(self.theme.palette.accent)
@@ -1719,11 +1700,8 @@ struct ContentView: View {
 
     private var helpEntryButton: some View {
         Menu {
-            Button("Documentation", systemImage: "book") { self.openHelpDocumentation() }
-            Button("What’s new", systemImage: "gift") { self.showsReleaseHighlights = true }
-                .disabled(self.asr.isRunningOrStarting || self.asr.activeExclusiveActivity != nil || NotchContentState.shared.isProcessing)
             if PrivateAIProviderFeature.shared.isAvailable {
-                Button("Try Fluid Intelligence", systemImage: "sparkles") { self.showsFluidIntelligenceDemo = true }
+                Button("Try AI cleanup", systemImage: "sparkles") { self.showsFluidIntelligenceDemo = true }
                     .disabled(self.asr.isRunningOrStarting || NotchContentState.shared.isProcessing || DictationPromptTestCoordinator.shared.isActive)
             }
             Button("Replay onboarding", systemImage: "arrow.counterclockwise") {
@@ -1761,7 +1739,7 @@ struct ContentView: View {
         .onHover { self.isHelpEntryHovered = $0 }
         .help("Open LaVoix Help")
         .accessibilityLabel("Help")
-        .accessibilityHint("What’s new, documentation, Fluid Intelligence demo, and replay onboarding")
+        .accessibilityHint("Replay onboarding")
     }
 
     private var modeTransitionAnimation: Animation {
@@ -1892,10 +1870,6 @@ struct ContentView: View {
             return AnyView(CustomDictionaryView(revealTarget: self.$appSearchRevealTarget))
         case .stats:
             return AnyView(self.statsView)
-        case .feedback:
-            return AnyView(FeedbackView())
-        case .changelog:
-            return AnyView(ChangelogView())
         case .commandMode:
             return AnyView(self.commandModeView)
         case .rewriteMode:
@@ -2082,7 +2056,7 @@ struct ContentView: View {
     private var hasPageToolbarActions: Bool {
         guard !self.settingsNavigation.isPresented else { return false }
         return switch self.selectedSidebarItem ?? .welcome {
-        case .stats, .commandMode, .meetingTranscription, .customDictionary, .changelog: true
+        case .stats, .commandMode, .meetingTranscription, .customDictionary: true
         default: false
         }
     }

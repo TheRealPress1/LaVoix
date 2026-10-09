@@ -89,7 +89,7 @@ struct MeetingSetupReadiness: Equatable {
     )
 }
 
-/// Owned by the window, so leaving FluidMeet does not discard its last loaded history.
+/// Owned by the window, so leaving Meetings does not discard its last loaded history.
 @MainActor
 final class MeetingHistorySnapshot: ObservableObject {
     @Published private(set) var sessions: [MeetingSession] = []
@@ -525,7 +525,7 @@ struct MeetingTranscriptionView: View {
             let trackCount = MeetingPCMStoragePolicy.trackCount(for: self.effectiveCaptureMode)
             blockingMessage = "Free at least \(MeetingPCMStoragePolicy.requiredFreeSpaceDescription(trackCount: trackCount)) of storage before recording."
         } else if !CPUArchitecture.isAppleSilicon {
-            blockingMessage = "FluidMeet requires an Apple silicon Mac."
+            blockingMessage = "Meetings requires an Apple silicon Mac."
         } else {
             blockingMessage = nil
         }
@@ -1504,7 +1504,7 @@ private struct MeetingTranscriptionHeader: View {
 
             MeetingHeaderIconButton(
                 systemImage: "gearshape",
-                label: "FluidMeet settings",
+                label: "Meetings settings",
                 action: self.onOpenMeetingSettings
             )
             .disabled(!self.canEditSetup)

@@ -35,8 +35,6 @@ struct TranscriptionHistoryView: View {
     @State private var pinnedOnly = false
     @State private var pinRevealRequest: HistoryPinRevealRequest?
     @State private var showClearConfirmation: Bool = false
-    @State private var showReportConfirmation: Bool = false
-    @State private var selectedReportEntry: TranscriptionHistoryEntry?
     @State private var audioEntryID: UUID?
     @State private var copiedEntryID: UUID?
     @State private var copyFeedbackTask: Task<Void, Never>?
@@ -176,18 +174,6 @@ struct TranscriptionHistoryView: View {
             }
         } message: {
             Text("This will permanently delete all \(self.historyStore.entries.count) transcription entries, including pinned entries. This action cannot be undone.")
-        }
-        .alert("Report Sent", isPresented: self.$showReportConfirmation) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Thank you for helping improve LaVoix dictation.")
-        }
-        .sheet(item: self.$selectedReportEntry) { entry in
-            TranscriptionFeedbackReportSheet(entry: entry) {
-                self.selectedReportEntry = nil
-                self.showReportConfirmation = true
-            }
-            .environment(\.theme, self.theme)
         }
     }
 
@@ -334,7 +320,6 @@ struct TranscriptionHistoryView: View {
                 .help("Double-click to copy final text")
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
                 .accessibilityAction(named: Text("Copy final text")) { self.copyFinalText(entry) }
-                .accessibilityAction(named: Text("Report issue")) { self.openFeedbackReport(for: entry) }
                 .accessibilityAction(named: Text(entry.isStarred ? "Unpin transcription" : "Pin transcription")) {
                     self.togglePin(entry)
                 }
@@ -349,16 +334,6 @@ struct TranscriptionHistoryView: View {
                     .buttonStyle(.plain)
                     .help("Copy final text")
                     .accessibilityLabel(self.copiedEntryID == entry.id ? "Copied" : "Copy final text")
-                    Button {
-                        self.openFeedbackReport(for: entry)
-                    } label: {
-                        Image(systemName: "flag")
-                            .frame(width: 28, height: 28)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Report an issue with this dictation")
-                    .accessibilityLabel("Report issue")
                 }
                 .font(self.theme.typography.body)
                 .labelStyle(.iconOnly)
@@ -437,13 +412,6 @@ struct TranscriptionHistoryView: View {
             }
         }
 
-        Divider()
-
-        Button {
-            self.openFeedbackReport(for: entry)
-        } label: {
-            Label("Report issue...", systemImage: "flag")
-        }
 
         Divider()
 
@@ -648,10 +616,6 @@ struct TranscriptionHistoryView: View {
     private func detailActions(_ entry: TranscriptionHistoryEntry) -> some View {
         FluidGlassControlGroup {
             HStack(spacing: 8) {
-                Button { self.openFeedbackReport(for: entry) } label: {
-                    Label("Report issue", systemImage: "flag")
-                }
-                .fluidGlassAction()
                 Button { self.copyFinalText(entry) } label: {
                     Label(
                         self.copiedEntryID == entry.id ? "Copied" : "Copy text",
@@ -704,10 +668,6 @@ struct TranscriptionHistoryView: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         ClipboardAudit.record("ui_copy_end")
-    }
-
-    private func openFeedbackReport(for entry: TranscriptionHistoryEntry) {
-        self.selectedReportEntry = entry
     }
 
     private func combinedText(for entry: TranscriptionHistoryEntry) -> String {
@@ -773,137 +733,6 @@ struct TranscriptionHistoryView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(self.theme.palette.contentBackground)
-    }
-}
-
-private struct TranscriptionFeedbackReportSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.theme) private var theme
-
-    @State private var inputText: String
-    @State private var outputText: String
-    @State private var processingModel: String
-    @State private var comment: String
-    @State private var isSending: Bool = false
-    @State private var errorMessage: String?
-
-    let onSent: () -> Void
-
-    init(entry: TranscriptionHistoryEntry, onSent: @escaping () -> Void) {
-        _inputText = State(initialValue: entry.rawText)
-        _outputText = State(initialValue: entry.processedText)
-        _processingModel = State(initialValue: Self.reportModel(for: entry))
-        _comment = State(initialValue: "")
-        self.onSent = onSent
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Share anonymous datapoint")
-                    .font(.fluidSystem(size: 18, weight: .semibold))
-                Text("Help improve our model. Only the example shown below will be sent.")
-                    .font(.fluidSystem(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-
-            self.feedbackField(title: "Raw Text", text: self.$inputText, height: 88)
-            self.feedbackField(title: "Processed Text", text: self.$outputText, height: 88)
-            self.feedbackField(title: "Processing Model", text: self.$processingModel, height: 40)
-            self.feedbackField(title: "Comment optional", text: self.$comment, height: 72)
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.fluidSystem(size: 12, weight: .medium))
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            HStack {
-                Spacer()
-                Button("Cancel") {
-                    self.dismiss()
-                }
-                .keyboardShortcut(.cancelAction)
-                .disabled(self.isSending)
-
-                Button {
-                    Task {
-                        await self.sendReport()
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        if self.isSending {
-                            ProgressView()
-                                .controlSize(.small)
-                                .fixedSize()
-                        }
-                        Text(self.isSending ? "Sending..." : "Send Example")
-                    }
-                }
-                .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
-                .disabled(self.isSendDisabled)
-            }
-        }
-        .padding(20)
-        .frame(width: 520)
-        .background(self.theme.palette.contentBackground)
-    }
-
-    private var isSendDisabled: Bool {
-        self.isSending ||
-            (self.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-                self.outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) ||
-            self.processingModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func sendReport() async {
-        let payload = TranscriptionFeedbackReporter.Payload(
-            rawText: self.inputText.trimmingCharacters(in: .whitespacesAndNewlines),
-            processedText: self.outputText.trimmingCharacters(in: .whitespacesAndNewlines),
-            processingModel: self.processingModel.trimmingCharacters(in: .whitespacesAndNewlines),
-            comments: self.comment.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
-
-        self.isSending = true
-        self.errorMessage = nil
-        do {
-            try await TranscriptionFeedbackReporter.submit(payload)
-            self.isSending = false
-            self.onSent()
-        } catch {
-            self.errorMessage = error.localizedDescription
-            self.isSending = false
-        }
-    }
-
-    private func feedbackField(title: String, text: Binding<String>, height: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.fluidSystem(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-
-            TextEditor(text: text)
-                .font(.fluidSystem(size: 13))
-                .scrollContentBackground(.hidden)
-                .padding(8)
-                .frame(height: height)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(self.theme.palette.cardBackground)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(self.theme.palette.cardBorder.opacity(0.55), lineWidth: 1)
-                        )
-                )
-        }
-    }
-
-    private static func reportModel(for entry: TranscriptionHistoryEntry) -> String {
-        let model = entry.processingModel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return model.isEmpty ? "unknown" : model
     }
 }
 

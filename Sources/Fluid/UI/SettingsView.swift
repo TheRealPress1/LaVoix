@@ -954,7 +954,7 @@ struct SettingsView: View {
                                         self.optionToggleRow(
                                             title: "Share Detailed Anonymous Analytics",
                                             description: "Share anonymous daily feature, insertion performance, onboarding, and model metrics. " +
-                                                "When off, LaVoix still records the anonymous daily activity signal and, in beta builds, daily ASR and Fluid Intelligence timing summaries. " +
+                                                "When off, LaVoix still records the anonymous daily activity signal and, in beta builds, daily ASR and AI cleanup timing summaries. " +
                                                 "Never includes transcription text or prompts.",
                                             isOn: self.detailedAnalyticsToggleBinding
                                         )
@@ -1615,7 +1615,7 @@ struct SettingsView: View {
 
                         self.settingsToggleRow(
                             title: "Show Performance in History",
-                            description: "Display transcription time, cleanup time, and Fluid Intelligence speed.",
+                            description: "Display transcription time, cleanup time, and AI cleanup speed.",
                             isOn: Binding(
                                 get: { SettingsStore.shared.showHistoryPerformanceMetrics },
                                 set: { SettingsStore.shared.showHistoryPerformanceMetrics = $0 }
@@ -2374,7 +2374,7 @@ private extension SettingsView {
                     title: "Smart dictation",
                     description: usesPrimary && configuration.shortcut == nil
                         ? "Uses your primary shortcut. An extra shortcut is optional."
-                        : "Optional shortcut to dictate with Fluid Intelligence."
+                        : "Optional shortcut to dictate with AI cleanup."
                 ),
                 shortcut: configuration.shortcut,
                 isRecording: self.activeShortcutRecordingTarget == target,

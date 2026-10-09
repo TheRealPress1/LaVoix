@@ -32,7 +32,7 @@ struct AnalyticsPrivacyView: View {
                     self.sectionTitle("Always collected")
                     self.bullet("A random installation ID, app version, the operating-system label macOS, and basic hardware info.")
                     self.bullet("One active-use signal per local day after you interact with the app, buffered on this Mac and sent weekly.")
-                    self.bullet("Beta builds also send one daily aggregate of ASR and Fluid Intelligence timing distributions, including macOS version. No individual timing samples are sent.")
+                    self.bullet("Beta builds also send one daily aggregate of ASR and AI cleanup timing distributions, including macOS version. No individual timing samples are sent.")
 
                     self.sectionTitle("When detailed analytics is enabled")
                     self.bullet("Daily totals for Dictation, Command Mode, Edit Mode, and meeting transcription.")
@@ -51,7 +51,7 @@ struct AnalyticsPrivacyView: View {
                     self.sectionTitle("How it’s used")
                     self.bullet("Daily activity measures active installations and retention without requiring accounts.")
                     self.bullet("Optional detailed analytics helps us understand feature adoption, insertion performance, onboarding completion, and model usage.")
-                    self.bullet("Beta timing summaries help us compare ASR and Fluid Intelligence speed across Mac hardware and macOS versions.")
+                    self.bullet("Beta timing summaries help us compare ASR and AI cleanup speed across Mac hardware and macOS versions.")
 
                     self.sectionTitle("Control")
                     self.bullet("You can disable detailed analytics anytime in Settings → Share Detailed Anonymous Analytics.")

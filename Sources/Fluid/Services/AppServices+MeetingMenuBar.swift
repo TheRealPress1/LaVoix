@@ -1,7 +1,7 @@
 import Foundation
 
 extension AppServices {
-    /// Starts the same coordinator used by FluidMeet without posting a navigation request.
+    /// Starts the same coordinator used by Meetings without posting a navigation request.
     func startMeetingRecordingFromMenuBar() async throws {
         let defaults = SettingsStore.shared.meetingRecordingDefaults
         let target = defaults.mode == .onlineCall ? self.meetingAutomaticTarget : nil

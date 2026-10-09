@@ -111,7 +111,7 @@ private struct AIProvidersPresentation: View {
                     .clipShape(RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: self.spacing.xs) {
-                    Text("Fluid Intelligence")
+                    Text("AI cleanup")
                         .font(self.theme.typography.title)
                     Text("Private, on-device intelligence.")
                         .font(self.theme.typography.body)
@@ -384,7 +384,7 @@ private struct AIProvidersPresentation: View {
                     }
                 }
             } else {
-                Text(panel == .manage ? "Fluid Intelligence" : "Provider settings")
+                Text(panel == .manage ? "AI cleanup" : "Provider settings")
                     .font(self.theme.typography.title)
                 Text(panel == .manage ? "\(self.selected.rawValue) · On-device" : "Connection · Models · Preferences")
                     .font(self.theme.typography.bodySmall)

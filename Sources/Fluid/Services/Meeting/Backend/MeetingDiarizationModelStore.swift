@@ -3,7 +3,7 @@ import Foundation
 
 /// Downloads and installs the Nemotron 3 Diarization package from Hugging Face.
 ///
-/// The model is only needed after a recording stops, so opening FluidMeet starts the download in
+/// The model is only needed after a recording stops, so opening Meetings starts the download in
 /// the background and final processing awaits it. One attempt runs at a time and every caller
 /// shares its result; a failed attempt ends in `.failed` and the next call starts a fresh one.
 @MainActor

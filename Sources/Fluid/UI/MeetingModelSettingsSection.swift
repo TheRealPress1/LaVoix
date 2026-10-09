@@ -30,7 +30,7 @@ struct MeetingModelSettingsSection: View {
                         }
                         Text(CPUArchitecture.isAppleSilicon
                             ? "Downloads once (about 200 MB) and stays on this Mac. Recording works while it downloads; transcription waits for it."
-                            : "FluidMeet recording currently requires an Apple silicon Mac.")
+                            : "Meetings recording currently requires an Apple silicon Mac.")
                     }
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)

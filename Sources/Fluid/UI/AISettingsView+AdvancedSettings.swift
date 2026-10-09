@@ -827,7 +827,7 @@ extension AIEnhancementSettingsView {
         GridRow {
             Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
             VStack(alignment: .leading, spacing: 6) {
-                Text("Custom cleanup styles require an external AI provider. Fluid Intelligence isn’t supported here.")
+                Text("Custom cleanup styles require an external AI provider. AI cleanup isn’t supported here.")
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1065,7 +1065,7 @@ extension AIEnhancementSettingsView {
                             self.builtInStyleCard(
                                 title: SettingsStore.DictationModeLabels.smart,
                                 symbol: "sparkles",
-                                subtitle: "On-device · \(assignments.modelPicker.map { ModelDisplayName.forID($0.selectedModel) } ?? "Fluid Intelligence")",
+                                subtitle: "On-device · \(assignments.modelPicker.map { ModelDisplayName.forID($0.selectedModel) } ?? "AI cleanup")",
                                 detail: "Built-in style",
                                 assignments: assignments,
                                 isEnabled: true,

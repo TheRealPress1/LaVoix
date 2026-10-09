@@ -338,7 +338,7 @@ actor PrivateAIIntegrationService {
         } catch {
             await MainActor.run {
                 DebugLogger.shared.warning(
-                    "Could not remove inactive Fluid Intelligence backend: \(Self.errorMessage(for: error))",
+                    "Could not remove inactive AI cleanup backend: \(Self.errorMessage(for: error))",
                     source: "PrivateAIProvider"
                 )
             }

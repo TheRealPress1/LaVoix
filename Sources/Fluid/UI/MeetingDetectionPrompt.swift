@@ -158,7 +158,7 @@ final class MeetingDetectionPromptController: ObservableObject {
         self.onDismiss?(request.episodeID)
     }
 
-    /// Turns meeting detection off entirely; FluidMeet settings › Automation turns it back on.
+    /// Turns meeting detection off entirely; Meetings settings › Automation turns it back on.
     func dontShowAgainTapped() {
         guard let request, !self.isStarting else { return }
         SettingsStore.shared.meetingAutoDetectEnabled = false
