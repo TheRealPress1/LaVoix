@@ -132,6 +132,7 @@ final class SimpleUpdater: ObservableObject {
     }
 
     static let shared = SimpleUpdater()
+    nonisolated static let upstreamUpdatesEnabled = false
     init(
         session: URLSession = .shared,
         defaults: UserDefaults = .standard,
@@ -419,6 +420,8 @@ final class SimpleUpdater: ObservableObject {
     }
 
     private func startUpdateCheck(explicit: Bool) {
+        // LaVoix is self-built and self-updated; never contact upstream release feeds.
+        guard Self.upstreamUpdatesEnabled else { return }
         guard !self.isUpdateInProgress else { return }
         if explicit { self.updatePrompts.dismissUpdateCheckResults() }
         self.updateChannelDidChange()

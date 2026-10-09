@@ -121,10 +121,10 @@ EOF
     fi
 
     echo "Running signed public FluidVoice build..."
-    echo "Build product: ${DERIVED_DATA_PATH}/Build/Products/Debug/FluidVoice Debug.app"
+    echo "Build product: ${DERIVED_DATA_PATH}/Build/Products/Debug/LaVoix.app"
     xcodebuild "${build_args[@]}" DEVELOPMENT_TEAM="${development_team}"
 
-    app_path="${DERIVED_DATA_PATH}/Build/Products/Debug/FluidVoice Debug.app"
+    app_path="${DERIVED_DATA_PATH}/Build/Products/Debug/LaVoix.app"
     ctranscribe_framework="${app_path}/Contents/Frameworks/CTranscribe.framework"
     if [ ! -d "${app_path}" ]; then
         echo "Signed build product is missing: ${app_path}" >&2
