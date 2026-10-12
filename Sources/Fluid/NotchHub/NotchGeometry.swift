@@ -68,13 +68,15 @@ enum NotchGeometry {
         )
     }
 
-    /// Region that keeps the notch open while the pointer is inside it.
+    /// Region that keeps the notch open while the pointer is inside it. It reaches past the top of the screen:
+    /// a pointer pushed against the top edge sits exactly on `maxY`, which `NSRect.contains` treats as outside,
+    /// and that made the notch close right after opening.
     @MainActor static func openRect(for screen: NSScreen) -> NSRect {
         NSRect(
             x: screen.frame.midX - self.openSize.width / 2 - 10,
             y: screen.frame.maxY - self.openSize.height - 10,
             width: self.openSize.width + 20,
-            height: self.openSize.height + 10
+            height: self.openSize.height + 10 + 40
         )
     }
 }

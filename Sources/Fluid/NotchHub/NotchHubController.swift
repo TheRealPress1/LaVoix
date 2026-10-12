@@ -28,7 +28,10 @@ final class NotchHubController {
     private(set) var isEditingText = false
 
     private let openDelay: UInt64 = 90_000_000
-    private let closeDelay: UInt64 = 260_000_000
+    private let closeDelay: UInt64 = 350_000_000
+    /// After opening, ignore "pointer left" for this long, so a twitch or the opening animation can't close it.
+    private let minimumOpenSeconds: TimeInterval = 0.8
+    private var openedAt = Date.distantPast
 
     var isRunning: Bool { self.window != nil }
 
@@ -330,7 +333,8 @@ final class NotchHubController {
 
     private func scheduleClose() {
         guard self.closeTask == nil else { return }
-        let delay = self.closeDelay
+        let grace = max(0, self.minimumOpenSeconds - Date().timeIntervalSince(self.openedAt))
+        let delay = self.closeDelay + UInt64(grace * 1_000_000_000)
         self.closeTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: delay)
             guard !Task.isCancelled, let self else { return }
@@ -343,6 +347,7 @@ final class NotchHubController {
     }
 
     private func open() {
+        if !self.model.isOpen { self.openedAt = Date() }
         self.releaseTask?.cancel()
         self.window?.ignoresMouseEvents = false
         self.model.open()

@@ -223,6 +223,11 @@ enum NotchHubDebug {
             controller.start()
             try? await Task.sleep(nanoseconds: 800_000_000)
             out(controller.debugReport("started (closed)"))
+            if let screen = NotchGeometry.targetScreen() {
+                // A pointer against the very top of the screen must count as inside both regions.
+                let edge = NSPoint(x: screen.frame.midX, y: screen.frame.maxY)
+                out("top edge: inTrigger=\(NotchGeometry.triggerRect(for: screen).contains(edge)) inOpenRect=\(NotchGeometry.openRect(for: screen).contains(edge))")
+            }
             controller.debugSetOpen(true)
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             out(controller.debugReport("opened"))
