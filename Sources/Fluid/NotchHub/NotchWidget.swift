@@ -20,6 +20,16 @@ enum NotchWidgetRegistry {
         widgets.append(NotchWidget(id: "nowplaying", title: "Now Playing", systemImage: "music.note") {
             AnyView(NowPlayingWidgetView(store: NowPlayingStore.shared))
         })
+        if NotchClipboardSettings.isEnabled {
+            widgets.append(NotchWidget(id: "clipboard", title: "Clipboard", systemImage: "doc.on.clipboard") {
+                AnyView(ClipboardWidgetView(store: ClipboardStore.shared))
+            })
+        }
+        if NotchShelfSettings.isEnabled {
+            widgets.append(NotchWidget(id: "shelf", title: "Shelf", systemImage: "tray.fill") {
+                AnyView(ShelfWidgetView(store: ShelfStore.shared))
+            })
+        }
         if NotchMessagesSettings.isEnabled {
             widgets.append(NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") {
                 AnyView(MessagesWidgetView(store: MessagesStore.shared))

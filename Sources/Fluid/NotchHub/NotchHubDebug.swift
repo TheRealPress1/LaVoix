@@ -49,6 +49,16 @@ enum NotchHubDebug {
                     NotchWidget(id: "nowplaying", title: "Now Playing", systemImage: "music.note") { AnyView(NowPlayingWidgetView(store: store, staticLayout: true)) },
                 ])
                 model.selectedWidgetID = "nowplaying"
+            } else if widgetName.hasPrefix("clipboard") || widgetName.hasPrefix("shelf") {
+                let isClip = widgetName.hasPrefix("clipboard")
+                let clip = widgetName == "clipboard-empty" ? ClipboardStore(pasteboard: NSPasteboard(name: NSPasteboard.Name("lavoix.empty")), directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)) : ClipboardStore.sample()
+                let shelf = widgetName == "shelf-empty" ? ShelfStore(indexURL: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json")) : ShelfStore.sample()
+                model = NotchHubModel(widgets: [
+                    NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
+                    NotchWidget(id: "clipboard", title: "Clipboard", systemImage: "doc.on.clipboard") { AnyView(ClipboardWidgetView(store: clip, staticLayout: true)) },
+                    NotchWidget(id: "shelf", title: "Shelf", systemImage: "tray.fill") { AnyView(ShelfWidgetView(store: shelf, staticLayout: true)) },
+                ])
+                model.selectedWidgetID = isClip ? "clipboard" : "shelf"
             } else if widgetName.hasPrefix("messages") {
                 let store = MessagesStore.sample(access: widgetName == "messages-denied" ? .needsFullDiskAccess : .granted)
                 model = NotchHubModel(widgets: [
@@ -110,6 +120,78 @@ enum NotchHubDebug {
             out(card.debugReport("hub stopped"))
             out("MEETING CARD AUTOTEST DONE")
             exit(0)
+        }
+    }
+
+    /// `LAVOIX_CLIPBOARD_AUTOTEST=1` exercises the clipboard and shelf stores against a private pasteboard and
+    /// temporary folders, so it never touches the real clipboard.
+    @MainActor static func clipboardAutotestIfRequested() {
+        guard ProcessInfo.processInfo.environment["LAVOIX_CLIPBOARD_AUTOTEST"] == "1" else { return }
+        Task { @MainActor in
+            var failures = 0
+            func check(_ name: String, _ ok: Bool) {
+                print("\(ok ? "PASS" : "FAIL") \(name)")
+                if !ok { failures += 1 }
+            }
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-clip-test-\(UUID().uuidString)")
+            let pb = NSPasteboard(name: NSPasteboard.Name("lavoix.test.\(UUID().uuidString)"))
+            let store = ClipboardStore(pasteboard: pb, directory: dir)
+
+            pb.clearContents(); pb.setString("first", forType: .string); store.poll()
+            check("records text", store.entries.first?.text == "first")
+
+            pb.clearContents(); pb.setString("second", forType: .string); store.poll()
+            check("newest first", store.entries.map(\.text) == ["second", "first"])
+
+            pb.clearContents(); pb.setString("first", forType: .string); store.poll()
+            check("duplicate moves to top, no copy", store.entries.map(\.text) == ["first", "second"])
+
+            pb.clearContents()
+            pb.declareTypes([.string, NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")], owner: nil)
+            pb.setString("hunter2", forType: .string); store.poll()
+            check("skips concealed (password manager) copies", !store.entries.contains { $0.text == "hunter2" })
+
+            pb.clearContents(); pb.setString("   \n ", forType: .string); store.poll()
+            check("skips whitespace-only", store.entries.count == 2)
+
+            let image = NSImage(size: NSSize(width: 40, height: 40))
+            image.lockFocus(); NSColor.red.setFill(); NSRect(x: 0, y: 0, width: 40, height: 40).fill(); image.unlockFocus()
+            pb.clearContents(); pb.writeObjects([image]); store.poll()
+            check("records image with thumbnail", store.entries.first?.kind == .image && store.entries.first.flatMap { store.thumbnail(for: $0) } != nil)
+
+            let file = dir.appendingPathComponent("note.txt"); try? "hi".write(to: file, atomically: true, encoding: .utf8)
+            pb.clearContents(); pb.writeObjects([file as NSURL]); store.poll()
+            check("records file copies", store.entries.first?.kind == .files && store.entries.first?.paths == [file.path])
+
+            let target = store.entries.first { $0.text == "second" }!
+            store.copy(target)
+            check("copy puts text back on the pasteboard", pb.string(forType: .string) == "second")
+            store.poll()
+            check("our own copy is not recorded twice", store.entries.filter { $0.text == "second" }.count == 1 && store.entries.first?.text == "second")
+
+            let reloaded = ClipboardStore(pasteboard: pb, directory: dir)
+            check("history survives a relaunch", reloaded.entries.map(\.id) == store.entries.map(\.id))
+
+            for i in 0..<60 { pb.clearContents(); pb.setString("item \(i)", forType: .string); store.poll() }
+            check("history is capped at \(ClipboardStore.maxEntries)", store.entries.count == ClipboardStore.maxEntries)
+            let pngs = (try? FileManager.default.contentsOfDirectory(atPath: dir.path))?.filter { $0.hasSuffix(".png") } ?? []
+            check("evicted images are deleted from disk", pngs.isEmpty)
+
+            store.clear()
+            check("clear empties history", store.entries.isEmpty)
+
+            let shelfIndex = dir.appendingPathComponent("shelf.json")
+            let shelf = ShelfStore(indexURL: shelfIndex)
+            shelf.add([file, file])
+            check("shelf adds a file once", shelf.items.count == 1)
+            check("shelf survives a relaunch", ShelfStore(indexURL: shelfIndex).items.count == 1)
+            try? FileManager.default.removeItem(at: file)
+            shelf.prune()
+            check("shelf drops files that no longer exist", shelf.items.isEmpty)
+
+            try? FileManager.default.removeItem(at: dir)
+            print(failures == 0 ? "CLIPBOARD AUTOTEST ALL PASSED" : "CLIPBOARD AUTOTEST \(failures) FAILED")
+            exit(failures == 0 ? 0 : 1)
         }
     }
 

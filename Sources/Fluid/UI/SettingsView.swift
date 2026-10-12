@@ -284,6 +284,34 @@ struct SettingsView: View {
                             Divider().opacity(0.2)
 
                             self.settingsToggleRow(
+                                title: "Clipboard history in the notch",
+                                description: "Keep the last 40 things you copy and put any of them back with a click. Stays on this Mac; passwords copied from password managers are skipped.",
+                                isOn: Binding(
+                                    get: { NotchClipboardSettings.isEnabled },
+                                    set: { enabled in
+                                        NotchClipboardSettings.isEnabled = enabled
+                                        NotchHubController.shared.widgetSettingsChanged()
+                                        SettingsStore.shared.objectWillChange.send()
+                                    }
+                                )
+                            )
+                            Divider().opacity(0.2)
+
+                            self.settingsToggleRow(
+                                title: "File shelf in the notch",
+                                description: "Drag a file toward the notch to park it, then drag it out wherever you need it.",
+                                isOn: Binding(
+                                    get: { NotchShelfSettings.isEnabled },
+                                    set: { enabled in
+                                        NotchShelfSettings.isEnabled = enabled
+                                        NotchHubController.shared.widgetSettingsChanged()
+                                        SettingsStore.shared.objectWillChange.send()
+                                    }
+                                )
+                            )
+                            Divider().opacity(0.2)
+
+                            self.settingsToggleRow(
                                 title: "iMessage in the notch",
                                 description: "See new messages and reply from the notch. Needs Full Disk Access to read your messages, and Contacts to show names. Everything stays on this Mac.",
                                 footnote: "Replies are sent through the Messages app; macOS will ask to let LaVoix control it the first time.",
