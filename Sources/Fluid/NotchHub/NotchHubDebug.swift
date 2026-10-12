@@ -6,7 +6,19 @@ enum NotchHubDebug {
     @MainActor static func renderIfRequested() {
         guard let path = ProcessInfo.processInfo.environment["LAVOIX_NOTCH_RENDER"] else { return }
         Task { @MainActor in
-            let model = NotchHubModel()
+            let widgetName = ProcessInfo.processInfo.environment["LAVOIX_NOTCH_RENDER_WIDGET"] ?? "system"
+            let model: NotchHubModel
+            if widgetName.hasPrefix("messages") {
+                let store = MessagesStore.sample(access: widgetName == "messages-denied" ? .needsFullDiskAccess : .granted)
+                model = NotchHubModel(widgets: [
+                    NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
+                    NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") { AnyView(MessagesWidgetView(store: store, staticLayout: true)) },
+                ])
+                model.selectedWidgetID = "messages"
+                model.setBadge("messages", 3)
+            } else {
+                model = NotchHubModel()
+            }
             model.setClosedSize(CGSize(width: 190, height: 32))
             let view = NotchHubView(model: model, forceOpen: true)
                 .padding(20)

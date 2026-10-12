@@ -22,6 +22,9 @@ final class NotchHubWindow: NSPanel {
         self.ignoresMouseEvents = true
     }
 
-    override var canBecomeKey: Bool { false }
+    /// Becomes true only while the user is typing a reply, so the notch never steals focus otherwise.
+    var allowsKey = false
+
+    override var canBecomeKey: Bool { self.allowsKey }
     override var canBecomeMain: Bool { false }
 }

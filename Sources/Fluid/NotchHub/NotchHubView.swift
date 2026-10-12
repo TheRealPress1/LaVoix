@@ -56,6 +56,11 @@ struct NotchHubView: View {
                         .foregroundStyle(selected ? Color.white : Color.white.opacity(0.45))
                         .frame(width: 30, height: 22)
                         .background(Capsule().fill(selected ? Color.white.opacity(0.14) : .clear))
+                        .overlay(alignment: .topTrailing) {
+                            if let count = self.model.badges[widget.id], count > 0 {
+                                Circle().fill(Color.blue).frame(width: 8, height: 8).offset(x: 1, y: -1)
+                            }
+                        }
                 }
                 .buttonStyle(.plain)
                 .help(widget.title)

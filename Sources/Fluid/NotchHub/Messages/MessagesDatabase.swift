@@ -1,0 +1,179 @@
+import Foundation
+import SQLite3
+
+/// Read-only access to the Messages database (`~/Library/Messages/chat.db`). LaVoix never writes to it.
+/// Message text is never logged.
+nonisolated final class MessagesDatabase: @unchecked Sendable {
+    enum Access: Equatable {
+        case granted
+        /// macOS is blocking the file: LaVoix needs Full Disk Access.
+        case denied
+        case missing
+    }
+
+    static let defaultURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Messages/chat.db")
+
+    let url: URL
+
+    init(url: URL = MessagesDatabase.defaultURL) {
+        self.url = url
+    }
+
+    func checkAccess() -> Access {
+        let descriptor = open(self.url.path, O_RDONLY)
+        if descriptor >= 0 {
+            close(descriptor)
+            return .granted
+        }
+        return (errno == ENOENT) ? .missing : .denied
+    }
+
+    // MARK: - Queries
+
+    func conversations(limit: Int) -> [MessageConversation] {
+        let sql = """
+        SELECT c.ROWID, c.guid, COALESCE(c.display_name, ''), COALESCE(c.chat_identifier, ''), COALESCE(c.style, 45),
+               m.text, m.attributedBody, m.date, m.is_from_me, COALESCE(m.cache_has_attachments, 0),
+               (SELECT COUNT(*) FROM chat_message_join j2 JOIN message m2 ON m2.ROWID = j2.message_id
+                 WHERE j2.chat_id = c.ROWID AND m2.is_read = 0 AND m2.is_from_me = 0
+                   AND m2.item_type = 0 AND m2.associated_message_type = 0),
+               COALESCE((SELECT GROUP_CONCAT(h.id, ',') FROM chat_handle_join chj
+                          JOIN handle h ON h.ROWID = chj.handle_id WHERE chj.chat_id = c.ROWID), '')
+        FROM chat c
+        JOIN message m ON m.ROWID = (
+            SELECT j.message_id FROM chat_message_join j JOIN message mm ON mm.ROWID = j.message_id
+             WHERE j.chat_id = c.ROWID AND mm.item_type = 0 AND mm.associated_message_type = 0
+             ORDER BY j.message_date DESC LIMIT 1)
+        ORDER BY m.date DESC
+        LIMIT ?
+        """
+        return self.query(sql, bind: { sqlite3_bind_int($0, 1, Int32(limit)) }) { row in
+            let identifier = Self.string(row, 3)
+            let handles = Self.string(row, 11).split(separator: ",").map(String.init)
+            let groupName = Self.string(row, 2)
+            return MessageConversation(
+                id: sqlite3_column_int64(row, 0),
+                guid: Self.string(row, 1),
+                title: groupName.isEmpty ? (handles.first ?? identifier) : groupName,
+                handles: handles.isEmpty ? [identifier] : handles,
+                isGroup: sqlite3_column_int(row, 4) == 43,
+                lastText: Self.messageText(text: Self.optionalString(row, 5), body: Self.blob(row, 6), hasAttachment: sqlite3_column_int(row, 9) != 0),
+                lastDate: Self.date(sqlite3_column_int64(row, 7)),
+                lastIsFromMe: sqlite3_column_int(row, 8) != 0,
+                unreadCount: Int(sqlite3_column_int(row, 10))
+            )
+        } ?? []
+    }
+
+    func messages(chatID: Int64, limit: Int) -> [ThreadMessage] {
+        let sql = """
+        SELECT m.ROWID, m.text, m.attributedBody, m.date, m.is_from_me, COALESCE(m.cache_has_attachments, 0), COALESCE(h.id, '')
+        FROM chat_message_join j
+        JOIN message m ON m.ROWID = j.message_id
+        LEFT JOIN handle h ON h.ROWID = m.handle_id
+        WHERE j.chat_id = ? AND m.item_type = 0 AND m.associated_message_type = 0
+        ORDER BY m.date DESC
+        LIMIT ?
+        """
+        let newestFirst: [ThreadMessage] = self.query(sql, bind: {
+            sqlite3_bind_int64($0, 1, chatID)
+            sqlite3_bind_int($0, 2, Int32(limit))
+        }) { row in
+            ThreadMessage(
+                id: sqlite3_column_int64(row, 0),
+                text: Self.messageText(text: Self.optionalString(row, 1), body: Self.blob(row, 2), hasAttachment: sqlite3_column_int(row, 5) != 0),
+                date: Self.date(sqlite3_column_int64(row, 3)),
+                isFromMe: sqlite3_column_int(row, 4) != 0,
+                senderHandle: Self.string(row, 6)
+            )
+        } ?? []
+        return newestFirst.reversed()
+    }
+
+    /// Messages from other people with a row id above `rowID`, oldest first.
+    func incomingMessages(after rowID: Int64) -> [IncomingMessage] {
+        let sql = """
+        SELECT m.ROWID, c.ROWID, c.guid, COALESCE(c.display_name, ''), COALESCE(c.style, 45), COALESCE(h.id, ''),
+               m.text, m.attributedBody, m.date, COALESCE(m.cache_has_attachments, 0)
+        FROM message m
+        JOIN chat_message_join j ON j.message_id = m.ROWID
+        JOIN chat c ON c.ROWID = j.chat_id
+        LEFT JOIN handle h ON h.ROWID = m.handle_id
+        WHERE m.ROWID > ? AND m.is_from_me = 0 AND m.item_type = 0 AND m.associated_message_type = 0
+        ORDER BY m.ROWID ASC
+        LIMIT 50
+        """
+        return self.query(sql, bind: { sqlite3_bind_int64($0, 1, rowID) }) { row in
+            IncomingMessage(
+                rowID: sqlite3_column_int64(row, 0),
+                chatID: sqlite3_column_int64(row, 1),
+                chatGUID: Self.string(row, 2),
+                groupName: Self.string(row, 3),
+                isGroup: sqlite3_column_int(row, 4) == 43,
+                senderHandle: Self.string(row, 5),
+                text: Self.messageText(text: Self.optionalString(row, 6), body: Self.blob(row, 7), hasAttachment: sqlite3_column_int(row, 9) != 0),
+                date: Self.date(sqlite3_column_int64(row, 8))
+            )
+        } ?? []
+    }
+
+    func maxRowID() -> Int64 {
+        self.query("SELECT COALESCE(MAX(ROWID), 0) FROM message", bind: { _ in }) { sqlite3_column_int64($0, 0) }?.first ?? 0
+    }
+
+    // MARK: - SQLite plumbing
+
+    private func query<T>(_ sql: String, bind: (OpaquePointer) -> Void, row: (OpaquePointer) -> T) -> [T]? {
+        var database: OpaquePointer?
+        guard sqlite3_open_v2(self.url.path, &database, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let database else {
+            sqlite3_close(database)
+            return nil
+        }
+        defer { sqlite3_close(database) }
+        sqlite3_busy_timeout(database, 800)
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+            sqlite3_finalize(statement)
+            return nil
+        }
+        defer { sqlite3_finalize(statement) }
+        bind(statement)
+
+        var rows: [T] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            rows.append(row(statement))
+        }
+        return rows
+    }
+
+    private static func string(_ statement: OpaquePointer, _ column: Int32) -> String {
+        sqlite3_column_text(statement, column).map { String(cString: $0) } ?? ""
+    }
+
+    private static func optionalString(_ statement: OpaquePointer, _ column: Int32) -> String? {
+        sqlite3_column_type(statement, column) == SQLITE_NULL ? nil : self.string(statement, column)
+    }
+
+    private static func blob(_ statement: OpaquePointer, _ column: Int32) -> Data? {
+        guard sqlite3_column_type(statement, column) == SQLITE_BLOB,
+              let bytes = sqlite3_column_blob(statement, column) else { return nil }
+        return Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, column)))
+    }
+
+    /// Messages stores dates as nanoseconds since 2001-01-01 (older systems used seconds).
+    static func date(_ raw: Int64) -> Date {
+        let seconds = raw > 1_000_000_000_000 ? Double(raw) / 1_000_000_000 : Double(raw)
+        return Date(timeIntervalSinceReferenceDate: seconds)
+    }
+
+    /// The visible text of a message: the `text` column, else the decoded `attributedBody`, else a label.
+    static func messageText(text: String?, body: Data?, hasAttachment: Bool) -> String {
+        var result = (text?.isEmpty == false ? text : nil) ?? body.flatMap(TypedStreamText.extract(from:)) ?? ""
+        // U+FFFC marks where an attachment sits inside the text.
+        result = result.replacingOccurrences(of: "\u{FFFC}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if result.isEmpty { return hasAttachment ? "Attachment" : "" }
+        return result
+    }
+}

@@ -12,10 +12,16 @@ struct NotchWidget: Identifiable {
 enum NotchWidgetRegistry {
     /// Widgets in tab order. New modules (music, calendar, messages, ...) are added here.
     static func all() -> [NotchWidget] {
-        [
+        var widgets = [
             NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") {
                 AnyView(SystemStatsWidgetView())
             },
         ]
+        if NotchMessagesSettings.isEnabled {
+            widgets.append(NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") {
+                AnyView(MessagesWidgetView(store: MessagesStore.shared))
+            })
+        }
+        return widgets
     }
 }

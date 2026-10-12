@@ -8,7 +8,8 @@ final class NotchHubModel: ObservableObject {
     @Published var selectedWidgetID: String
     @Published private(set) var closedSize: CGSize = .init(width: 190, height: 32)
 
-    let widgets: [NotchWidget]
+    @Published private(set) var widgets: [NotchWidget]
+    @Published private(set) var badges: [String: Int] = [:]
 
     init(widgets: [NotchWidget]? = nil) {
         let resolved = widgets ?? NotchWidgetRegistry.all()
@@ -18,6 +19,18 @@ final class NotchHubModel: ObservableObject {
 
     var selectedWidget: NotchWidget? {
         self.widgets.first { $0.id == self.selectedWidgetID } ?? self.widgets.first
+    }
+
+    func reloadWidgets() {
+        self.widgets = NotchWidgetRegistry.all()
+        if !self.widgets.contains(where: { $0.id == self.selectedWidgetID }) {
+            self.selectedWidgetID = self.widgets.first?.id ?? ""
+        }
+    }
+
+    func setBadge(_ id: String, _ count: Int) {
+        guard self.badges[id] != count else { return }
+        self.badges[id] = count
     }
 
     func setClosedSize(_ size: CGSize) {

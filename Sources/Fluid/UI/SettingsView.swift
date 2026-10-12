@@ -283,6 +283,31 @@ struct SettingsView: View {
                             )
                             Divider().opacity(0.2)
 
+                            self.settingsToggleRow(
+                                title: "iMessage in the notch",
+                                description: "See new messages and reply from the notch. Needs Full Disk Access to read your messages, and Contacts to show names. Everything stays on this Mac.",
+                                footnote: "Replies are sent through the Messages app; macOS will ask to let LaVoix control it the first time.",
+                                isOn: Binding(
+                                    get: { NotchMessagesSettings.isEnabled },
+                                    set: { enabled in
+                                        NotchMessagesSettings.isEnabled = enabled
+                                        NotchHubController.shared.messagesSettingChanged()
+                                        SettingsStore.shared.objectWillChange.send()
+                                    }
+                                )
+                            )
+                            Divider().opacity(0.2)
+
+                            self.settingsToggleRow(
+                                title: "Show message text in the notch",
+                                description: "Turn off to show who messaged without showing what they said.",
+                                isOn: Binding(
+                                    get: { NotchMessagesSettings.showsPreviews },
+                                    set: { NotchMessagesSettings.showsPreviews = $0; SettingsStore.shared.objectWillChange.send() }
+                                )
+                            )
+                            Divider().opacity(0.2)
+
                             // Accent Color
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack(alignment: .center) {

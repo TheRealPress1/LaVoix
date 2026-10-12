@@ -31,7 +31,9 @@
 	<key>LSUIElement</key>
 	<false/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>LaVoix needs permission to control system events for managing launch at startup settings.</string>
+	<string>LaVoix needs permission to manage launch at startup, and to send the replies you type in the notch through the Messages app.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>LaVoix uses your contacts to show names instead of phone numbers in the notch's Messages widget. Contacts stay on this Mac.</string>
 	<key>POSTHOG_API_KEY</key>
 	<string></string>
 	<key>POSTHOG_HOST</key>
