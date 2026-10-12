@@ -10,9 +10,12 @@ enum NotchHubDebug {
             let model: NotchHubModel
             if widgetName.hasPrefix("banner") {
                 NotchHubView.previewStatic = true
+                if let stand_in = NSImage(systemSymbolName: "person.crop.circle.fill", accessibilityDescription: nil) {
+                    ContactResolver.shared.debugSetPhoto(stand_in, for: "+15551230001")
+                }
                 model = NotchHubModel()
                 model.showBanner(NotchBannerContent(
-                    chatID: 1, chatGUID: "g", title: "Maya Chen", subtitle: nil,
+                    chatID: 1, chatGUID: "g", title: "Maya Chen", avatarHandle: "+15551230001", subtitle: nil,
                     text: "Are we still on for dinner tonight? I booked the place on 5th for 7:30 🍝", date: Date()
                 ))
                 model.setBannerExpanded(widgetName == "banner-expanded")
@@ -64,7 +67,7 @@ enum NotchHubDebug {
             controller.debugSetOpen(false)
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             out(controller.debugReport("closed again"))
-            controller.debugShowBanner(NotchBannerContent(chatID: 1, chatGUID: "g", title: "Maya Chen", subtitle: nil, text: "test", date: Date()))
+            controller.debugShowBanner(NotchBannerContent(chatID: 1, chatGUID: "g", title: "Maya Chen", avatarHandle: "+15551230001", subtitle: nil, text: "test", date: Date()))
             try? await Task.sleep(nanoseconds: 500_000_000)
             out(controller.debugReport("card shown") + " banner=\(controller.model.banner != nil) expanded=\(controller.model.bannerExpanded)")
             controller.debugSetBannerExpanded(true)

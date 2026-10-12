@@ -111,12 +111,7 @@ private struct ConversationRow: View {
 
     var body: some View {
         HStack(spacing: 9) {
-            ZStack {
-                Circle().fill(Color.white.opacity(0.16))
-                Text(self.initials)
-                    .font(.system(size: 11, weight: .semibold))
-            }
-            .frame(width: 28, height: 28)
+            NotchAvatar(name: self.title, handle: self.conversation.isGroup ? nil : self.conversation.handles.first, size: 30)
 
             VStack(alignment: .leading, spacing: 1) {
                 HStack {

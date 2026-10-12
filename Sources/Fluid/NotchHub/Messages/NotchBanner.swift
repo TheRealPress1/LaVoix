@@ -6,6 +6,8 @@ struct NotchBannerContent: Equatable, Identifiable {
     let chatID: Int64
     let chatGUID: String
     let title: String
+    /// The person's phone number or email, used to look up their photo. nil for group chats.
+    var avatarHandle: String? = nil
     /// Who spoke, in a group chat.
     let subtitle: String?
     let text: String
@@ -28,7 +30,7 @@ struct NotchBannerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
-                Avatar(name: self.content.title)
+                NotchAvatar(name: self.content.title, handle: self.content.avatarHandle)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .firstTextBaseline) {
                         Text(self.content.title)
@@ -122,17 +124,27 @@ struct NotchBannerView: View {
     }
 }
 
-private struct Avatar: View {
+struct NotchAvatar: View {
     let name: String
+    var handle: String?
+    var size: CGFloat = 40
+    @ObservedObject private var contacts = ContactResolver.shared
 
     var body: some View {
         ZStack {
-            Circle().fill(LinearGradient(colors: [self.tint, self.tint.opacity(0.65)], startPoint: .top, endPoint: .bottom))
-            Text(self.initials)
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
+            if let handle, let photo = self.contacts.photo(for: handle) {
+                Image(nsImage: photo)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Circle().fill(LinearGradient(colors: [self.tint, self.tint.opacity(0.65)], startPoint: .top, endPoint: .bottom))
+                Text(self.initials)
+                    .font(.system(size: self.size * 0.375, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+            }
         }
-        .frame(width: 40, height: 40)
+        .frame(width: self.size, height: self.size)
+        .clipShape(Circle())
     }
 
     private var initials: String {

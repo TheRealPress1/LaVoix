@@ -120,6 +120,7 @@ final class NotchHubController {
                 chatID: message.chatID,
                 chatGUID: message.chatGUID,
                 title: title,
+                avatarHandle: message.isGroup ? nil : message.senderHandle,
                 subtitle: message.isGroup ? name : nil,
                 text: NotchMessagesSettings.showsPreviews ? message.text : "New message",
                 date: message.date
