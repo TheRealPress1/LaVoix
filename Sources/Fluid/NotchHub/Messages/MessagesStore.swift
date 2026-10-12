@@ -28,6 +28,10 @@ final class MessagesStore: ObservableObject {
     private let database: MessagesDatabase
     private let contacts = ContactResolver.shared
     private var contactsObserver: AnyCancellable?
+    /// Recent messages per chat, so switching conversations shows the thread instantly instead of waiting on the
+    /// database. `cacheStamps` remembers which last-message date each cached thread was read at.
+    private var threadCache: [Int64: [ThreadMessage]] = [:]
+    private var cacheStamps: [Int64: Date] = [:]
     private var lastSeenRowID: Int64 = 0
     private var watcher: DispatchSourceFileSystemObject?
     private var fallbackTimer: Timer?
@@ -56,6 +60,8 @@ final class MessagesStore: ObservableObject {
             ThreadMessage(id: 2, text: "yes! 7pm works", date: now.addingTimeInterval(-500), isFromMe: true, senderHandle: ""),
             ThreadMessage(id: 3, text: "see you at the place 🍕", date: now.addingTimeInterval(-120), isFromMe: false, senderHandle: ""),
         ]
+        store.threadCache[1] = store.thread
+        store.threadCache[2] = [ThreadMessage(id: 10, text: "shipping at 5", date: now.addingTimeInterval(-1800), isFromMe: false, senderHandle: "")]
         return store
     }
 
@@ -100,23 +106,39 @@ final class MessagesStore: ObservableObject {
         let database = self.database
         let after = self.lastSeenRowID
         let chatID = self.selectedChatID
+        let stamps = self.cacheStamps
         Task {
-            let result = await Task.detached(priority: .utility) { () -> ([MessageConversation], [ThreadMessage], [IncomingMessage]) in
+            let result = await Task.detached(priority: .utility) { () -> ([MessageConversation], [Int64: [ThreadMessage]], [IncomingMessage]) in
                 let conversations = database.conversations(limit: 12)
                 let selected = chatID ?? conversations.first?.id
-                let thread = selected.map { database.messages(chatID: $0, limit: 12) } ?? []
+                // Read the selected thread, plus any thread that is new or has a newer message since it was cached,
+                // so the next tap on a conversation is already loaded.
+                var threads: [Int64: [ThreadMessage]] = [:]
+                for conversation in conversations where conversation.id == selected || stamps[conversation.id] != conversation.lastDate {
+                    threads[conversation.id] = database.messages(chatID: conversation.id, limit: 12)
+                }
                 let incoming = announce ? database.incomingMessages(after: after) : []
-                return (conversations, thread, incoming)
+                return (conversations, threads, incoming)
             }.value
-            self.apply(conversations: result.0, thread: result.1, incoming: result.2, announce: announce)
+            self.apply(conversations: result.0, threads: result.1, incoming: result.2, announce: announce)
         }
     }
 
-    private func apply(conversations: [MessageConversation], thread: [ThreadMessage], incoming: [IncomingMessage], announce: Bool) {
+    private func apply(conversations: [MessageConversation], threads: [Int64: [ThreadMessage]], incoming: [IncomingMessage], announce: Bool) {
         self.conversations = conversations
         self.unreadTotal = conversations.reduce(0) { $0 + $1.unreadCount }
+        for conversation in conversations {
+            if let fresh = threads[conversation.id] {
+                self.threadCache[conversation.id] = fresh
+                self.cacheStamps[conversation.id] = conversation.lastDate
+            }
+        }
+        // Forget chats that fell out of the list so the cache stays small.
+        let visible = Set(conversations.map(\.id))
+        self.threadCache = self.threadCache.filter { visible.contains($0.key) }
+        self.cacheStamps = self.cacheStamps.filter { visible.contains($0.key) }
         if self.selectedChatID == nil { self.selectedChatID = conversations.first?.id }
-        if self.selectedChatID == conversations.first(where: { $0.id == self.selectedChatID })?.id { self.thread = thread }
+        if let selected = self.selectedChatID, let cached = self.threadCache[selected], cached != self.thread { self.thread = cached }
         if let newest = incoming.last { self.lastSeenRowID = max(self.lastSeenRowID, newest.rowID) }
         guard announce else { return }
         // Only the latest message per chat, and nothing stale (e.g. a backlog arriving after sleep).
@@ -131,7 +153,21 @@ final class MessagesStore: ObservableObject {
         guard chatID != self.selectedChatID else { return }
         self.selectedChatID = chatID
         self.sendError = nil
-        self.refresh(announce: false)
+        // Cached thread: show it right now, with no database work at all.
+        if let cached = self.threadCache[chatID] {
+            self.thread = cached
+            return
+        }
+        // Not cached yet (e.g. opened from a notification): clear the old thread and load just this one.
+        self.thread = []
+        guard self.access == .granted else { return }
+        let database = self.database
+        Task {
+            let messages = await Task.detached(priority: .userInitiated) { database.messages(chatID: chatID, limit: 12) }.value
+            guard self.selectedChatID == chatID else { return }
+            self.threadCache[chatID] = messages
+            self.thread = messages
+        }
     }
 
     // MARK: - Names

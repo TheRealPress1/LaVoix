@@ -195,6 +195,36 @@ enum NotchHubDebug {
         }
     }
 
+    /// `LAVOIX_MESSAGES_AUTOTEST=1` checks that switching conversations shows the cached thread immediately, and times
+    /// the real database reads (read-only; message text is never printed).
+    @MainActor static func messagesAutotestIfRequested() {
+        guard ProcessInfo.processInfo.environment["LAVOIX_MESSAGES_AUTOTEST"] == "1" else { return }
+        Task { @MainActor in
+            let store = MessagesStore.sample()
+            let before = store.thread.map(\.id)
+            store.select(2)
+            print("\(store.selectedChatID == 2 && store.thread.map(\.id) == [10] ? "PASS" : "FAIL") switching to a cached chat shows its thread in the same tick (was \(before) now \(store.thread.map(\.id)))")
+            store.select(1)
+            print("\(store.thread.map(\.id) == before ? "PASS" : "FAIL") switching back restores the first thread")
+
+            let db = MessagesDatabase()
+            print("real database access: \(db.checkAccess())")
+            if case .granted = db.checkAccess() {
+                func ms(_ block: () -> Void) -> Int {
+                    let start = DispatchTime.now().uptimeNanoseconds
+                    block()
+                    return Int((DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+                }
+                var conversations: [MessageConversation] = []
+                let listMs = ms { conversations = db.conversations(limit: 12) }
+                var threadMs: [Int] = []
+                for c in conversations { threadMs.append(ms { _ = db.messages(chatID: c.id, limit: 12) }) }
+                print("real DB: conversation list \(listMs) ms; per-thread reads \(threadMs) ms (old switch cost ≈ list + one thread; new cost for a cached chat = 0 ms of database work)")
+            }
+            exit(0)
+        }
+    }
+
     /// `LAVOIX_NOWPLAYING_PROBE=1` starts the live MediaRemote listener for 6 seconds and prints what it reports.
     @MainActor static func nowPlayingProbeIfRequested() {
         guard ProcessInfo.processInfo.environment["LAVOIX_NOWPLAYING_PROBE"] == "1" else { return }
