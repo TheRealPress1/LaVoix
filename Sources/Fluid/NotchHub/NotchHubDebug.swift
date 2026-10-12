@@ -45,10 +45,13 @@ enum NotchHubDebug {
                 ))
                 model.setBannerExpanded(widgetName == "banner-expanded")
             } else if widgetName.hasPrefix("nowplaying") {
-                let store = widgetName == "nowplaying-empty" ? NowPlayingStore() : NowPlayingStore.sample(playing: widgetName != "nowplaying-paused")
+                let store = widgetName == "nowplaying-empty"
+                    ? NowPlayingStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-np-empty-\(UUID().uuidString)"))
+                    : NowPlayingStore.sample(playing: widgetName != "nowplaying-paused")
+                let showHistory = widgetName == "nowplaying-history"
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
-                    NotchWidget(id: "nowplaying", title: "Now Playing", systemImage: "music.note") { AnyView(NowPlayingWidgetView(store: store, staticLayout: true)) },
+                    NotchWidget(id: "nowplaying", title: "Now Playing", systemImage: "music.note") { AnyView(NowPlayingWidgetView(store: store, staticLayout: true, showHistory: showHistory)) },
                 ])
                 model.selectedWidgetID = "nowplaying"
             } else if widgetName.hasPrefix("calendar") {
@@ -277,6 +280,47 @@ enum NotchHubDebug {
             check("label: minutes", CalendarStore.whenLabel(start: now.addingTimeInterval(12 * 60), end: now.addingTimeInterval(900 * 60), now: now) == "in 12 min")
             check("label: hours", CalendarStore.whenLabel(start: now.addingTimeInterval(130 * 60), end: now.addingTimeInterval(900 * 60), now: now) == "in 2h 10m")
             print(failures == 0 ? "CALENDAR AUTOTEST ALL PASSED" : "CALENDAR AUTOTEST \(failures) FAILED")
+            exit(failures == 0 ? 0 : 1)
+        }
+    }
+
+    /// `LAVOIX_NOWPLAYING_HISTORY_AUTOTEST=1` checks the listening history (logging, de-duplication, cap, persistence)
+    /// in a temporary folder.
+    @MainActor static func nowPlayingHistoryAutotestIfRequested() {
+        guard ProcessInfo.processInfo.environment["LAVOIX_NOWPLAYING_HISTORY_AUTOTEST"] == "1" else { return }
+        Task { @MainActor in
+            var failures = 0
+            func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)"); if !ok { failures += 1 } }
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-np-test-\(UUID().uuidString)")
+            let store = NowPlayingStore(directory: dir)
+            @MainActor func track(_ title: String, artist: String = "A", art: Bool = false) -> NowPlayingStore.Track {
+                NowPlayingStore.Track(title: title, artist: artist, album: nil, appName: "Music", bundleID: "com.apple.Music", isPlaying: true, duration: 200,
+                                      artwork: art ? NowPlayingStore.sample().track?.artwork : nil)
+            }
+            store.record(track("One", art: true))
+            check("logs a track", store.history.map(\.title) == ["One"])
+            let oneID = store.history[0].id
+            check("saves a thumbnail for artwork", store.thumbnail(for: store.history[0]) != nil)
+            store.record(track("One"))
+            check("same track again is not logged twice", store.history.count == 1)
+            store.record(track("Two"))
+            check("newest first", store.history.map(\.title) == ["Two", "One"])
+            store.record(track("One"))
+            check("a track coming back after another is logged again", store.history.map(\.title) == ["One", "Two", "One"])
+            store.record(track("Same title", artist: "X")); store.record(track("Same title", artist: "Y"))
+            check("same title by a different artist counts as new", store.history.count == 5)
+            check("history survives a relaunch", NowPlayingStore(directory: dir).history == store.history)
+            store.removeFromHistory(store.history[0])
+            check("removing an item", store.history.count == 4)
+            for i in 0..<130 { store.record(track("Song \(i)", art: i < 3)) }
+            check("capped at \(NowPlayingStore.maxHistory)", store.history.count == NowPlayingStore.maxHistory)
+            let jpgs = (try? FileManager.default.contentsOfDirectory(atPath: dir.path))?.filter { $0.hasSuffix(".jpg") } ?? []
+            check("thumbnails of evicted items are deleted", jpgs.isEmpty)
+            _ = oneID
+            store.clearHistory()
+            check("clear empties history", store.history.isEmpty && NowPlayingStore(directory: dir).history.isEmpty)
+            try? FileManager.default.removeItem(at: dir)
+            print(failures == 0 ? "NOWPLAYING HISTORY AUTOTEST ALL PASSED" : "NOWPLAYING HISTORY AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)
         }
     }

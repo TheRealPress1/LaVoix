@@ -284,6 +284,20 @@ struct SettingsView: View {
                             Divider().opacity(0.2)
 
                             self.settingsToggleRow(
+                                title: "Now Playing history",
+                                description: "Keep a list of what you've played, so you can find that song again. Songs are noted in the background even when the notch is closed; the list stays on this Mac.",
+                                isOn: Binding(
+                                    get: { NotchNowPlayingSettings.keepsHistory },
+                                    set: { enabled in
+                                        NotchNowPlayingSettings.keepsHistory = enabled
+                                        NotchHubController.shared.syncNowPlayingHistory()
+                                        SettingsStore.shared.objectWillChange.send()
+                                    }
+                                )
+                            )
+                            Divider().opacity(0.2)
+
+                            self.settingsToggleRow(
                                 title: "Calendar in the notch",
                                 description: "See your next meeting, join its call, or record it with one click. Needs Calendar access; events stay on this Mac.",
                                 isOn: Binding(

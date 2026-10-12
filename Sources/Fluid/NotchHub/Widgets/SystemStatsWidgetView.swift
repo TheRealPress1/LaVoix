@@ -3,6 +3,7 @@ import SwiftUI
 /// RAM, swap, CPU, storage, battery and the apps using the most memory.
 struct SystemStatsWidgetView: View {
     @StateObject private var sampler = SystemStatsSampler()
+    @Environment(\.notchWidgetActive) private var active
 
     var body: some View {
         let s = self.sampler.snapshot
@@ -76,7 +77,9 @@ struct SystemStatsWidgetView: View {
             .frame(width: 210)
         }
         .foregroundStyle(.white)
-        .onAppear { self.sampler.start() }
+        .onChange(of: self.active, initial: true) { _, active in
+            if active { self.sampler.start() } else { self.sampler.stop() }
+        }
         .onDisappear { self.sampler.stop() }
     }
 

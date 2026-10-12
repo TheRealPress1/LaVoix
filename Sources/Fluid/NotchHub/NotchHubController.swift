@@ -15,6 +15,7 @@ final class NotchHubController {
     private var localMonitor: Any?
     private var screenObserver: NSObjectProtocol?
     private var dragMonitor: Any?
+    private var holdsNowPlayingListener = false
     private var openTask: Task<Void, Never>?
     private var closeTask: Task<Void, Never>?
     private var releaseTask: Task<Void, Never>?
@@ -72,6 +73,7 @@ final class NotchHubController {
         NotchMeetingCardController.shared.hubStateChanged()
         if NotchClipboardSettings.isEnabled { ClipboardStore.shared.start() }
         self.startCalendarIfEnabled()
+        self.syncNowPlayingHistory()
         self.dragMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] _ in
             Task { @MainActor in self?.fileDragMoved() }
         }
@@ -105,6 +107,7 @@ final class NotchHubController {
         self.dragMonitor = nil
         ClipboardStore.shared.stop()
         CalendarStore.shared.stop()
+        self.releaseNowPlayingHistory()
         self.window?.orderOut(nil)
         self.window = nil
         NotchMeetingCardController.shared.hubStateChanged()
@@ -118,6 +121,25 @@ final class NotchHubController {
         self.model.reloadWidgets()
         if NotchClipboardSettings.isEnabled { ClipboardStore.shared.start() } else { ClipboardStore.shared.stop() }
         self.startCalendarIfEnabled()
+    }
+
+    /// Keeps the music listener running in the background while history is on, so songs are logged with the notch closed.
+    func syncNowPlayingHistory() {
+        guard self.isRunning else { return }
+        if NotchNowPlayingSettings.keepsHistory {
+            guard !self.holdsNowPlayingListener else { return }
+            self.holdsNowPlayingListener = true
+            NowPlayingStore.shared.start()
+        } else {
+            self.releaseNowPlayingHistory()
+        }
+        self.model.reloadWidgets()
+    }
+
+    private func releaseNowPlayingHistory() {
+        guard self.holdsNowPlayingListener else { return }
+        self.holdsNowPlayingListener = false
+        NowPlayingStore.shared.stop()
     }
 
     private func startCalendarIfEnabled() {

@@ -8,6 +8,16 @@ struct NotchWidget: Identifiable {
     let content: @MainActor () -> AnyView
 }
 
+private struct NotchWidgetActiveKey: EnvironmentKey { static let defaultValue = true }
+
+extension EnvironmentValues {
+    /// False while a widget is mounted but hidden behind the selected tab, so it can pause its timers.
+    var notchWidgetActive: Bool {
+        get { self[NotchWidgetActiveKey.self] }
+        set { self[NotchWidgetActiveKey.self] = newValue }
+    }
+}
+
 @MainActor
 enum NotchWidgetRegistry {
     /// Widgets in tab order. New modules (music, calendar, messages, ...) are added here.
