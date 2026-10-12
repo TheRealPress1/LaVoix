@@ -21,6 +21,24 @@ final class NotchHubModel: ObservableObject {
         self.widgets.first { $0.id == self.selectedWidgetID } ?? self.widgets.first
     }
 
+    @Published private(set) var banner: NotchBannerContent?
+    @Published private(set) var bannerExpanded = false
+
+    func showBanner(_ content: NotchBannerContent) {
+        self.bannerExpanded = false
+        self.banner = content
+    }
+
+    func setBannerExpanded(_ expanded: Bool) {
+        guard self.banner != nil, self.bannerExpanded != expanded else { return }
+        self.bannerExpanded = expanded
+    }
+
+    func hideBanner() {
+        self.banner = nil
+        self.bannerExpanded = false
+    }
+
     func reloadWidgets() {
         self.widgets = NotchWidgetRegistry.all()
         if !self.widgets.contains(where: { $0.id == self.selectedWidgetID }) {

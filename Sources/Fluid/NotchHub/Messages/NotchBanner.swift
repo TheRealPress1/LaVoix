@@ -1,0 +1,144 @@
+import SwiftUI
+
+/// What a notification card shows.
+struct NotchBannerContent: Equatable, Identifiable {
+    let id = UUID()
+    let chatID: Int64
+    let chatGUID: String
+    let title: String
+    /// Who spoke, in a group chat.
+    let subtitle: String?
+    let text: String
+    let date: Date
+}
+
+/// An iOS-style notification card that drops out of the notch. Hover to reveal a reply box.
+struct NotchBannerView: View {
+    let content: NotchBannerContent
+    let expanded: Bool
+    /// Image previews can't draw text fields; this swaps in a static stand-in.
+    var staticLayout = false
+
+    @State private var draft = ""
+    @State private var sent = false
+    @FocusState private var focused: Bool
+
+    private let blue = Color(red: 0.04, green: 0.52, blue: 1.0)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Avatar(name: self.content.title)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(self.content.title)
+                            .font(.system(size: 14.5, weight: .semibold))
+                            .lineLimit(1)
+                        Spacer(minLength: 6)
+                        Text("now")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.white.opacity(0.4))
+                    }
+                    if let subtitle = self.content.subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                    Text(self.content.text)
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .lineLimit(self.expanded ? 4 : 2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { NotchHubController.shared.openConversationFromBanner() }
+
+            if self.expanded { self.replyRow.transition(.opacity.combined(with: .move(edge: .top))) }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 22)
+        .padding(.top, 8)
+    }
+
+    private var replyRow: some View {
+        HStack(spacing: 8) {
+            Group {
+                if self.sent {
+                    Label("Sent", systemImage: "checkmark")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if self.staticLayout {
+                    Text("iMessage")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.white.opacity(0.4))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    TextField("iMessage", text: self.$draft)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 14))
+                        .focused(self.$focused)
+                        .onSubmit { self.send() }
+                        .onExitCommand { self.focused = false; NotchHubController.shared.dismissBanner() }
+                }
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 34)
+            .background(Capsule().fill(Color.white.opacity(0.13)))
+            .contentShape(Capsule())
+            .onTapGesture {
+                guard !self.sent else { return }
+                NotchHubController.shared.beginTextEntry()
+                self.focused = true
+            }
+
+            Button(action: self.send) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .background(Circle().fill(self.draft.isEmpty || self.sent ? self.blue.opacity(0.35) : self.blue))
+            }
+            .buttonStyle(.plain)
+            .disabled(self.draft.trimmingCharacters(in: .whitespaces).isEmpty || self.sent)
+        }
+    }
+
+    private func send() {
+        let text = self.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !self.sent else { return }
+        self.sent = true
+        self.draft = ""
+        NotchHubController.shared.sendFromBanner(text, content: self.content)
+    }
+}
+
+private struct Avatar: View {
+    let name: String
+
+    var body: some View {
+        ZStack {
+            Circle().fill(LinearGradient(colors: [self.tint, self.tint.opacity(0.65)], startPoint: .top, endPoint: .bottom))
+            Text(self.initials)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+        }
+        .frame(width: 40, height: 40)
+    }
+
+    private var initials: String {
+        let letters = self.name.split(separator: " ").prefix(2).compactMap { $0.first.map(String.init) }.joined().uppercased()
+        return letters.isEmpty || self.name.first?.isNumber == true || self.name.first == "+" ? "•" : letters
+    }
+
+    private var tint: Color {
+        let palette: [Color] = [
+            Color(red: 0.96, green: 0.45, blue: 0.35), Color(red: 0.98, green: 0.65, blue: 0.20),
+            Color(red: 0.30, green: 0.75, blue: 0.45), Color(red: 0.25, green: 0.68, blue: 0.85),
+            Color(red: 0.42, green: 0.45, blue: 0.95), Color(red: 0.75, green: 0.40, blue: 0.85),
+        ]
+        let hash = self.name.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0xFFFF }
+        return palette[hash % palette.count]
+    }
+}

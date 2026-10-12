@@ -165,6 +165,21 @@ final class MessagesStore: ObservableObject {
         }
     }
 
+    /// Sends to a specific chat (used by notification cards, which may not be the selected conversation).
+    func send(_ text: String, toChatGUID guid: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        Task {
+            do {
+                try await MessagesSender.send(trimmed, toChat: guid)
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                self.refresh(announce: false)
+            } catch {
+                self.sendError = error.localizedDescription
+            }
+        }
+    }
+
     // MARK: - Watching for new messages
 
     private func armWatcher() {

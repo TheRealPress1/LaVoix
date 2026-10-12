@@ -18,6 +18,8 @@ final class NotchHubController {
     private var closeTask: Task<Void, Never>?
     private var releaseTask: Task<Void, Never>?
     private var peekTask: Task<Void, Never>?
+    private var bannerTask: Task<Void, Never>?
+    private var bannerHovered = false
     private var unreadObserver: AnyCancellable?
     private var resignObserver: NSObjectProtocol?
     private(set) var isEditingText = false
@@ -77,6 +79,8 @@ final class NotchHubController {
         if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
         self.resignObserver = nil
         self.peekTask?.cancel()
+        self.bannerTask?.cancel()
+        self.model.hideBanner()
         self.endTextEntry()
         MessagesStore.shared.stop()
         self.unreadObserver = nil
@@ -105,13 +109,77 @@ final class NotchHubController {
         self.model.reloadWidgets()
         let store = MessagesStore.shared
         store.onIncoming = { [weak self] message, name in
-            self?.peek(widgetID: "messages", chatID: message.chatID, seconds: 6)
-            _ = name
+            let title = message.isGroup ? (message.groupName.isEmpty ? "Group" : message.groupName) : name
+            self?.showBanner(NotchBannerContent(
+                chatID: message.chatID,
+                chatGUID: message.chatGUID,
+                title: title,
+                subtitle: message.isGroup ? name : nil,
+                text: NotchMessagesSettings.showsPreviews ? message.text : "New message",
+                date: message.date
+            ))
         }
         self.unreadObserver = store.$unreadTotal.sink { [weak self] count in
             self?.model.setBadge("messages", count)
         }
         store.start()
+    }
+
+    // MARK: - Notification card
+
+    /// Drops a notification card out of the notch. Hover expands it for a reply; it dismisses itself otherwise.
+    func showBanner(_ content: NotchBannerContent) {
+        guard self.isRunning, !self.recordingOverlayIsVisible, !self.isEditingText, !self.model.isOpen else { return }
+        self.releaseTask?.cancel()
+        self.window?.ignoresMouseEvents = false
+        self.bannerHovered = false
+        self.model.showBanner(content)
+        self.scheduleBannerDismiss(after: 6)
+    }
+
+    func dismissBanner() {
+        self.bannerTask?.cancel()
+        self.bannerHovered = false
+        self.endTextEntry()
+        self.model.hideBanner()
+        self.releaseClickThroughSoon()
+    }
+
+    /// Clicking the card opens the full conversation.
+    func openConversationFromBanner() {
+        guard let banner = self.model.banner else { return }
+        self.bannerTask?.cancel()
+        self.bannerHovered = false
+        self.endTextEntry()
+        self.model.hideBanner()
+        self.model.selectedWidgetID = "messages"
+        MessagesStore.shared.select(banner.chatID)
+        self.open()
+    }
+
+    func sendFromBanner(_ text: String, content: NotchBannerContent) {
+        MessagesStore.shared.send(text, toChatGUID: content.chatGUID)
+        self.endTextEntry()
+        self.scheduleBannerDismiss(after: 1.4, force: true)
+    }
+
+    private func scheduleBannerDismiss(after seconds: Double, force: Bool = false) {
+        self.bannerTask?.cancel()
+        self.bannerTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            if !force, self.isEditingText || self.bannerHovered { return }
+            self.dismissBanner()
+        }
+    }
+
+    private func releaseClickThroughSoon() {
+        self.releaseTask?.cancel()
+        self.releaseTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled, let self, !self.model.isOpen, self.model.banner == nil else { return }
+            self.window?.ignoresMouseEvents = true
+        }
     }
 
     /// Opens the notch on its own for a few seconds, e.g. when a message arrives.
@@ -157,6 +225,19 @@ final class NotchHubController {
     private func pointerMoved() {
         guard !self.ignoresPointer, let screen = NotchGeometry.targetScreen() else { return }
         let point = NSEvent.mouseLocation
+        if self.model.banner != nil, !self.model.isOpen {
+            let inside = NotchGeometry.bannerRect(for: screen, expanded: self.model.bannerExpanded).contains(point)
+            if inside, !self.bannerHovered {
+                self.bannerHovered = true
+                self.bannerTask?.cancel()
+                self.model.setBannerExpanded(true)
+            } else if !inside, self.bannerHovered, !self.isEditingText {
+                self.bannerHovered = false
+                self.model.setBannerExpanded(false)
+                self.scheduleBannerDismiss(after: 2.5)
+            }
+            return
+        }
         if self.model.isOpen {
             if self.isEditingText { return }
             if NotchGeometry.openRect(for: screen).contains(point), !self.recordingOverlayIsVisible {
@@ -226,6 +307,9 @@ final class NotchHubController {
     // MARK: - Debug
 
     func debugIgnorePointer(_ value: Bool) { self.ignoresPointer = value }
+
+    func debugShowBanner(_ content: NotchBannerContent) { self.showBanner(content) }
+    func debugSetBannerExpanded(_ expanded: Bool) { self.model.setBannerExpanded(expanded) }
 
     func debugSetOpen(_ open: Bool) {
         if open { self.open() } else { self.close() }

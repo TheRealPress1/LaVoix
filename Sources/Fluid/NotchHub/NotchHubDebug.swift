@@ -8,7 +8,15 @@ enum NotchHubDebug {
         Task { @MainActor in
             let widgetName = ProcessInfo.processInfo.environment["LAVOIX_NOTCH_RENDER_WIDGET"] ?? "system"
             let model: NotchHubModel
-            if widgetName.hasPrefix("messages") {
+            if widgetName.hasPrefix("banner") {
+                NotchHubView.previewStatic = true
+                model = NotchHubModel()
+                model.showBanner(NotchBannerContent(
+                    chatID: 1, chatGUID: "g", title: "Maya Chen", subtitle: nil,
+                    text: "Are we still on for dinner tonight? I booked the place on 5th for 7:30 🍝", date: Date()
+                ))
+                model.setBannerExpanded(widgetName == "banner-expanded")
+            } else if widgetName.hasPrefix("messages") {
                 let store = MessagesStore.sample(access: widgetName == "messages-denied" ? .needsFullDiskAccess : .granted)
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
@@ -20,7 +28,7 @@ enum NotchHubDebug {
                 model = NotchHubModel()
             }
             model.setClosedSize(CGSize(width: 190, height: 32))
-            let view = NotchHubView(model: model, forceOpen: true)
+            let view = NotchHubView(model: model, forceOpen: !widgetName.hasPrefix("banner"))
                 .padding(20)
                 .background(Color(white: 0.16))
             let renderer = ImageRenderer(content: view)
@@ -56,6 +64,15 @@ enum NotchHubDebug {
             controller.debugSetOpen(false)
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             out(controller.debugReport("closed again"))
+            controller.debugShowBanner(NotchBannerContent(chatID: 1, chatGUID: "g", title: "Maya Chen", subtitle: nil, text: "test", date: Date()))
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            out(controller.debugReport("card shown") + " banner=\(controller.model.banner != nil) expanded=\(controller.model.bannerExpanded)")
+            controller.debugSetBannerExpanded(true)
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            out(controller.debugReport("card expanded") + " banner=\(controller.model.banner != nil) expanded=\(controller.model.bannerExpanded)")
+            controller.dismissBanner()
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            out(controller.debugReport("card dismissed") + " banner=\(controller.model.banner != nil)")
             controller.stop()
             out(controller.debugReport("stopped"))
             out("NOTCH AUTOTEST DONE")

@@ -6,26 +6,43 @@ struct NotchHubView: View {
     /// Forces the open layout. Used when rendering previews.
     var forceOpen = false
 
+    /// Set by the image preview tool, which can't draw text fields.
+    nonisolated(unsafe) static var previewStatic = false
+
     private var isOpen: Bool { self.forceOpen || self.model.isOpen }
 
     var body: some View {
         let open = self.isOpen
-        let size = open ? NotchGeometry.openSize : self.model.closedSize
+        let banner = open ? nil : self.model.banner
+        let size: CGSize = open
+            ? NotchGeometry.openSize
+            : (banner != nil
+                ? NotchGeometry.bannerSize(expanded: self.model.bannerExpanded, notchHeight: self.model.closedSize.height)
+                : self.model.closedSize)
+        let raised = open || banner != nil
         ZStack(alignment: .top) {
-            NotchHubShape(topCornerRadius: open ? 19 : 6, bottomCornerRadius: open ? 26 : 14)
+            NotchHubShape(topCornerRadius: open ? 19 : (banner != nil ? 10 : 6), bottomCornerRadius: open ? 26 : (banner != nil ? 30 : 14))
                 .fill(Color.black)
                 .frame(width: size.width, height: size.height)
-                .shadow(color: .black.opacity(open ? 0.55 : 0), radius: 16, y: 8)
+                .shadow(color: .black.opacity(raised ? 0.55 : 0), radius: 16, y: 8)
                 .overlay(alignment: .top) {
                     if open {
                         self.openContent
                             .frame(width: size.width, height: size.height, alignment: .top)
                             .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+                    } else if let banner {
+                        NotchBannerView(content: banner, expanded: self.model.bannerExpanded, staticLayout: self.forceOpen || Self.previewStatic)
+                            .padding(.top, self.model.closedSize.height)
+                            .frame(width: size.width, height: size.height, alignment: .top)
+                            .transition(.opacity)
+                            .id(banner.id)
                     }
                 }
         }
         .frame(width: NotchGeometry.windowSize.width, height: NotchGeometry.windowSize.height, alignment: .top)
         .animation(.spring(response: 0.42, dampingFraction: 0.82), value: open)
+        .animation(.spring(response: 0.42, dampingFraction: 0.82), value: self.model.banner?.id)
+        .animation(.spring(response: 0.38, dampingFraction: 0.85), value: self.model.bannerExpanded)
     }
 
     private var openContent: some View {

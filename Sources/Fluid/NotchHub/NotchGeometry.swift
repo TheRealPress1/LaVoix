@@ -23,6 +23,16 @@ enum NotchGeometry {
         return CGSize(width: 190, height: menuBar)
     }
 
+    /// Notification card size. The top band sits behind the hardware notch, so content starts below it.
+    static func bannerSize(expanded: Bool, notchHeight: CGFloat) -> CGSize {
+        CGSize(width: 420, height: notchHeight + (expanded ? 118 : 70))
+    }
+
+    @MainActor static func bannerRect(for screen: NSScreen, expanded: Bool) -> NSRect {
+        let size = self.bannerSize(expanded: expanded, notchHeight: self.closedSize(for: screen).height)
+        return NSRect(x: screen.frame.midX - size.width / 2 - 8, y: screen.frame.maxY - size.height - 8, width: size.width + 16, height: size.height + 8)
+    }
+
     static var windowSize: CGSize {
         CGSize(width: self.openSize.width + self.shadowPadding * 2, height: self.openSize.height + self.shadowPadding)
     }
