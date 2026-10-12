@@ -201,7 +201,7 @@ private struct ThreadView: View {
             }
 
             HStack(spacing: 8) {
-                (self.staticLayout ? AnyView(Text("iMessage").foregroundStyle(.white.opacity(0.4)).frame(maxWidth: .infinity, alignment: .leading)) : AnyView(TextField("iMessage", text: self.$draft)))
+                (self.staticLayout ? AnyView(Text("iMessage").foregroundStyle(.white.opacity(0.4)).frame(maxWidth: .infinity, alignment: .leading)) : AnyView(TextField("", text: self.$draft, prompt: Text("iMessage").foregroundStyle(.white.opacity(0.45))).foregroundStyle(.white).tint(.white)))
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .focused(self.$focused)
@@ -213,7 +213,10 @@ private struct ThreadView: View {
                     .contentShape(Capsule())
                     .onTapGesture {
                         NotchHubController.shared.beginTextEntry()
-                        self.focused = true
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 120_000_000)
+                            self.focused = true
+                        }
                     }
                 Button(action: self.send) {
                     Image(systemName: self.store.isSending ? "ellipsis" : "arrow.up")

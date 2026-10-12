@@ -20,6 +20,8 @@ final class NotchHubController {
     private var peekTask: Task<Void, Never>?
     private var bannerTask: Task<Void, Never>?
     private var bannerHovered = false
+    /// True while the card's reply box has text in it, so leaving the card doesn't throw the draft away.
+    var bannerHasDraft = false
     private var unreadObserver: AnyCancellable?
     private var resignObserver: NSObjectProtocol?
     private(set) var isEditingText = false
@@ -56,7 +58,11 @@ final class NotchHubController {
         self.resignObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification, object: window, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.endTextEntry() }
+            Task { @MainActor in
+                guard let self else { return }
+                self.endTextEntry()
+                if self.model.banner != nil, !self.bannerHovered { self.scheduleBannerDismiss(after: 4, force: true) }
+            }
         }
         self.startMessagesIfEnabled()
         self.screenObserver = NotificationCenter.default.addObserver(
@@ -140,6 +146,7 @@ final class NotchHubController {
     func dismissBanner() {
         self.bannerTask?.cancel()
         self.bannerHovered = false
+        self.bannerHasDraft = false
         self.endTextEntry()
         self.model.hideBanner()
         self.releaseClickThroughSoon()
@@ -231,8 +238,11 @@ final class NotchHubController {
                 self.bannerHovered = true
                 self.bannerTask?.cancel()
                 self.model.setBannerExpanded(true)
-            } else if !inside, self.bannerHovered, !self.isEditingText {
+                // Hovering is enough to start typing: take the keyboard now.
+                self.beginTextEntry()
+            } else if !inside, self.bannerHovered, !self.bannerHasDraft {
                 self.bannerHovered = false
+                self.endTextEntry()
                 self.model.setBannerExpanded(false)
                 self.scheduleBannerDismiss(after: 2.5)
             }
@@ -318,7 +328,7 @@ final class NotchHubController {
     func debugReport(_ label: String) -> String {
         guard let window else { return "[\(label)] no window" }
         let f = window.frame
-        var line = "[\(label)] open=\(self.model.isOpen) visible=\(window.isVisible) clickThrough=\(window.ignoresMouseEvents) "
+        var line = "[\(label)] key=\(window.isKeyWindow) responder=\(window.firstResponder.map { String(describing: type(of: $0)) } ?? "none") open=\(self.model.isOpen) visible=\(window.isVisible) clickThrough=\(window.ignoresMouseEvents) "
         line += "level=\(window.level.rawValue) frame=(\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height))) "
         if let screen = NotchGeometry.targetScreen() {
             let closed = NotchGeometry.closedSize(for: screen)

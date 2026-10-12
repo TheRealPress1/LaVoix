@@ -20,6 +20,8 @@ final class NotchHubWindow: NSPanel {
         self.level = .mainMenu + 3
         self.collectionBehavior = [.fullScreenAuxiliary, .stationary, .canJoinAllSpaces, .ignoresCycle]
         self.ignoresMouseEvents = true
+        // The notch is always black, so controls inside it must render for dark mode even when macOS is light.
+        self.appearance = NSAppearance(named: .darkAqua)
     }
 
     /// Becomes true only while the user is typing a reply, so the notch never steals focus otherwise.

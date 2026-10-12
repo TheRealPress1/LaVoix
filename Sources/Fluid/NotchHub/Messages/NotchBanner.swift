@@ -75,23 +75,22 @@ struct NotchBannerView: View {
                         .foregroundStyle(.white.opacity(0.4))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
-                    TextField("iMessage", text: self.$draft)
+                    TextField("", text: self.$draft, prompt: Text("iMessage").foregroundStyle(.white.opacity(0.45)))
                         .textFieldStyle(.plain)
                         .font(.system(size: 14))
+                        .foregroundStyle(.white)
+                        .tint(.white)
                         .focused(self.$focused)
                         .onSubmit { self.send() }
                         .onExitCommand { self.focused = false; NotchHubController.shared.dismissBanner() }
+                        .onChange(of: self.draft) { _, text in NotchHubController.shared.bannerHasDraft = !text.isEmpty }
                 }
             }
             .padding(.horizontal, 14)
             .frame(height: 34)
             .background(Capsule().fill(Color.white.opacity(0.13)))
             .contentShape(Capsule())
-            .onTapGesture {
-                guard !self.sent else { return }
-                NotchHubController.shared.beginTextEntry()
-                self.focused = true
-            }
+            .onAppear { self.focusSoon() }
 
             Button(action: self.send) {
                 Image(systemName: "arrow.up")
@@ -102,6 +101,15 @@ struct NotchBannerView: View {
             }
             .buttonStyle(.plain)
             .disabled(self.draft.trimmingCharacters(in: .whitespaces).isEmpty || self.sent)
+        }
+    }
+
+    /// The notch window has to become key before a field can take focus, so ask a moment later.
+    private func focusSoon() {
+        guard !self.staticLayout else { return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            self.focused = true
         }
     }
 
