@@ -6,6 +6,8 @@ import SwiftUI
 @MainActor
 final class NotchMeetingModel: ObservableObject {
     enum Phase: Equatable {
+        /// A calendar meeting is starting; offer to record or join.
+        case starting
         case recording
         case processing
         case ended
@@ -19,6 +21,7 @@ final class NotchMeetingModel: ObservableObject {
     /// The most recent words heard, already trimmed to fit the card.
     @Published var caption = ""
     @Published var sourceName = ""
+    @Published var event: CalendarStore.Event?
 
     var duration: TimeInterval { max(0, (self.endedAt ?? Date()).timeIntervalSince(self.startedAt)) }
 }
@@ -31,6 +34,8 @@ struct NotchMeetingCardView: View {
     var onStop: () -> Void = {}
     var onWriteNotes: () -> Void = {}
     var onShowCaptions: () -> Void = {}
+    var onRecordEvent: () -> Void = {}
+    var onJoin: () -> Void = {}
     var onDismiss: () -> Void = {}
 
     var body: some View {
@@ -54,6 +59,32 @@ struct NotchMeetingCardView: View {
     @ViewBuilder
     private var content: some View {
         switch self.model.phase {
+        case .starting:
+            HStack(spacing: 10) {
+                Circle().fill(self.model.event?.color ?? .blue).frame(width: 9, height: 9)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(self.model.event?.title ?? "Meeting").font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Text("Starting now").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+                }
+                Spacer(minLength: 8)
+                if self.model.event?.joinURL != nil {
+                    Button(action: self.onJoin) {
+                        Text("Join").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
+                            .padding(.horizontal, 12).padding(.vertical, 5).background(Capsule().fill(Color.white.opacity(0.16)))
+                    }
+                    .buttonStyle(.plain)
+                }
+                Button(action: self.onRecordEvent) {
+                    Text("Record").font(.system(size: 12, weight: .semibold)).foregroundStyle(.black)
+                        .padding(.horizontal, 12).padding(.vertical, 5).background(Capsule().fill(Color.white))
+                }
+                .buttonStyle(.plain)
+                Button(action: self.onDismiss) {
+                    Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(.white.opacity(0.5))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.top, 8)
         case .recording:
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 8) {
@@ -232,6 +263,8 @@ final class NotchMeetingCardController {
             self.wantsVisible = true
             self.scheduleDismiss(after: 25)
         case .idle, .preparing:
+            // `idle` is re-published often; don't let it wipe a "meeting starting" prompt that is on screen.
+            if self.model.phase == .starting, self.wantsVisible { break }
             self.wantsVisible = false
             self.model.caption = ""
         }
@@ -264,6 +297,46 @@ final class NotchMeetingCardController {
     func writeNotes() {
         self.dismiss()
         MenuBarManager.current?.openMeetingsFromUI()
+    }
+
+    /// Offers to record a calendar meeting that is starting, unless a recording or its follow-up is already showing.
+    func presentStarting(_ event: CalendarStore.Event) {
+        if let state = self.coordinator?.state {
+            switch state {
+            case .idle, .completed, .interrupted, .failed: break
+            default: return
+            }
+        }
+        self.dismissTask?.cancel()
+        self.model.event = event
+        self.model.phase = .starting
+        self.wantsVisible = true
+        self.syncPanel()
+        self.scheduleDismiss(after: 90)
+    }
+
+    /// Starts recording for a calendar event: an online call when it has a call link, otherwise in the room.
+    func record(_ event: CalendarStore.Event) {
+        guard let coordinator else { return }
+        Task {
+            do {
+                let configuration = try await coordinator.defaultConfiguration(
+                    mode: event.joinURL != nil ? .onlineCall : .inRoom, title: event.title
+                )
+                _ = try await coordinator.startRecording(configuration: configuration)
+            } catch {
+                self.dismissTask?.cancel()
+                self.model.phase = .failed(error.localizedDescription)
+                self.wantsVisible = true
+                self.syncPanel()
+                self.scheduleDismiss(after: 25)
+            }
+        }
+    }
+
+    func joinEventCall() {
+        if let url = self.model.event?.joinURL { NSWorkspace.shared.open(url) }
+        self.dismiss()
     }
 
     func showCaptions() {
@@ -303,6 +376,8 @@ final class NotchMeetingCardController {
             onStop: { [weak self] in self?.stop() },
             onWriteNotes: { [weak self] in self?.writeNotes() },
             onShowCaptions: { [weak self] in self?.showCaptions() },
+            onRecordEvent: { [weak self] in if let event = self?.model.event { self?.record(event) } },
+            onJoin: { [weak self] in self?.joinEventCall() },
             onDismiss: { [weak self] in self?.dismiss() }
         )
         let hosting = NSHostingView(rootView: view)

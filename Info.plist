@@ -34,6 +34,8 @@
 	<string>LaVoix needs permission to manage launch at startup, and to send the replies you type in the notch through the Messages app.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>LaVoix uses your contacts to show names instead of phone numbers in the notch's Messages widget. Contacts stay on this Mac.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>LaVoix shows your next meeting in the notch and can offer to record it when it starts. Events are read on this Mac and never leave it.</string>
 	<key>POSTHOG_API_KEY</key>
 	<string></string>
 	<key>POSTHOG_HOST</key>

@@ -23,6 +23,7 @@ struct FluidApp: App {
         NotchHubDebug.meetingCardAutotestIfRequested()
         NotchHubDebug.clipboardAutotestIfRequested()
         NotchHubDebug.messagesAutotestIfRequested()
+        NotchHubDebug.calendarAutotestIfRequested()
         NotificationProbe.runIfRequested()
     }
 

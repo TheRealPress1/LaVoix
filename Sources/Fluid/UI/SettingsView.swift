@@ -284,6 +284,31 @@ struct SettingsView: View {
                             Divider().opacity(0.2)
 
                             self.settingsToggleRow(
+                                title: "Calendar in the notch",
+                                description: "See your next meeting, join its call, or record it with one click. Needs Calendar access; events stay on this Mac.",
+                                isOn: Binding(
+                                    get: { NotchCalendarSettings.isEnabled },
+                                    set: { enabled in
+                                        NotchCalendarSettings.isEnabled = enabled
+                                        NotchHubController.shared.widgetSettingsChanged()
+                                        if enabled { CalendarStore.shared.requestAccess() }
+                                        SettingsStore.shared.objectWillChange.send()
+                                    }
+                                )
+                            )
+                            Divider().opacity(0.2)
+
+                            self.settingsToggleRow(
+                                title: "Offer to record when a meeting starts",
+                                description: "A card drops out of the notch when a meeting with a call link or other guests begins.",
+                                isOn: Binding(
+                                    get: { NotchCalendarSettings.promptsToRecord },
+                                    set: { NotchCalendarSettings.promptsToRecord = $0; SettingsStore.shared.objectWillChange.send() }
+                                )
+                            )
+                            Divider().opacity(0.2)
+
+                            self.settingsToggleRow(
                                 title: "Clipboard history in the notch",
                                 description: "Keep the last 40 things you copy and put any of them back with a click. Stays on this Mac; passwords copied from password managers are skipped.",
                                 isOn: Binding(

@@ -71,6 +71,7 @@ final class NotchHubController {
         self.startMessagesIfEnabled()
         NotchMeetingCardController.shared.hubStateChanged()
         if NotchClipboardSettings.isEnabled { ClipboardStore.shared.start() }
+        self.startCalendarIfEnabled()
         self.dragMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] _ in
             Task { @MainActor in self?.fileDragMoved() }
         }
@@ -103,6 +104,7 @@ final class NotchHubController {
         if let dragMonitor { NSEvent.removeMonitor(dragMonitor) }
         self.dragMonitor = nil
         ClipboardStore.shared.stop()
+        CalendarStore.shared.stop()
         self.window?.orderOut(nil)
         self.window = nil
         NotchMeetingCardController.shared.hubStateChanged()
@@ -115,6 +117,13 @@ final class NotchHubController {
         guard self.isRunning else { return }
         self.model.reloadWidgets()
         if NotchClipboardSettings.isEnabled { ClipboardStore.shared.start() } else { ClipboardStore.shared.stop() }
+        self.startCalendarIfEnabled()
+    }
+
+    private func startCalendarIfEnabled() {
+        guard NotchCalendarSettings.isEnabled else { CalendarStore.shared.stop(); return }
+        CalendarStore.shared.onMeetingDue = { event in NotchMeetingCardController.shared.presentStarting(event) }
+        CalendarStore.shared.start()
     }
 
     /// While files are being dragged, open the notch on the shelf as soon as the pointer reaches it.

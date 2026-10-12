@@ -20,6 +20,11 @@ enum NotchWidgetRegistry {
         widgets.append(NotchWidget(id: "nowplaying", title: "Now Playing", systemImage: "music.note") {
             AnyView(NowPlayingWidgetView(store: NowPlayingStore.shared))
         })
+        if NotchCalendarSettings.isEnabled {
+            widgets.append(NotchWidget(id: "calendar", title: "Calendar", systemImage: "calendar") {
+                AnyView(CalendarWidgetView(store: CalendarStore.shared))
+            })
+        }
         if NotchClipboardSettings.isEnabled {
             widgets.append(NotchWidget(id: "clipboard", title: "Clipboard", systemImage: "doc.on.clipboard") {
                 AnyView(ClipboardWidgetView(store: ClipboardStore.shared))

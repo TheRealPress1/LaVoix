@@ -9,11 +9,13 @@ enum NotchHubDebug {
             let widgetName = ProcessInfo.processInfo.environment["LAVOIX_NOTCH_RENDER_WIDGET"] ?? "system"
             if widgetName.hasPrefix("meeting") {
                 let model = NotchMeetingModel()
+                model.event = CalendarStore.sample().events.first
                 model.startedAt = Date().addingTimeInterval(-754)
                 model.sourceName = "Zoom"
                 model.caption = "…so let's move the launch to the 14th and I'll send the revised plan tonight."
                 switch widgetName {
                 case "meeting-listening": model.caption = ""
+                case "meeting-starting": model.phase = .starting
                 case "meeting-processing": model.phase = .processing; model.endedAt = Date()
                 case "meeting-ended": model.phase = .ended; model.endedAt = Date()
                 case "meeting-failed": model.phase = .failed("Recording was interrupted. Your audio is saved.")
@@ -49,6 +51,19 @@ enum NotchHubDebug {
                     NotchWidget(id: "nowplaying", title: "Now Playing", systemImage: "music.note") { AnyView(NowPlayingWidgetView(store: store, staticLayout: true)) },
                 ])
                 model.selectedWidgetID = "nowplaying"
+            } else if widgetName.hasPrefix("calendar") {
+                let store: CalendarStore
+                switch widgetName {
+                case "calendar-empty": store = .sample(empty: true)
+                case "calendar-denied": store = .sample(access: .denied)
+                case "calendar-unknown": store = .sample(access: .unknown)
+                default: store = .sample()
+                }
+                model = NotchHubModel(widgets: [
+                    NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
+                    NotchWidget(id: "calendar", title: "Calendar", systemImage: "calendar") { AnyView(CalendarWidgetView(store: store, staticLayout: true)) },
+                ])
+                model.selectedWidgetID = "calendar"
             } else if widgetName.hasPrefix("clipboard") || widgetName.hasPrefix("shelf") {
                 let isClip = widgetName.hasPrefix("clipboard")
                 let clip = widgetName == "clipboard-empty" ? ClipboardStore(pasteboard: NSPasteboard(name: NSPasteboard.Name("lavoix.empty")), directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)) : ClipboardStore.sample()
@@ -222,6 +237,47 @@ enum NotchHubDebug {
                 print("real DB: conversation list \(listMs) ms; per-thread reads \(threadMs) ms (old switch cost ≈ list + one thread; new cost for a cached chat = 0 ms of database work)")
             }
             exit(0)
+        }
+    }
+
+    /// `LAVOIX_CALENDAR_AUTOTEST=1` checks the calendar logic (call-link detection, which meeting to offer to record,
+    /// labels) without touching EventKit, so it never triggers a permission prompt.
+    @MainActor static func calendarAutotestIfRequested() {
+        guard ProcessInfo.processInfo.environment["LAVOIX_CALENDAR_AUTOTEST"] == "1" else { return }
+        Task { @MainActor in
+            var failures = 0
+            func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)"); if !ok { failures += 1 } }
+            check("finds a Zoom link in notes", CalendarStore.joinURL(in: [nil, "Room 4", "Join: https://acme.zoom.us/j/123?pwd=x thanks"])?.host == "acme.zoom.us")
+            check("finds a Meet link in the URL field", CalendarStore.joinURL(in: ["https://meet.google.com/abc-defg-hij", nil, nil])?.host == "meet.google.com")
+            check("finds a Teams link", CalendarStore.joinURL(in: [nil, nil, "https://teams.microsoft.com/l/meetup-join/abc"]) != nil)
+            check("ignores ordinary links", CalendarStore.joinURL(in: [nil, "https://example.com/agenda", "see https://notion.so/page"]) == nil)
+            check("no link when there is no text", CalendarStore.joinURL(in: [nil, "", nil]) == nil)
+
+            let now = Date()
+            func event(_ id: String, start: Double, end: Double = 30, allDay: Bool = false, url: Bool = false, guests: Int = 0) -> CalendarStore.Event {
+                CalendarStore.Event(id: id, title: id, start: now.addingTimeInterval(start * 60), end: now.addingTimeInterval((start + end) * 60), isAllDay: allDay, color: .blue, location: nil, joinURL: url ? URL(string: "https://zoom.us/j/1") : nil, attendeeCount: guests)
+            }
+            let call = event("call", start: 0.2, url: true)
+            check("offers to record a call that is starting", CalendarStore.dueForPrompt(events: [call], now: now, prompted: []) == call)
+            check("does not offer twice", CalendarStore.dueForPrompt(events: [call], now: now, prompted: ["call"]) == nil)
+            check("not before it is about to start", CalendarStore.dueForPrompt(events: [event("later", start: 10, url: true)], now: now, prompted: []) == nil)
+            check("still offers a few minutes after the start", CalendarStore.dueForPrompt(events: [event("late", start: -4, url: true)], now: now, prompted: []) != nil)
+            check("not long after the start", CalendarStore.dueForPrompt(events: [event("old", start: -12, url: true)], now: now, prompted: []) == nil)
+            check("skips solo events with no call link", CalendarStore.dueForPrompt(events: [event("gym", start: 0)], now: now, prompted: []) == nil)
+            check("offers in-person meetings with guests", CalendarStore.dueForPrompt(events: [event("lunch", start: 0, guests: 3)], now: now, prompted: []) != nil)
+            check("skips all-day events", CalendarStore.dueForPrompt(events: [event("holiday", start: 0, allDay: true, url: true)], now: now, prompted: []) == nil)
+
+            let running = event("running", start: -10, end: 40)
+            let next = event("next", start: 20)
+            check("features the meeting in progress", CalendarStore.featured(from: [running, next], now: now) == running)
+            check("features the next one when nothing is running", CalendarStore.featured(from: [next], now: now) == next)
+            check("all-day events are never featured", CalendarStore.featured(from: [event("trip", start: -100, end: 2000, allDay: true)], now: now) == nil)
+
+            check("label: now", CalendarStore.whenLabel(start: now.addingTimeInterval(-60), end: now.addingTimeInterval(600), now: now) == "Now")
+            check("label: minutes", CalendarStore.whenLabel(start: now.addingTimeInterval(12 * 60), end: now.addingTimeInterval(900 * 60), now: now) == "in 12 min")
+            check("label: hours", CalendarStore.whenLabel(start: now.addingTimeInterval(130 * 60), end: now.addingTimeInterval(900 * 60), now: now) == "in 2h 10m")
+            print(failures == 0 ? "CALENDAR AUTOTEST ALL PASSED" : "CALENDAR AUTOTEST \(failures) FAILED")
+            exit(failures == 0 ? 0 : 1)
         }
     }
 
