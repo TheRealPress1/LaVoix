@@ -17,6 +17,8 @@ struct FluidApp: App {
 
     init() {
         LocalCleanupSelfTest.runIfRequested()
+        NotchHubDebug.renderIfRequested()
+        NotchHubDebug.autotestIfRequested()
     }
 
     var body: some Scene {

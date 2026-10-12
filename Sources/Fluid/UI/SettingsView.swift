@@ -1,3 +1,4 @@
+import Combine
 //
 //  SettingsView.swift
 //  fluid
@@ -264,6 +265,22 @@ struct SettingsView: View {
                                 )
                             )
                             .settingsSearchTarget(.dockVisibility)
+                            Divider().opacity(0.2)
+
+                            // Notch hub
+                            self.settingsToggleRow(
+                                title: "Notch hub",
+                                description: "Hover the notch to see your Mac's memory, CPU, storage and battery. More widgets are on the way.",
+                                footnote: "Works on the screen with the notch; on other Macs it appears at the top center.",
+                                isOn: Binding(
+                                    get: { NotchHubSettings.isEnabled },
+                                    set: { enabled in
+                                        NotchHubSettings.isEnabled = enabled
+                                        NotchHubController.shared.applyEnabledSetting()
+                                        SettingsStore.shared.objectWillChange.send()
+                                    }
+                                )
+                            )
                             Divider().opacity(0.2)
 
                             // Accent Color

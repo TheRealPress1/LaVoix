@@ -50,6 +50,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         LocalCleanupController.shared.warmUpIfEnabled()
+        NotchHubController.shared.applyEnabledSetting()
         AccessibilityMessagingTimeout.configure()
         #if DEBUG
         self.updateUISimulationObserver = UpdatePromptSimulation.register(self)
