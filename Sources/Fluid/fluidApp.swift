@@ -20,6 +20,7 @@ struct FluidApp: App {
         NotchHubDebug.renderIfRequested()
         NotchHubDebug.autotestIfRequested()
         NotchHubDebug.nowPlayingProbeIfRequested()
+        NotchHubDebug.meetingCardAutotestIfRequested()
         NotificationProbe.runIfRequested()
     }
 

@@ -33,6 +33,20 @@ enum NotchGeometry {
         return NSRect(x: screen.frame.midX - size.width / 2 - 8, y: screen.frame.maxY - size.height - 8, width: size.width + 16, height: size.height + 8)
     }
 
+    static let meetingCardPadding: CGFloat = 16
+
+    /// Live-meeting card size; like the notification card, its top band sits behind the hardware notch.
+    static func meetingCardSize(notchHeight: CGFloat) -> CGSize {
+        CGSize(width: 400, height: notchHeight + 66)
+    }
+
+    @MainActor static func meetingCardFrame(for screen: NSScreen) -> NSRect {
+        let size = self.meetingCardSize(notchHeight: self.closedSize(for: screen).height)
+        let width = size.width + self.meetingCardPadding * 2
+        let height = size.height + self.meetingCardPadding
+        return NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height)
+    }
+
     static var windowSize: CGSize {
         CGSize(width: self.openSize.width + self.shadowPadding * 2, height: self.openSize.height + self.shadowPadding)
     }

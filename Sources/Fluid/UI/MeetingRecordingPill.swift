@@ -90,7 +90,8 @@ final class MeetingRecordingPillController: ObservableObject {
         switch self.presentation {
         case .pill:
             MeetingFloatingCaptionsController.shared.hide()
-            panel.orderFrontRegardless()
+            // The notch card replaces the floating pill while the notch hub is on.
+            if NotchHubController.shared.isRunning { panel.orderOut(nil) } else { panel.orderFrontRegardless() }
         case .captions:
             panel.orderOut(nil)
             MeetingFloatingCaptionsController.shared.show(from: nil)

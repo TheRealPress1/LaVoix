@@ -144,6 +144,7 @@ final class AppServices: ObservableObject {
             .store(in: &self.cancellables)
         Task { @MainActor in
             MeetingRecordingPillController.shared.activate(coordinator: coordinator)
+            NotchMeetingCardController.shared.attach(coordinator: coordinator)
             await coordinator.ensureRestored()
             await coordinator.sweepExpiredAudio()
         }

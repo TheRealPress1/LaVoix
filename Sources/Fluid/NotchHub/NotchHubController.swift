@@ -65,6 +65,7 @@ final class NotchHubController {
             }
         }
         self.startMessagesIfEnabled()
+        NotchMeetingCardController.shared.hubStateChanged()
         self.screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -93,6 +94,7 @@ final class NotchHubController {
         self.model.close()
         self.window?.orderOut(nil)
         self.window = nil
+        NotchMeetingCardController.shared.hubStateChanged()
     }
 
     // MARK: - Messages
@@ -136,7 +138,8 @@ final class NotchHubController {
 
     /// Drops a notification card out of the notch. Hover expands it for a reply; it dismisses itself otherwise.
     func showBanner(_ content: NotchBannerContent) {
-        guard self.isRunning, !self.recordingOverlayIsVisible, !self.isEditingText, !self.model.isOpen else { return }
+        guard self.isRunning, !self.recordingOverlayIsVisible, !self.isEditingText, !self.model.isOpen,
+              !NotchMeetingCardController.shared.isShowing else { return }
         self.releaseTask?.cancel()
         self.window?.ignoresMouseEvents = false
         self.bannerHovered = false

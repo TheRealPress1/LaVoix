@@ -7,6 +7,29 @@ enum NotchHubDebug {
         guard let path = ProcessInfo.processInfo.environment["LAVOIX_NOTCH_RENDER"] else { return }
         Task { @MainActor in
             let widgetName = ProcessInfo.processInfo.environment["LAVOIX_NOTCH_RENDER_WIDGET"] ?? "system"
+            if widgetName.hasPrefix("meeting") {
+                let model = NotchMeetingModel()
+                model.startedAt = Date().addingTimeInterval(-754)
+                model.sourceName = "Zoom"
+                model.caption = "…so let's move the launch to the 14th and I'll send the revised plan tonight."
+                switch widgetName {
+                case "meeting-listening": model.caption = ""
+                case "meeting-processing": model.phase = .processing; model.endedAt = Date()
+                case "meeting-ended": model.phase = .ended; model.endedAt = Date()
+                case "meeting-failed": model.phase = .failed("Recording was interrupted. Your audio is saved.")
+                default: break
+                }
+                // The clock ticks from `Date()`, so freeze it for a stable render.
+                let view = NotchMeetingCardView(model: model, notchHeight: 32).padding(20).background(Color(white: 0.16))
+                let renderer = ImageRenderer(content: view)
+                renderer.scale = 2
+                if let tiff = renderer.nsImage?.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+                   let png = rep.representation(using: .png, properties: [:]) {
+                    try? png.write(to: URL(fileURLWithPath: path))
+                    print("NOTCH RENDER WROTE \(path)")
+                } else { print("NOTCH RENDER FAILED") }
+                exit(0)
+            }
             let model: NotchHubModel
             if widgetName.hasPrefix("banner") {
                 NotchHubView.previewStatic = true
@@ -53,6 +76,39 @@ enum NotchHubDebug {
             } else {
                 print("NOTCH RENDER FAILED")
             }
+            exit(0)
+        }
+    }
+
+    /// `LAVOIX_MEETING_CARD_AUTOTEST=1` starts the hub, walks the meeting card through every phase, and checks that
+    /// it hides while the hub is open.
+    @MainActor static func meetingCardAutotestIfRequested() {
+        guard ProcessInfo.processInfo.environment["LAVOIX_MEETING_CARD_AUTOTEST"] == "1" else { return }
+        Task { @MainActor in
+            func out(_ text: String) { FileHandle.standardOutput.write(Data((text + "\n").utf8)) }
+            let hub = NotchHubController.shared
+            let card = NotchMeetingCardController.shared
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            hub.debugIgnorePointer(true)
+            hub.start()
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            for (label, phase) in [("recording", NotchMeetingModel.Phase.recording), ("processing", .processing), ("ended", .ended), ("failed", .failed("x"))] {
+                card.debugPresent(phase)
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                out(card.debugReport(label))
+            }
+            card.debugPresent(.recording)
+            hub.debugSetOpen(true)
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            out(card.debugReport("hub open (card should be hidden)"))
+            hub.debugSetOpen(false)
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            out(card.debugReport("hub closed (card should be back)"))
+            card.dismiss()
+            out(card.debugReport("dismissed"))
+            hub.stop()
+            out(card.debugReport("hub stopped"))
+            out("MEETING CARD AUTOTEST DONE")
             exit(0)
         }
     }

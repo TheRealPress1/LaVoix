@@ -92,8 +92,12 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     /// Subscription for forwarding audio levels to expanded command notch
     private var expandedModeAudioSubscription: AnyCancellable?
 
+    /// The running instance, for surfaces outside SwiftUI (the notch) that need to open the main window.
+    private(set) static weak var current: MenuBarManager?
+
     override init() {
         super.init()
+        Self.current = self
         NotificationCenter.default.publisher(for: .openMicrophoneSettingsRequested)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -1502,6 +1506,10 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     /// Public entry-point for non-menu UI surfaces (e.g. overlay controls) to open Preferences.
     func openPreferencesFromUI() {
         self.openPreferences()
+    }
+
+    func openMeetingsFromUI() {
+        self.openNavigationDestination(.meetingTranscription)
     }
 
     func openMicrophoneSettingsFromUI() {
