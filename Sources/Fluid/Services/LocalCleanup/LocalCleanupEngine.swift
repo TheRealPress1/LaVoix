@@ -73,6 +73,8 @@ actor LocalCleanupEngine {
     static let shared = LocalCleanupEngine()
 
     private let idleUnloadSeconds: TimeInterval = 60 * 60
+    private var lastUsed = Date()
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
 
     private var container: ModelContainer?
     private var loadedModelID: String?
@@ -89,6 +91,28 @@ actor LocalCleanupEngine {
     func setUsesPrefixCache(_ value: Bool) { self.usesPrefixCache = value }
 
     var isLoaded: Bool { self.container != nil }
+
+    /// Gives the model's memory back when macOS runs low, instead of competing with the user's apps.
+    /// Critical pressure always unloads; a plain warning only does when the model hasn't been used recently.
+    func startMemoryPressureMonitoring() {
+        guard self.memoryPressureSource == nil else { return }
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .global(qos: .utility))
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            let critical = source.data.contains(.critical)
+            Task { await self.handleMemoryPressure(critical: critical) }
+        }
+        source.resume()
+        self.memoryPressureSource = source
+    }
+
+    private func handleMemoryPressure(critical: Bool) {
+        guard self.container != nil else { return }
+        let idleFor = Date().timeIntervalSince(self.lastUsed)
+        if critical || idleFor > 5 * 60 {
+            self.unload()
+        }
+    }
 
     /// Downloads the model if needed and loads it into memory. Safe to call repeatedly.
     func prepare(modelID: String, progress: (@Sendable (Double) -> Void)? = nil) async throws {
@@ -107,14 +131,17 @@ actor LocalCleanupEngine {
         system: String,
         user: String,
         modelID: String,
-        maxTokens: Int = 700
+        maxTokens: Int = 700,
+        temperature: Float = 0.1,
+        cachesPrefix: Bool = true
     ) async throws -> String {
         let container = try await self.container(for: modelID, progress: nil)
+        self.lastUsed = Date()
         self.scheduleIdleUnload()
 
-        let parameters = GenerateParameters(maxTokens: maxTokens, temperature: 0.1)
+        let parameters = GenerateParameters(maxTokens: maxTokens, temperature: temperature)
         let raw: String
-        if self.usesPrefixCache, let snapshot = await self.prefixSnapshot(container: container, modelID: modelID, system: system) {
+        if cachesPrefix, self.usesPrefixCache, let snapshot = await self.prefixSnapshot(container: container, modelID: modelID, system: system) {
             // Each request gets its own copy: a session appends to the cache it is given.
             let copy = PromptCacheSnapshot(
                 cache: snapshot.cache.map { $0.copy() },
@@ -208,6 +235,7 @@ actor LocalCleanupEngine {
             let loaded = try await task.value
             self.container = loaded
             self.loadedModelID = modelID
+            self.startMemoryPressureMonitoring()
             self.loadTask = nil
             self.loadingModelID = nil
             return loaded

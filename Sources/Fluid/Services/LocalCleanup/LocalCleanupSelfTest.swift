@@ -18,6 +18,10 @@ enum LocalCleanupSelfTest {
 
     static func runIfRequested() {
         let env = ProcessInfo.processInfo.environment
+        if env["LAVOIX_MEETING_SELFTEST"] == "1" {
+            self.runMeetingNotes(env: env)
+            return
+        }
         guard env["LAVOIX_LOCAL_CLEANUP_SELFTEST"] == "1" else { return }
         let modelID = env["LAVOIX_LOCAL_CLEANUP_MODEL"] ?? LocalCleanupProvider.defaultModelID
 
@@ -68,6 +72,41 @@ enum LocalCleanupSelfTest {
                 out("\nSELFTEST DONE")
             } catch {
                 out("SELFTEST FAILED: \(error)")
+            }
+            exit(0)
+        }
+    }
+
+    /// `LAVOIX_MEETING_SELFTEST=1 LAVOIX_MEETING_SELFTEST_FILE=<transcript.txt>` with optional
+    /// `LAVOIX_MEETING_NOTES_FILE`, `LAVOIX_MEETING_REPEAT` (repeat the transcript to test chunking) and
+    /// `LAVOIX_MEETING_KINDS` (comma-separated, default all).
+    private static func runMeetingNotes(env: [String: String]) {
+        Task.detached {
+            func out(_ line: String) { FileHandle.standardOutput.write(Data((line + "\n").utf8)) }
+            do {
+                guard let path = env["LAVOIX_MEETING_SELFTEST_FILE"] else { out("MEETING SELFTEST FAILED: no file"); exit(1) }
+                var transcript = try String(contentsOfFile: path, encoding: .utf8)
+                let repeats = Int(env["LAVOIX_MEETING_REPEAT"] ?? "1") ?? 1
+                if repeats > 1 { transcript = Array(repeating: transcript, count: repeats).joined(separator: "\n") }
+                let notes = (env["LAVOIX_MEETING_NOTES_FILE"]).flatMap { try? String(contentsOfFile: $0, encoding: .utf8) } ?? ""
+                let kinds = (env["LAVOIX_MEETING_KINDS"]?.split(separator: ",").compactMap { MeetingSummaryKind(rawValue: String($0)) })
+                    ?? MeetingSummaryKind.allCases
+                if let limit = env["LAVOIX_MEETING_DIRECT_LIMIT"].flatMap(Int.init) { MeetingNotesGenerator.directCharacterLimit = limit }
+                if let target = env["LAVOIX_MEETING_CHUNK_TARGET"].flatMap(Int.init) { MeetingNotesGenerator.chunkCharacterTarget = target }
+                let modelID = LocalCleanupProvider.defaultModelID
+                out("transcript chars: \(transcript.count)  notes chars: \(notes.count)")
+                try await LocalCleanupEngine.shared.prepare(modelID: modelID)
+                for kind in kinds {
+                    let start = Date()
+                    let text = try await MeetingNotesGenerator.generate(
+                        transcript: transcript, kind: kind, userNotes: notes, modelID: modelID,
+                        progress: { out("  ... \($0)") }
+                    )
+                    out(String(format: "\n===== %@ [%.1fs]\n%@", kind.rawValue, Date().timeIntervalSince(start), text))
+                }
+                out("\nMEETING SELFTEST DONE")
+            } catch {
+                out("MEETING SELFTEST FAILED: \(error)")
             }
             exit(0)
         }
