@@ -19,6 +19,7 @@ struct FluidApp: App {
         LocalCleanupSelfTest.runIfRequested()
         NotchHubDebug.renderIfRequested()
         NotchHubDebug.autotestIfRequested()
+        NotchHubDebug.nowPlayingProbeIfRequested()
         NotificationProbe.runIfRequested()
     }
 

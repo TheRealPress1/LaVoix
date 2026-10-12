@@ -17,6 +17,9 @@ enum NotchWidgetRegistry {
                 AnyView(SystemStatsWidgetView())
             },
         ]
+        widgets.append(NotchWidget(id: "nowplaying", title: "Now Playing", systemImage: "music.note") {
+            AnyView(NowPlayingWidgetView(store: NowPlayingStore.shared))
+        })
         if NotchMessagesSettings.isEnabled {
             widgets.append(NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") {
                 AnyView(MessagesWidgetView(store: MessagesStore.shared))

@@ -19,6 +19,13 @@ enum NotchHubDebug {
                     text: "Are we still on for dinner tonight? I booked the place on 5th for 7:30 🍝", date: Date()
                 ))
                 model.setBannerExpanded(widgetName == "banner-expanded")
+            } else if widgetName.hasPrefix("nowplaying") {
+                let store = widgetName == "nowplaying-empty" ? NowPlayingStore() : NowPlayingStore.sample(playing: widgetName != "nowplaying-paused")
+                model = NotchHubModel(widgets: [
+                    NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
+                    NotchWidget(id: "nowplaying", title: "Now Playing", systemImage: "music.note") { AnyView(NowPlayingWidgetView(store: store, staticLayout: true)) },
+                ])
+                model.selectedWidgetID = "nowplaying"
             } else if widgetName.hasPrefix("messages") {
                 let store = MessagesStore.sample(access: widgetName == "messages-denied" ? .needsFullDiskAccess : .granted)
                 model = NotchHubModel(widgets: [
@@ -46,6 +53,23 @@ enum NotchHubDebug {
             } else {
                 print("NOTCH RENDER FAILED")
             }
+            exit(0)
+        }
+    }
+
+    /// `LAVOIX_NOWPLAYING_PROBE=1` starts the live MediaRemote listener for 6 seconds and prints what it reports.
+    @MainActor static func nowPlayingProbeIfRequested() {
+        guard ProcessInfo.processInfo.environment["LAVOIX_NOWPLAYING_PROBE"] == "1" else { return }
+        Task { @MainActor in
+            let store = NowPlayingStore.shared
+            store.start()
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            if let t = store.track {
+                print("NOWPLAYING PROBE: \(t.title) | \(t.artist ?? "-") | app=\(t.appName ?? "-") playing=\(t.isPlaying) duration=\(t.duration ?? 0) artwork=\(t.artwork != nil) elapsed=\(Int(store.elapsed))")
+            } else {
+                print("NOWPLAYING PROBE: no track reported")
+            }
+            store.stop()
             exit(0)
         }
     }
