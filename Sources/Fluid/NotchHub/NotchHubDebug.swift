@@ -332,6 +332,29 @@ enum NotchHubDebug {
 
             check("label: now", CalendarStore.whenLabel(start: now.addingTimeInterval(-60), end: now.addingTimeInterval(600), now: now) == "Now")
             check("label: minutes", CalendarStore.whenLabel(start: now.addingTimeInterval(12 * 60), end: now.addingTimeInterval(900 * 60), now: now) == "in 12 min")
+            // Month grid
+            var cal = Calendar(identifier: .gregorian); cal.firstWeekday = 1
+            let oct = DateComponents(calendar: cal, year: 2026, month: 10, day: 13).date!
+            let octGrid = CalendarStore.gridDays(forMonth: oct, calendar: cal)
+            check("October 2026 grid is whole weeks starting on Sunday", octGrid.count % 7 == 0 && cal.component(.weekday, from: octGrid[0]) == 1)
+            check("October 2026 starts on Thursday so it leads with 4 days of September", cal.component(.month, from: octGrid[0]) == 9 && cal.component(.day, from: octGrid[0]) == 27 && octGrid.count == 35)
+            let sepGrid = CalendarStore.gridDays(forMonth: DateComponents(calendar: cal, year: 2026, month: 8, day: 1).date!, calendar: cal)
+            check("a month that spills into a sixth week gets six rows (August 2026)", sepGrid.count == 42)
+            var mon = cal; mon.firstWeekday = 2
+            check("grid honours a Monday week start", mon.component(.weekday, from: CalendarStore.gridDays(forMonth: oct, calendar: mon)[0]) == 2)
+            check("start of month", cal.component(.day, from: CalendarStore.startOfMonth(oct, calendar: cal)) == 1)
+            let day13 = cal.startOfDay(for: oct)
+            func ev(_ id: String, _ start: Date, _ end: Date, allDay: Bool = false) -> CalendarStore.Event {
+                CalendarStore.Event(id: id, title: id, start: start, end: end, isAllDay: allDay, color: .blue, location: nil, joinURL: nil, attendeeCount: 0)
+            }
+            let morning = ev("morning", day13.addingTimeInterval(9 * 3600), day13.addingTimeInterval(10 * 3600))
+            let tomorrow = ev("tomorrow", day13.addingTimeInterval(33 * 3600), day13.addingTimeInterval(34 * 3600))
+            let allDayTrip = ev("trip", day13.addingTimeInterval(-24 * 3600), day13.addingTimeInterval(48 * 3600), allDay: true)
+            let overnight = ev("overnight", day13.addingTimeInterval(-3600), day13.addingTimeInterval(2 * 3600))
+            let ends = ev("ends at midnight", day13.addingTimeInterval(-3600), day13)
+            let onDay = CalendarStore.events(on: oct, in: [morning, tomorrow, allDayTrip, overnight, ends], calendar: cal).map(\.id)
+            check("a day lists its own events, multi-day and overnight ones, but not the next day's", onDay == ["morning", "trip", "overnight"])
+            check("an event ending exactly at midnight does not leak into the next day", !onDay.contains("ends at midnight"))
             check("label: hours", CalendarStore.whenLabel(start: now.addingTimeInterval(130 * 60), end: now.addingTimeInterval(900 * 60), now: now) == "in 2h 10m")
             print(failures == 0 ? "CALENDAR AUTOTEST ALL PASSED" : "CALENDAR AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)

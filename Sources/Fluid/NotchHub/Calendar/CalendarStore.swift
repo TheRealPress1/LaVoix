@@ -48,6 +48,11 @@ final class CalendarStore: ObservableObject {
     @Published private(set) var events: [Event] = []
     /// Ticks forward so "in 5 min" labels stay current.
     @Published private(set) var now = Date()
+    /// Every event in the visible month grid (including the days either side), for the day dots and the day list.
+    @Published private(set) var monthEvents: [Event] = []
+    /// First day of the month being shown.
+    @Published private(set) var displayedMonth = CalendarStore.startOfMonth(Date())
+    @Published var selectedDay = Calendar.current.startOfDay(for: Date())
 
     /// Called once per meeting when it is time to offer recording.
     var onMeetingDue: ((Event) -> Void)?
@@ -67,11 +72,24 @@ final class CalendarStore: ObservableObject {
         store.now = now
         guard access == .granted, !empty else { return store }
         func at(_ minutes: Double) -> Date { now.addingTimeInterval(minutes * 60) }
+        func day(_ offset: Int, hour: Int, hours: Double = 1) -> (Date, Date) {
+            let start = Calendar.current.date(byAdding: .day, value: offset, to: Calendar.current.startOfDay(for: now))!.addingTimeInterval(Double(hour) * 3600)
+            return (start, start.addingTimeInterval(hours * 3600))
+        }
+        let (dentistStart, dentistEnd) = day(3, hour: 9)
+        let (offsiteStart, offsiteEnd) = day(6, hour: 0, hours: 24)
+        let (reviewStart, reviewEnd) = day(-2, hour: 15)
+        let (boardStart, boardEnd) = day(9, hour: 11)
         store.events = [
             Event(id: "1", title: "Design sync", start: at(12), end: at(42), isAllDay: false, color: .blue, location: "Zoom", joinURL: URL(string: "https://zoom.us/j/123456789"), attendeeCount: 4),
             Event(id: "2", title: "Lunch with Maya", start: at(150), end: at(210), isAllDay: false, color: .green, location: "Café Berlin", joinURL: nil, attendeeCount: 2),
             Event(id: "3", title: "Investor update", start: at(330), end: at(360), isAllDay: false, color: .orange, location: nil, joinURL: URL(string: "https://meet.google.com/abc-defg-hij"), attendeeCount: 5),
-            Event(id: "4", title: "Gym", start: at(1440 + 60), end: at(1440 + 120), isAllDay: false, color: .purple, location: nil, joinURL: nil, attendeeCount: 0),
+        ]
+        store.monthEvents = store.events + [
+            Event(id: "4", title: "Dentist", start: dentistStart, end: dentistEnd, isAllDay: false, color: .purple, location: nil, joinURL: nil, attendeeCount: 0),
+            Event(id: "5", title: "Team offsite", start: offsiteStart, end: offsiteEnd, isAllDay: true, color: .pink, location: "Lisbon", joinURL: nil, attendeeCount: 0),
+            Event(id: "6", title: "Launch review", start: reviewStart, end: reviewEnd, isAllDay: false, color: .blue, location: nil, joinURL: nil, attendeeCount: 3),
+            Event(id: "7", title: "Board prep", start: boardStart, end: boardEnd, isAllDay: false, color: .orange, location: nil, joinURL: nil, attendeeCount: 2),
         ]
         return store
     }
@@ -128,7 +146,7 @@ final class CalendarStore: ObservableObject {
 
     func reload() {
         self.refreshAccess()
-        guard self.access == .granted else { self.events = []; return }
+        guard self.access == .granted else { self.events = []; self.monthEvents = []; return }
         self.now = Date()
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: self.now)
@@ -140,6 +158,56 @@ final class CalendarStore: ObservableObject {
             .sorted { ($0.isAllDay ? 0 : 1, $0.startDate) < ($1.isAllDay ? 0 : 1, $1.startDate) }
             .prefix(12)
             .map(Self.makeEvent)
+        self.reloadMonth()
+    }
+
+    // MARK: - Month view
+
+    func showMonth(offset: Int) {
+        guard let month = Calendar.current.date(byAdding: .month, value: offset, to: self.displayedMonth) else { return }
+        self.displayedMonth = Self.startOfMonth(month)
+        self.reloadMonth()
+    }
+
+    func jumpToToday() {
+        self.now = Date()
+        self.displayedMonth = Self.startOfMonth(self.now)
+        self.selectedDay = Calendar.current.startOfDay(for: self.now)
+        self.reloadMonth()
+    }
+
+    /// Loads everything in the visible grid so the days can show dots and any day's list is already there.
+    func reloadMonth() {
+        guard self.access == .granted else { self.monthEvents = []; return }
+        let days = Self.gridDays(forMonth: self.displayedMonth)
+        guard let first = days.first, let last = days.last, let end = Calendar.current.date(byAdding: .day, value: 1, to: last) else { return }
+        let predicate = self.store.predicateForEvents(withStart: first, end: end, calendars: nil)
+        self.monthEvents = self.store.events(matching: predicate)
+            .filter { $0.status != .canceled && !Self.isDeclined($0) }
+            .sorted { ($0.isAllDay ? 0 : 1, $0.startDate) < ($1.isAllDay ? 0 : 1, $1.startDate) }
+            .prefix(400)
+            .map(Self.makeEvent)
+    }
+
+    static func startOfMonth(_ date: Date, calendar: Calendar = .current) -> Date {
+        calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? calendar.startOfDay(for: date)
+    }
+
+    /// The days to draw for a month: whole weeks (5 or 6 rows), starting on the calendar's first weekday.
+    static func gridDays(forMonth month: Date, calendar: Calendar = .current) -> [Date] {
+        let first = self.startOfMonth(month, calendar: calendar)
+        let lead = (calendar.component(.weekday, from: first) - calendar.firstWeekday + 7) % 7
+        let length = calendar.range(of: .day, in: .month, for: first)?.count ?? 30
+        let total = ((lead + length + 6) / 7) * 7
+        guard let start = calendar.date(byAdding: .day, value: -lead, to: first) else { return [] }
+        return (0..<total).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+    }
+
+    /// Events that touch a given day (multi-day and all-day events show on every day they cover).
+    static func events(on day: Date, in events: [Event], calendar: Calendar = .current) -> [Event] {
+        let start = calendar.startOfDay(for: day)
+        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return [] }
+        return events.filter { $0.start < end && $0.end > start }
     }
 
     // MARK: - Logic (pure, so it can be tested)
