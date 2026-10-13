@@ -169,7 +169,9 @@ final class CalendarStore: ObservableObject {
         let dayStart = calendar.startOfDay(for: self.now)
         guard let end = calendar.date(byAdding: .day, value: 2, to: dayStart) else { return }
         self.loadCalendars()
-        guard let included = self.includedCalendars(), !included.isEmpty || self.hiddenCalendarIDs.isEmpty else {
+        // nil means "every calendar"; an empty list means everything has been hidden.
+        let included = self.includedCalendars()
+        if Self.nothingToShow(included) {
             self.events = []
             self.reloadMonth()
             return
@@ -205,7 +207,8 @@ final class CalendarStore: ObservableObject {
         guard self.access == .granted else { self.monthEvents = []; return }
         let days = Self.gridDays(forMonth: self.displayedMonth)
         guard let first = days.first, let last = days.last, let end = Calendar.current.date(byAdding: .day, value: 1, to: last) else { return }
-        guard let included = self.includedCalendars(), !included.isEmpty || self.hiddenCalendarIDs.isEmpty else { self.monthEvents = []; return }
+        let included = self.includedCalendars()
+        if Self.nothingToShow(included) { self.monthEvents = []; return }
         let predicate = self.store.predicateForEvents(withStart: first, end: end, calendars: included)
         let fetched = self.store.events(matching: predicate)
         self.monthEvents = Self.merged(fetched
@@ -225,8 +228,17 @@ final class CalendarStore: ObservableObject {
 
     /// nil means "all of them" (nothing hidden); otherwise the calendars still shown.
     private func includedCalendars() -> [EKCalendar]? {
-        guard !self.hiddenCalendarIDs.isEmpty else { return nil }
-        return self.store.calendars(for: .event).filter { !self.hiddenCalendarIDs.contains($0.calendarIdentifier) }
+        Self.visible(self.store.calendars(for: .event), hidden: self.hiddenCalendarIDs) { $0.calendarIdentifier }
+    }
+
+    /// nil = nothing is hidden, so ask for every calendar; otherwise only the ones not hidden.
+    static func visible<T>(_ items: [T], hidden: Set<String>, id: (T) -> String) -> [T]? {
+        hidden.isEmpty ? nil : items.filter { !hidden.contains(id($0)) }
+    }
+
+    /// True only when every calendar has been hidden. "All calendars" (nil) is not "nothing".
+    static func nothingToShow<T>(_ included: [T]?) -> Bool {
+        included?.isEmpty == true
     }
 
     /// Reads the list of calendars across every account on this Mac (iCloud, Google, Exchange, ...).

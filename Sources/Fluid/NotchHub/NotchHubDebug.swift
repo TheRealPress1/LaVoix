@@ -367,6 +367,13 @@ enum NotchHubDebug {
 
             check("label: now", CalendarStore.whenLabel(start: now.addingTimeInterval(-60), end: now.addingTimeInterval(600), now: now) == "Now")
             check("label: minutes", CalendarStore.whenLabel(start: now.addingTimeInterval(12 * 60), end: now.addingTimeInterval(900 * 60), now: now) == "in 12 min")
+            // Which calendars are fetched
+            let names = ["iCloud", "Google", "Work"]
+            check("nothing hidden asks for every calendar (nil), and that is not 'nothing to show'",
+                  CalendarStore.visible(names, hidden: []) { $0 } == nil && !CalendarStore.nothingToShow(CalendarStore.visible(names, hidden: []) { $0 }))
+            check("hiding one calendar leaves the others", CalendarStore.visible(names, hidden: ["Work"]) { $0 } == ["iCloud", "Google"])
+            check("hiding every calendar means nothing to show", CalendarStore.nothingToShow(CalendarStore.visible(names, hidden: Set(names)) { $0 }))
+
             // Merging two accounts
             func dup(_ title: String, join: Bool = false, guests: Int = 0, cal: String) -> CalendarStore.Event {
                 CalendarStore.Event(id: UUID().uuidString, title: title, start: now, end: now.addingTimeInterval(1800), isAllDay: false, color: .blue,
