@@ -46,6 +46,8 @@ final class MessagesStore: ObservableObject {
     var sendHandler: (String, String) async throws -> Void = { text, chatGUID in
         try await MessagesSender.send(text, toChat: chatGUID)
     }
+    private var refreshFailures = 0
+    private var retryTask: Task<Void, Never>?
     private var lastSeenRowID: Int64 = 0
     private var watcher: DispatchSourceFileSystemObject?
     private var fallbackTimer: Timer?
@@ -96,6 +98,8 @@ final class MessagesStore: ObservableObject {
         self.fallbackTimer?.invalidate()
         self.fallbackTimer = nil
         self.debounce?.cancel()
+        self.retryTask?.cancel()
+        self.retryTask = nil
         self.contactsObserver = nil
     }
 
@@ -122,19 +126,39 @@ final class MessagesStore: ObservableObject {
         let chatID = self.selectedChatID
         let stamps = self.cacheStamps
         Task {
-            let result = await Task.detached(priority: .utility) { () -> ([MessageConversation], [Int64: [ThreadMessage]], [IncomingMessage]) in
-                let conversations = database.conversations(limit: 12)
+            let result = await Task.detached(priority: .utility) { () -> ([MessageConversation], [Int64: [ThreadMessage]], [IncomingMessage])? in
+                // A failed read (the Messages app can hold the database locked for a moment) is not "no conversations":
+                // report it so the screen keeps what it has and tries again.
+                guard let conversations = database.conversations(limit: 12) else { return nil }
                 let selected = chatID ?? conversations.first?.id
                 // Read the selected thread, plus any thread that is new or has a newer message since it was cached,
                 // so the next tap on a conversation is already loaded.
                 var threads: [Int64: [ThreadMessage]] = [:]
                 for conversation in conversations where conversation.id == selected || stamps[conversation.id] != conversation.lastDate {
-                    threads[conversation.id] = database.messages(chatID: conversation.id, limit: 12)
+                    if let messages = database.messages(chatID: conversation.id, limit: 12) { threads[conversation.id] = messages }
                 }
                 let incoming = announce ? database.incomingMessages(after: after) : []
                 return (conversations, threads, incoming)
             }.value
+            guard let result else {
+                self.retryRefresh(announce: announce)
+                return
+            }
+            self.refreshFailures = 0
             self.apply(conversations: result.0, threads: result.1, incoming: result.2, announce: announce)
+        }
+    }
+
+    /// Tries again shortly after a failed read, backing off a little each time, for up to a few attempts.
+    private func retryRefresh(announce: Bool) {
+        self.refreshFailures += 1
+        guard self.refreshFailures <= 6, self.retryTask == nil else { return }
+        let delay = 0.6 * Double(self.refreshFailures)
+        self.retryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            self.retryTask = nil
+            self.refresh(announce: announce)
         }
     }
 
@@ -181,8 +205,10 @@ final class MessagesStore: ObservableObject {
         guard self.access == .granted else { return }
         let database = self.database
         Task {
-            let messages = await Task.detached(priority: .userInitiated) { database.messages(chatID: chatID, limit: 12) }.value
+            let loaded = await Task.detached(priority: .userInitiated) { database.messages(chatID: chatID, limit: 12) }.value
             guard self.selectedChatID == chatID else { return }
+            // A failed read leaves the thread empty for now; the next refresh fills it in.
+            guard let messages = loaded else { self.retryRefresh(announce: false); return }
             self.threadCache[chatID] = messages
             self.thread = self.mergedThread(for: chatID)
         }

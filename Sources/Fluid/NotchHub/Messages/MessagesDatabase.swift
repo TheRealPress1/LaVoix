@@ -31,7 +31,8 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
 
     // MARK: - Queries
 
-    func conversations(limit: Int) -> [MessageConversation] {
+    /// nil when the database couldn't be read (e.g. Messages has it locked for a moment); an empty list means no chats.
+    func conversations(limit: Int) -> [MessageConversation]? {
         let sql = """
         SELECT c.ROWID, c.guid, COALESCE(c.display_name, ''), COALESCE(c.chat_identifier, ''), COALESCE(c.style, 45),
                m.text, m.attributedBody, m.date, m.is_from_me, COALESCE(m.cache_has_attachments, 0),
@@ -63,10 +64,11 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
                 lastIsFromMe: sqlite3_column_int(row, 8) != 0,
                 unreadCount: Int(sqlite3_column_int(row, 10))
             )
-        } ?? []
+        }
     }
 
-    func messages(chatID: Int64, limit: Int) -> [ThreadMessage] {
+    /// nil when the database couldn't be read right now.
+    func messages(chatID: Int64, limit: Int) -> [ThreadMessage]? {
         let sql = """
         SELECT m.ROWID, m.text, m.attributedBody, m.date, m.is_from_me, COALESCE(m.cache_has_attachments, 0), COALESCE(h.id, '')
         FROM chat_message_join j
@@ -76,7 +78,7 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
         ORDER BY m.date DESC
         LIMIT ?
         """
-        let newestFirst: [ThreadMessage] = self.query(sql, bind: {
+        let queried: [ThreadMessage]? = self.query(sql, bind: {
             sqlite3_bind_int64($0, 1, chatID)
             sqlite3_bind_int($0, 2, Int32(limit))
         }) { row in
@@ -87,7 +89,8 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
                 isFromMe: sqlite3_column_int(row, 4) != 0,
                 senderHandle: Self.string(row, 6)
             )
-        } ?? []
+        }
+        guard let newestFirst = queried else { return nil }
         return newestFirst.reversed()
     }
 
@@ -142,10 +145,14 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
         bind(statement)
 
         var rows: [T] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        var code = sqlite3_step(statement)
+        while code == SQLITE_ROW {
             rows.append(row(statement))
+            code = sqlite3_step(statement)
         }
-        return rows
+        // Anything but "done" (a lock, an I/O error) means the rows so far may be incomplete, so report a failure
+        // instead of a short or empty answer.
+        return code == SQLITE_DONE ? rows : nil
     }
 
     private static func string(_ statement: OpaquePointer, _ column: Int32) -> String {

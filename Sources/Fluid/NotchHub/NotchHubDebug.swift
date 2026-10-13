@@ -228,6 +228,45 @@ enum NotchHubDebug {
             store.select(1)
             print("\(store.thread.map(\.id) == before ? "PASS" : "FAIL") switching back restores the first thread")
 
+            // Database failures must not look like "no conversations". A locked or unreadable database gives nil
+            // (so the screen keeps what it has), while a readable empty one gives an empty list.
+            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-db-test-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+            let dbURL = tmp.appendingPathComponent("chat.db")
+            let schema = """
+            CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, display_name TEXT, chat_identifier TEXT, style INTEGER);
+            CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, attributedBody BLOB, date INTEGER, is_from_me INTEGER, cache_has_attachments INTEGER, is_read INTEGER, item_type INTEGER, associated_message_type INTEGER, handle_id INTEGER);
+            CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER, message_date INTEGER);
+            CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+            CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+            """
+            let create = Process()
+            create.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+            create.arguments = [dbURL.path, schema]
+            try? create.run(); create.waitUntilExit()
+            let goodDB = MessagesDatabase(url: dbURL)
+            print("\(goodDB.conversations(limit: 12)?.isEmpty == true ? "PASS" : "FAIL") a readable but empty database gives an empty list (not a failure)")
+            let missing = MessagesDatabase(url: tmp.appendingPathComponent("nope.db"))
+            print("\(missing.conversations(limit: 12) == nil && missing.messages(chatID: 1, limit: 12) == nil ? "PASS" : "FAIL") a missing database is a failure, not an empty list")
+            let garbageURL = tmp.appendingPathComponent("garbage.db")
+            try? Data("this is not a database at all, just text".utf8).write(to: garbageURL)
+            print("\(MessagesDatabase(url: garbageURL).conversations(limit: 12) == nil ? "PASS" : "FAIL") an unreadable database is a failure, not an empty list")
+            // Hold an exclusive lock on the file, as a busy Messages app might, and read at the same time.
+            let locker = Process()
+            locker.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+            locker.arguments = [dbURL.path]
+            let lockInput = Pipe()
+            locker.standardInput = lockInput
+            locker.standardOutput = FileHandle.nullDevice
+            try? locker.run()
+            lockInput.fileHandleForWriting.write(Data("BEGIN EXCLUSIVE;\nSELECT 1;\n".utf8))
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            let lockedResult = await Task.detached { goodDB.conversations(limit: 12) }.value
+            print("\(lockedResult == nil ? "PASS" : "FAIL") a locked database is a failure, not an empty list")
+            try? lockInput.fileHandleForWriting.close()
+            locker.terminate()
+            try? FileManager.default.removeItem(at: tmp)
+
             // Sending: the message must appear instantly, be replaced (not duplicated) when the database catches up,
             // and vanish if sending fails. A fake sender is used, so nothing is ever really sent.
             let sender = MessagesStore.sample()
