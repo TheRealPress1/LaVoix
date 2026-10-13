@@ -32,6 +32,20 @@ final class MessagesStore: ObservableObject {
     /// database. `cacheStamps` remembers which last-message date each cached thread was read at.
     private var threadCache: [Int64: [ThreadMessage]] = [:]
     private var cacheStamps: [Int64: Date] = [:]
+    /// Messages you just sent that the Messages database hasn't shown yet. They are drawn right away (dimmed) and dropped
+    /// as soon as the real message appears, so sending feels instant even when Messages is slow to confirm.
+    private struct PendingMessage {
+        let tempID: Int64
+        let chatID: Int64
+        let text: String
+        let date: Date
+    }
+    private var pending: [PendingMessage] = []
+    private var nextTempID: Int64 = -1
+    /// How a message is actually sent. Tests replace this so no real message is ever sent.
+    var sendHandler: (String, String) async throws -> Void = { text, chatGUID in
+        try await MessagesSender.send(text, toChat: chatGUID)
+    }
     private var lastSeenRowID: Int64 = 0
     private var watcher: DispatchSourceFileSystemObject?
     private var fallbackTimer: Timer?
@@ -124,21 +138,25 @@ final class MessagesStore: ObservableObject {
         }
     }
 
-    private func apply(conversations: [MessageConversation], threads: [Int64: [ThreadMessage]], incoming: [IncomingMessage], announce: Bool) {
-        self.conversations = conversations
-        self.unreadTotal = conversations.reduce(0) { $0 + $1.unreadCount }
+    func apply(conversations: [MessageConversation], threads: [Int64: [ThreadMessage]], incoming: [IncomingMessage], announce: Bool) {
         for conversation in conversations {
             if let fresh = threads[conversation.id] {
                 self.threadCache[conversation.id] = fresh
                 self.cacheStamps[conversation.id] = conversation.lastDate
             }
         }
+        self.resolvePending()
+        self.conversations = self.withPendingPreviews(conversations)
+        self.unreadTotal = conversations.reduce(0) { $0 + $1.unreadCount }
         // Forget chats that fell out of the list so the cache stays small.
         let visible = Set(conversations.map(\.id))
         self.threadCache = self.threadCache.filter { visible.contains($0.key) }
         self.cacheStamps = self.cacheStamps.filter { visible.contains($0.key) }
         if self.selectedChatID == nil { self.selectedChatID = conversations.first?.id }
-        if let selected = self.selectedChatID, let cached = self.threadCache[selected], cached != self.thread { self.thread = cached }
+        if let selected = self.selectedChatID {
+            let shown = self.mergedThread(for: selected)
+            if self.threadCache[selected] != nil || !self.pending.isEmpty, shown != self.thread { self.thread = shown }
+        }
         if let newest = incoming.last { self.lastSeenRowID = max(self.lastSeenRowID, newest.rowID) }
         guard announce else { return }
         // Only the latest message per chat, and nothing stale (e.g. a backlog arriving after sleep).
@@ -154,8 +172,8 @@ final class MessagesStore: ObservableObject {
         self.selectedChatID = chatID
         self.sendError = nil
         // Cached thread: show it right now, with no database work at all.
-        if let cached = self.threadCache[chatID] {
-            self.thread = cached
+        if self.threadCache[chatID] != nil {
+            self.thread = self.mergedThread(for: chatID)
             return
         }
         // Not cached yet (e.g. opened from a notification): clear the old thread and load just this one.
@@ -166,7 +184,7 @@ final class MessagesStore: ObservableObject {
             let messages = await Task.detached(priority: .userInitiated) { database.messages(chatID: chatID, limit: 12) }.value
             guard self.selectedChatID == chatID else { return }
             self.threadCache[chatID] = messages
-            self.thread = messages
+            self.thread = self.mergedThread(for: chatID)
         }
     }
 
@@ -185,35 +203,92 @@ final class MessagesStore: ObservableObject {
 
     func send(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !self.isSending,
+        guard !trimmed.isEmpty,
               let chat = self.conversations.first(where: { $0.id == self.selectedChatID }) else { return }
-        self.isSending = true
-        self.sendError = nil
-        Task {
-            do {
-                try await MessagesSender.send(trimmed, toChat: chat.guid)
-                try? await Task.sleep(nanoseconds: 900_000_000)
-                self.refresh(announce: false)
-            } catch {
-                self.sendError = error.localizedDescription
-            }
-            self.isSending = false
-        }
+        self.deliver(trimmed, chatID: chat.id, chatGUID: chat.guid)
     }
 
     /// Sends to a specific chat (used by notification cards, which may not be the selected conversation).
     func send(_ text: String, toChatGUID guid: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        self.deliver(trimmed, chatID: self.conversations.first { $0.guid == guid }?.id, chatGUID: guid)
+    }
+
+    private func deliver(_ text: String, chatID: Int64?, chatGUID: String) {
+        self.sendError = nil
+        let tempID = chatID.map { self.addPending(text, chatID: $0) }
         Task {
             do {
-                try await MessagesSender.send(trimmed, toChat: guid)
-                try? await Task.sleep(nanoseconds: 900_000_000)
-                self.refresh(announce: false)
+                try await self.sendHandler(text, chatGUID)
+                // The database lags the send by a moment; check a few times, quickly at first, until the real message shows.
+                for delay in [0.3, 0.6, 1.2, 2.5, 5.0] as [Double] {
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    self.refresh(announce: false)
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    if let tempID, !self.pending.contains(where: { $0.tempID == tempID }) { break }
+                }
             } catch {
                 self.sendError = error.localizedDescription
+                if let tempID { self.removePending(tempID) }
             }
         }
+    }
+
+    // MARK: - Pending (just sent) messages
+
+    private func addPending(_ text: String, chatID: Int64) -> Int64 {
+        let tempID = self.nextTempID
+        self.nextTempID -= 1
+        self.pending.append(PendingMessage(tempID: tempID, chatID: chatID, text: text, date: Date()))
+        self.showPending(chatID: chatID)
+        return tempID
+    }
+
+    private func removePending(_ tempID: Int64) {
+        guard let index = self.pending.firstIndex(where: { $0.tempID == tempID }) else { return }
+        let chatID = self.pending[index].chatID
+        self.pending.remove(at: index)
+        self.showPending(chatID: chatID)
+    }
+
+    /// Redraws the thread and the conversation list with the pending messages included.
+    private func showPending(chatID: Int64) {
+        if self.selectedChatID == chatID { self.thread = self.mergedThread(for: chatID) }
+        self.conversations = self.withPendingPreviews(self.conversations)
+    }
+
+    private func mergedThread(for chatID: Int64) -> [ThreadMessage] {
+        let sent = self.pending.filter { $0.chatID == chatID }.map {
+            ThreadMessage(id: $0.tempID, text: $0.text, date: $0.date, isFromMe: true, senderHandle: "")
+        }
+        return (self.threadCache[chatID] ?? []) + sent
+    }
+
+    /// Drops pending messages the database now shows (same text from you, sent after we queued it), or that never showed
+    /// up after a minute.
+    private func resolvePending() {
+        self.pending.removeAll { item in
+            if Date().timeIntervalSince(item.date) > 60 { return true }
+            return (self.threadCache[item.chatID] ?? []).contains {
+                $0.isFromMe && $0.text == item.text && $0.date >= item.date.addingTimeInterval(-10)
+            }
+        }
+    }
+
+    /// Shows the newest pending message as each conversation's preview and moves that conversation to the top.
+    private func withPendingPreviews(_ list: [MessageConversation]) -> [MessageConversation] {
+        var result = list
+        for item in self.pending.sorted(by: { $0.date < $1.date }) {
+            guard let index = result.firstIndex(where: { $0.id == item.chatID }) else { continue }
+            let old = result.remove(at: index)
+            guard old.lastDate <= item.date else { result.insert(old, at: index); continue }
+            result.insert(MessageConversation(
+                id: old.id, guid: old.guid, title: old.title, handles: old.handles, isGroup: old.isGroup,
+                lastText: item.text, lastDate: item.date, lastIsFromMe: true, unreadCount: 0
+            ), at: 0)
+        }
+        return result
     }
 
     // MARK: - Watching for new messages

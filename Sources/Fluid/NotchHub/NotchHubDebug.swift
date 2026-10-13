@@ -229,20 +229,32 @@ enum NotchHubDebug {
             store.select(1)
             print("\(store.thread.map(\.id) == before ? "PASS" : "FAIL") switching back restores the first thread")
 
-            let db = MessagesDatabase()
-            print("real database access: \(db.checkAccess())")
-            if case .granted = db.checkAccess() {
-                func ms(_ block: () -> Void) -> Int {
-                    let start = DispatchTime.now().uptimeNanoseconds
-                    block()
-                    return Int((DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
-                }
-                var conversations: [MessageConversation] = []
-                let listMs = ms { conversations = db.conversations(limit: 12) }
-                var threadMs: [Int] = []
-                for c in conversations { threadMs.append(ms { _ = db.messages(chatID: c.id, limit: 12) }) }
-                print("real DB: conversation list \(listMs) ms; per-thread reads \(threadMs) ms (old switch cost ≈ list + one thread; new cost for a cached chat = 0 ms of database work)")
+            // Sending: the message must appear instantly, be replaced (not duplicated) when the database catches up,
+            // and vanish if sending fails. A fake sender is used, so nothing is ever really sent.
+            let sender = MessagesStore.sample()
+            var sentCalls: [String] = []
+            sender.sendHandler = { text, guid in
+                sentCalls.append("\(guid):\(text)")
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
             }
+            sender.select(3)
+            sender.send("on my way")
+            print("\(sender.thread.last?.text == "on my way" && (sender.thread.last?.id ?? 0) < 0 ? "PASS" : "FAIL") sent message appears in the thread immediately, before sending finishes")
+            print("\(sender.conversations.first?.id == 3 && sender.conversations.first?.lastText == "on my way" && sender.conversations.first?.lastIsFromMe == true ? "PASS" : "FAIL") conversation preview updates and moves to the top immediately")
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            print("\(sentCalls == ["g3:on my way"] ? "PASS" : "FAIL") the fake sender was called once for the right chat (real Messages untouched)")
+            let countBefore = sender.thread.count
+            let real = ThreadMessage(id: 500, text: "on my way", date: Date(), isFromMe: true, senderHandle: "")
+            sender.apply(conversations: sender.conversations, threads: [3: sender.thread.filter { $0.id > 0 } + [real]], incoming: [], announce: false)
+            print("\(sender.thread.count == countBefore && sender.thread.last?.id == 500 ? "PASS" : "FAIL") when the database shows it, the real message replaces the dimmed one with no duplicate")
+
+            let failing = MessagesStore.sample()
+            failing.sendHandler = { _, _ in throw MessagesSender.SendError.failed("nope") }
+            failing.send("this will fail")
+            print("\(failing.thread.last?.text == "this will fail" ? "PASS" : "FAIL") a message shows immediately even if it will fail")
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            print("\(failing.thread.last?.text != "this will fail" && failing.sendError != nil ? "PASS" : "FAIL") a failed send is removed and the error is shown")
+
             exit(0)
         }
     }

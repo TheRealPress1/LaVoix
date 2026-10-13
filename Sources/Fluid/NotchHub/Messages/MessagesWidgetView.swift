@@ -255,5 +255,7 @@ private struct Bubble: View {
                 .fixedSize(horizontal: false, vertical: true)
             if !self.message.isFromMe { Spacer(minLength: 40) }
         }
+        // A message you just sent, not yet confirmed by Messages, is drawn dimmed.
+        .opacity(self.message.id < 0 ? 0.6 : 1)
     }
 }
