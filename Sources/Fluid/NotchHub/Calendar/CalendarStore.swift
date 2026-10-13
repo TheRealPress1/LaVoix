@@ -207,11 +207,18 @@ final class CalendarStore: ObservableObject {
         guard let first = days.first, let last = days.last, let end = Calendar.current.date(byAdding: .day, value: 1, to: last) else { return }
         guard let included = self.includedCalendars(), !included.isEmpty || self.hiddenCalendarIDs.isEmpty else { self.monthEvents = []; return }
         let predicate = self.store.predicateForEvents(withStart: first, end: end, calendars: included)
-        self.monthEvents = Self.merged(self.store.events(matching: predicate)
+        let fetched = self.store.events(matching: predicate)
+        self.monthEvents = Self.merged(fetched
             .filter { $0.status != .canceled && !Self.isDeclined($0) }
             .sorted { ($0.isAllDay ? 0 : 1, $0.startDate) < ($1.isAllDay ? 0 : 1, $1.startDate) }
             .prefix(600)
             .map(Self.makeEvent))
+        let perAccount = Dictionary(grouping: fetched, by: { $0.calendar?.source.title ?? "?" }).map { "\($0.key)=\($0.value.count)" }.sorted().joined(separator: ", ")
+        let summary = "\(fetched.count) events in the grid (\(perAccount)); showing \(self.monthEvents.count) after merging duplicates"
+        if summary != self.lastMonthSummary {
+            self.lastMonthSummary = summary
+            DebugLogger.shared.info("Calendar month: \(summary)", source: "Calendar")
+        }
     }
 
     // MARK: - Which calendars
@@ -228,7 +235,16 @@ final class CalendarStore: ObservableObject {
         self.calendars = self.store.calendars(for: .event)
             .map { CalendarInfo(id: $0.calendarIdentifier, title: $0.title, account: $0.source.title, color: Color(nsColor: $0.color)) }
             .sorted { ($0.account, $0.title) < ($1.account, $1.title) }
+        // Which accounts and how many calendars each (never event titles), so a missing account can be spotted in the log.
+        let summary = Dictionary(grouping: self.calendars, by: \.account).map { "\($0.key)=\($0.value.count)" }.sorted().joined(separator: ", ")
+        if summary != self.lastCalendarSummary {
+            self.lastCalendarSummary = summary
+            DebugLogger.shared.info("Calendars seen: \(summary.isEmpty ? "none" : summary); hidden: \(self.hiddenCalendarIDs.count)", source: "Calendar")
+        }
     }
+
+    private var lastCalendarSummary = ""
+    private var lastMonthSummary = ""
 
     func setCalendar(_ id: String, visible: Bool) {
         if visible { self.hiddenCalendarIDs.remove(id) } else { self.hiddenCalendarIDs.insert(id) }
