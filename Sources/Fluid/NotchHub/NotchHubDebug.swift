@@ -65,7 +65,7 @@ enum NotchHubDebug {
                 let downloader = YouTubeDownloader.sample(ready: widgetName != "download-setup", empty: widgetName == "download-empty")
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
-                    NotchWidget(id: "download", title: "YouTube to MP3", systemImage: "arrow.down.circle") { AnyView(DownloaderWidgetView(downloader: downloader, nowPlaying: NowPlayingStore.sample(), staticLayout: true)) },
+                    NotchWidget(id: "download", title: "YouTube to MP3", systemImage: "arrow.down.circle") { AnyView(DownloaderWidgetView(downloader: downloader, staticLayout: true)) },
                 ])
                 model.selectedWidgetID = "download"
             } else if widgetName.hasPrefix("calendar") {

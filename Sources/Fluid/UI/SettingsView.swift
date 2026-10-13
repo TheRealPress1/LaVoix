@@ -320,6 +320,7 @@ struct SettingsView: View {
                                             .foregroundStyle(self.settingsSecondaryText)
                                     }
                                     Spacer()
+                                    Button("Update yt-dlp") { YouTubeDownloader.shared.updateYtDlp() }
                                     Button("Choose…") {
                                         let panel = NSOpenPanel()
                                         panel.canChooseDirectories = true

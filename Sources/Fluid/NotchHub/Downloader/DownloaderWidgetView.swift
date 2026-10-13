@@ -4,7 +4,6 @@ import SwiftUI
 /// Paste a YouTube link (or take the video that's playing) and get an MP3 in your Music folder.
 struct DownloaderWidgetView: View {
     @ObservedObject var downloader: YouTubeDownloader
-    @ObservedObject var nowPlaying: NowPlayingStore
     var staticLayout = false
 
     @State private var link = ""
@@ -31,63 +30,52 @@ struct DownloaderWidgetView: View {
         }
     }
 
-    // MARK: - Left: where to paste
+    // MARK: - Left: one box to paste into
 
     private var controls: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            self.sectionTitle("YouTube to MP3")
-            HStack(spacing: 8) {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.05))
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.white.opacity(self.focused ? 0.55 : 0.2), style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
+            VStack(spacing: 10) {
+                Image(systemName: "link").font(.system(size: 26, weight: .light)).foregroundStyle(.white.opacity(0.45))
                 Group {
                     if self.staticLayout {
-                        Text("Paste a YouTube link").foregroundStyle(.white.opacity(0.4)).frame(maxWidth: .infinity, alignment: .leading)
+                        Text("Paste a YouTube link").foregroundStyle(.white.opacity(0.55))
                     } else {
-                        TextField("", text: self.$link, prompt: Text("Paste a YouTube link").foregroundStyle(.white.opacity(0.45)))
+                        TextField("", text: self.$link, prompt: Text("Paste a YouTube link").foregroundStyle(.white.opacity(0.55)))
                             .textFieldStyle(.plain)
                             .foregroundStyle(.white)
                             .tint(.white)
+                            .multilineTextAlignment(.center)
                             .focused(self.$focused)
-                            .onSubmit { self.addTyped() }
+                            .onSubmit { self.start(self.link) }
                             .onExitCommand { self.focused = false; NotchHubController.shared.endTextEntry() }
                     }
                 }
-                .font(.system(size: 12.5))
-                .padding(.horizontal, 12)
-                .frame(height: 30)
-                .background(Capsule().fill(Color.white.opacity(0.1)))
-                Button(action: self.addTyped) {
-                    Image(systemName: "arrow.down").font(.system(size: 12, weight: .bold)).foregroundStyle(.black)
-                        .frame(width: 26, height: 26)
-                        .background(Circle().fill(Color.white.opacity(self.link.isEmpty ? 0.3 : 1)))
-                }
-                .buttonStyle(.plain)
-                .disabled(self.link.trimmingCharacters(in: .whitespaces).isEmpty)
+                .font(.system(size: 14, weight: .medium))
+                .frame(width: 210)
+                Text(self.notice ?? "It turns into an MP3 as soon as you paste")
+                    .font(.system(size: 11))
+                    .foregroundStyle(self.notice == nil ? Color.white.opacity(0.4) : Color.orange)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            self.pill("Paste and download", icon: "doc.on.clipboard") { self.addFromClipboard() }
-            if let track = self.nowPlaying.track, let id = track.videoID {
-                self.pill("Download what's playing", icon: "music.note", subtitle: track.title) {
-                    self.start("https://www.youtube.com/watch?v=\(id)")
-                }
-            }
-            if let notice = self.notice {
-                Text(notice).font(.system(size: 11)).foregroundStyle(.orange).lineLimit(2).fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-            HStack(spacing: 6) {
-                Image(systemName: "folder").font(.system(size: 10))
-                Text(self.folderLabel).lineLimit(1).truncationMode(.middle)
-                Spacer(minLength: 4)
-                Button("Update tool") { self.downloader.updateYtDlp() }.buttonStyle(.plain).underline()
-            }
-            .font(.system(size: 10.5))
-            .foregroundStyle(.white.opacity(0.45))
-            if let message = self.downloader.updateMessage {
-                Text(message).font(.system(size: 10)).foregroundStyle(.white.opacity(0.45)).lineLimit(1)
-            }
+            .padding(.horizontal, 12)
         }
+        .frame(maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture { self.focusBox() }
     }
 
-    private var folderLabel: String {
-        NotchDownloaderSettings.folder.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+    /// Clicking anywhere in the box starts typing into it (the panel has to take the keyboard first).
+    private func focusBox() {
+        guard !self.staticLayout else { return }
+        NotchHubController.shared.beginTextEntry()
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            self.focused = true
+        }
     }
 
     // MARK: - Left: first-time setup
@@ -171,32 +159,6 @@ struct DownloaderWidgetView: View {
 
     private func sectionTitle(_ text: String) -> some View {
         Text(text).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.5)).textCase(.uppercase)
-    }
-
-    private func pill(_ title: String, icon: String, subtitle: String? = nil, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: icon).font(.system(size: 12)).frame(width: 16)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(title).font(.system(size: 12, weight: .semibold))
-                    if let subtitle { Text(subtitle).font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.5)).lineLimit(1) }
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 11)
-            .frame(height: subtitle == nil ? 30 : 38)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.1)))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func addTyped() {
-        self.start(self.link)
-    }
-
-    private func addFromClipboard() {
-        self.start(NSPasteboard.general.string(forType: .string) ?? "")
     }
 
     private func start(_ text: String) {

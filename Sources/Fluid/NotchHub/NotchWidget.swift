@@ -47,7 +47,7 @@ enum NotchWidgetRegistry {
         }
         if NotchDownloaderSettings.isEnabled {
             widgets.append(NotchWidget(id: "download", title: "YouTube to MP3", systemImage: "arrow.down.circle") {
-                AnyView(DownloaderWidgetView(downloader: YouTubeDownloader.shared, nowPlaying: NowPlayingStore.shared))
+                AnyView(DownloaderWidgetView(downloader: YouTubeDownloader.shared))
             })
         }
         if NotchMessagesSettings.isEnabled {
