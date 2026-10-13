@@ -30,11 +30,19 @@ final class NowPlayingStore: ObservableObject {
         var isPlaying: Bool
         var duration: TimeInterval?
         var artwork: NSImage?
+        var pid: Int32?
+        /// Where it's playing from: the app, or the website when it's in a browser and could be read.
+        var site: NowPlayingSource?
+
+        /// Same title in the same app is the same item, whatever the artist field says at the moment: browsers fill in
+        /// the artist a beat after the title.
+        var key: String { "\(self.bundleID ?? "")|\(self.title)" }
 
         static func == (lhs: Track, rhs: Track) -> Bool {
             lhs.title == rhs.title && lhs.artist == rhs.artist && lhs.album == rhs.album
                 && lhs.bundleID == rhs.bundleID && lhs.isPlaying == rhs.isPlaying
                 && lhs.duration == rhs.duration && (lhs.artwork == nil) == (rhs.artwork == nil)
+                && lhs.site == rhs.site
         }
     }
 
@@ -46,8 +54,11 @@ final class NowPlayingStore: ObservableObject {
         var appName: String?
         var bundleID: String?
         var date: Date
+        /// The website or app it came from, e.g. YouTube. Older entries don't have one.
+        var site: NowPlayingSource?
 
-        var key: String { "\(self.title)|\(self.artist ?? "")|\(self.bundleID ?? "")" }
+        var key: String { "\(self.bundleID ?? "")|\(self.title)" }
+        var source: NowPlayingSource { self.site ?? NowPlayingSource.native(bundleID: self.bundleID, appName: self.appName) }
     }
 
     static let maxHistory = 100
@@ -66,6 +77,14 @@ final class NowPlayingStore: ObservableObject {
     private let directory: URL
     private var thumbnailCache: [UUID: NSImage] = [:]
 
+    /// A track is only added to the history once it has been the one playing for this long, so a title that flickers for
+    /// a moment (browsers do this) or a song skipped straight away doesn't pollute the list.
+    var settleDelay: TimeInterval = 5
+    private var candidateKey: String?
+    private var settleTask: Task<Void, Never>?
+    /// Works out the website a browser track is on. Replaced in tests.
+    var siteResolver: (Track) async -> NowPlayingSource? = { track in await NowPlayingStore.resolveSite(for: track) }
+
     init(directory: URL? = nil) {
         self.directory = directory ?? FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -83,12 +102,16 @@ final class NowPlayingStore: ObservableObject {
         )
         store.elapsed = 74
         let now = Date()
+        store.track?.site = NowPlayingSource(kind: .youtube, name: "YouTube")
+        store.track?.bundleID = "company.thebrowser.dia"
+        store.track?.appName = "Dia"
+        let yt = NowPlayingSource(kind: .youtube, name: "YouTube")
         store.history = [
-            HistoryItem(id: UUID(), title: "Blinding Lights", artist: "The Weeknd", album: "After Hours", appName: "Music", bundleID: "com.apple.Music", date: now.addingTimeInterval(-90)),
-            HistoryItem(id: UUID(), title: "Nights", artist: "Frank Ocean", album: "Blonde", appName: "Spotify", bundleID: "com.spotify.client", date: now.addingTimeInterval(-900)),
-            HistoryItem(id: UUID(), title: "Redbone", artist: "Childish Gambino", album: "Awaken, My Love!", appName: "Spotify", bundleID: "com.spotify.client", date: now.addingTimeInterval(-4000)),
-            HistoryItem(id: UUID(), title: "3 FREE Mac Apps That Should Not Be This Good", artist: "Renz Sadiwa", album: nil, appName: "Dia", bundleID: "company.thebrowser.dia", date: now.addingTimeInterval(-9000)),
-            HistoryItem(id: UUID(), title: "Pink + White", artist: "Frank Ocean", album: "Blonde", appName: "Music", bundleID: "com.apple.Music", date: now.addingTimeInterval(-20000)),
+            HistoryItem(id: UUID(), title: "Weekend Update ft. James Austin Johnson and Ashley Padilla", artist: "Saturday Night Live", album: nil, appName: "Dia", bundleID: "company.thebrowser.dia", date: now.addingTimeInterval(-90), site: yt),
+            HistoryItem(id: UUID(), title: "Nights", artist: "Frank Ocean", album: "Blonde", appName: "Spotify", bundleID: "com.spotify.client", date: now.addingTimeInterval(-900), site: nil),
+            HistoryItem(id: UUID(), title: "Shark Tank US | Can Aira Secure A Deal?", artist: "Sony Pictures Television", album: nil, appName: "Dia", bundleID: "company.thebrowser.dia", date: now.addingTimeInterval(-4000), site: yt),
+            HistoryItem(id: UUID(), title: "Blinding Lights", artist: "The Weeknd", album: "After Hours", appName: "Music", bundleID: "com.apple.Music", date: now.addingTimeInterval(-9000), site: nil),
+            HistoryItem(id: UUID(), title: "Redbone", artist: "Childish Gambino", album: "Awaken, My Love!", appName: "Spotify", bundleID: "com.spotify.client", date: now.addingTimeInterval(-20000), site: nil),
         ]
         return store
     }
@@ -169,42 +192,110 @@ final class NowPlayingStore: ObservableObject {
     #if arch(arm64)
     private func apply(_ info: TrackInfo?) {
         guard let p = info?.payload, let title = p.title, !title.isEmpty else {
-            self.track = nil
+            self.trackChanged(nil)
             return
         }
-        let key = p.uniqueIdentifier
+        let key = "\(p.bundleIdentifier ?? "")|\(title)"
         var art = self.artworkCache?.key == key ? self.artworkCache?.image : nil
         if art == nil, let fresh = p.artwork {
             art = fresh
             self.artworkCache = (key, fresh)
         }
-        self.track = Track(
+        if let current = p.currentElapsedTime { self.elapsed = max(0, current) }
+        self.trackChanged(Track(
             title: title, artist: p.artist, album: p.album, appName: p.applicationName,
             bundleID: p.bundleIdentifier, isPlaying: p.isPlaying ?? false,
-            duration: p.durationMicros.map { $0 / 1_000_000 }, artwork: art
-        )
-        if let current = p.currentElapsedTime { self.elapsed = max(0, current) }
-        if NotchNowPlayingSettings.keepsHistory, let track = self.track, track.isPlaying { self.record(track) }
+            duration: p.durationMicros.map { $0 / 1_000_000 }, artwork: art, pid: p.PID
+        ))
     }
     #endif
 
-    // MARK: - History
+    // MARK: - Tracking what plays
 
-    /// Adds a track to the listening history the moment it starts playing. The same track again right away (a pause and
-    /// resume, or a repeat) is not logged twice, but it fills in missing artwork.
-    func record(_ track: Track, at date: Date = Date()) {
-        let item = HistoryItem(
-            id: UUID(), title: track.title, artist: track.artist, album: track.album,
-            appName: track.appName, bundleID: track.bundleID, date: date
-        )
-        if let latest = self.history.first, latest.key == item.key {
-            if let artwork = track.artwork, !FileManager.default.fileExists(atPath: self.thumbnailURL(latest.id).path) {
-                self.saveThumbnail(artwork, id: latest.id)
-            }
+    private var resolvingKey: String?
+
+    /// Every state report from the player comes through here (and tests call it directly).
+    func trackChanged(_ new: Track?) {
+        guard var track = new else {
+            self.track = nil
+            self.cancelSettle()
             return
         }
-        if let artwork = track.artwork { self.saveThumbnail(artwork, id: item.id) }
-        self.history.insert(item, at: 0)
+        let previous = self.track
+        if let previous, previous.key == track.key { track.site = previous.site }
+        self.track = track
+
+        guard track.isPlaying else { self.cancelSettle(); return }
+        if track.site == nil, previous?.key != track.key { self.resolveSiteNow(for: track) }
+        guard NotchNowPlayingSettings.keepsHistory, self.candidateKey != track.key else { return }
+        // Start the countdown for this track; any change of track or pause before it ends discards it.
+        self.candidateKey = track.key
+        self.settleTask?.cancel()
+        let delay = self.settleDelay
+        self.settleTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.candidateKey == track.key,
+                  var current = self.track, current.key == track.key, current.isPlaying else { return }
+            if current.site == nil, let site = await self.siteResolver(current) {
+                current.site = site
+                if self.track?.key == current.key { self.track?.site = site }
+            }
+            self.record(current)
+        }
+    }
+
+    private func cancelSettle() {
+        self.settleTask?.cancel()
+        self.settleTask = nil
+        self.candidateKey = nil
+    }
+
+    /// Looks up the website for the track on screen, so the logo and name show up while it plays.
+    private func resolveSiteNow(for track: Track) {
+        guard self.resolvingKey != track.key else { return }
+        self.resolvingKey = track.key
+        Task { [weak self] in
+            guard let self else { return }
+            let site = await self.siteResolver(track)
+            if self.resolvingKey == track.key { self.resolvingKey = nil }
+            if let site, self.track?.key == track.key, self.track?.site == nil { self.track?.site = site }
+        }
+    }
+
+    private static let tabReader = AXBrowserTabReader()
+
+    /// The website a browser track is on. Only the browser's front tab can be read, so this only works while that browser
+    /// is the app you're using, and only for sites we recognise; otherwise the track keeps the browser's own name.
+    static func resolveSite(for track: Track) async -> NowPlayingSource? {
+        guard NowPlayingSource.isBrowser(track.bundleID), let bundle = track.bundleID, let pid = track.pid,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid, AXIsProcessTrusted(),
+              let url = await self.tabReader.frontmostTabURL(bundleIdentifier: bundle, processID: pid) else { return nil }
+        return NowPlayingSource.site(forHost: url.host)
+    }
+
+    // MARK: - History
+
+    /// Adds a track to the listening history. Something already in the list (same title in the same app) is moved to the
+    /// top and updated instead of added again, so the list holds each thing once, most recent first.
+    func record(_ track: Track, at date: Date = Date()) {
+        if let index = self.history.firstIndex(where: { $0.key == "\(track.bundleID ?? "")|\(track.title)" }) {
+            var existing = self.history.remove(at: index)
+            existing.date = date
+            if let artist = track.artist, !artist.isEmpty { existing.artist = artist }
+            if let album = track.album, !album.isEmpty { existing.album = album }
+            if let site = track.site { existing.site = site }
+            if let artwork = track.artwork, !FileManager.default.fileExists(atPath: self.thumbnailURL(existing.id).path) {
+                self.saveThumbnail(artwork, id: existing.id)
+            }
+            self.history.insert(existing, at: 0)
+        } else {
+            let item = HistoryItem(
+                id: UUID(), title: track.title, artist: track.artist, album: track.album,
+                appName: track.appName, bundleID: track.bundleID, date: date, site: track.site
+            )
+            if let artwork = track.artwork { self.saveThumbnail(artwork, id: item.id) }
+            self.history.insert(item, at: 0)
+        }
         while self.history.count > Self.maxHistory { self.removeFiles(self.history.removeLast()) }
         self.saveHistory()
     }
@@ -266,7 +357,25 @@ final class NowPlayingStore: ObservableObject {
     private func loadHistory() {
         guard let data = try? Data(contentsOf: self.historyURL),
               let saved = try? JSONDecoder().decode([HistoryItem].self, from: data) else { return }
-        self.history = saved
+        // Older versions logged every metadata flicker as a new entry; collapse those into one each.
+        var seen: [String: Int] = [:]
+        var deduped: [HistoryItem] = []
+        for item in saved {
+            if let index = seen[item.key] {
+                if (deduped[index].artist ?? "").isEmpty, let artist = item.artist, !artist.isEmpty { deduped[index].artist = artist }
+                if !FileManager.default.fileExists(atPath: self.thumbnailURL(deduped[index].id).path),
+                   FileManager.default.fileExists(atPath: self.thumbnailURL(item.id).path) {
+                    try? FileManager.default.moveItem(at: self.thumbnailURL(item.id), to: self.thumbnailURL(deduped[index].id))
+                } else {
+                    self.removeFiles(item)
+                }
+            } else {
+                seen[item.key] = deduped.count
+                deduped.append(item)
+            }
+        }
+        self.history = deduped
+        if deduped.count != saved.count { self.saveHistory() }
     }
 
     private static func sampleArtwork() -> NSImage {
