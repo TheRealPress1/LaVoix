@@ -298,6 +298,44 @@ struct SettingsView: View {
                             Divider().opacity(0.2)
 
                             self.settingsToggleRow(
+                                title: "YouTube to MP3 tool in the notch",
+                                description: "Paste a YouTube link, or take the video that's playing, and get an MP3. Uses the free yt-dlp and ffmpeg tools on this Mac. YouTube's terms don't allow downloading, so keep it to audio you have the right to save: your own videos, Creative Commons, podcasts.",
+                                isOn: Binding(
+                                    get: { NotchDownloaderSettings.isEnabled },
+                                    set: { enabled in
+                                        NotchDownloaderSettings.isEnabled = enabled
+                                        NotchHubController.shared.widgetSettingsChanged()
+                                        SettingsStore.shared.objectWillChange.send()
+                                    }
+                                )
+                            )
+                            if NotchDownloaderSettings.isEnabled {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Save MP3s to")
+                                            .font(self.theme.typography.bodyStrong)
+                                            .foregroundStyle(self.settingsTitleText)
+                                        Text(NotchDownloaderSettings.folder.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                                            .font(self.theme.typography.bodySmall)
+                                            .foregroundStyle(self.settingsSecondaryText)
+                                    }
+                                    Spacer()
+                                    Button("Choose…") {
+                                        let panel = NSOpenPanel()
+                                        panel.canChooseDirectories = true
+                                        panel.canChooseFiles = false
+                                        panel.canCreateDirectories = true
+                                        panel.directoryURL = NotchDownloaderSettings.folder
+                                        if panel.runModal() == .OK, let url = panel.url {
+                                            NotchDownloaderSettings.folder = url
+                                            SettingsStore.shared.objectWillChange.send()
+                                        }
+                                    }
+                                }
+                            }
+                            Divider().opacity(0.2)
+
+                            self.settingsToggleRow(
                                 title: "YouTube thumbnails and view counts",
                                 description: "For YouTube videos, fetch the video's own thumbnail and its view count. This contacts youtube.com for the videos you watch; turn it off to stay fully offline.",
                                 isOn: Binding(

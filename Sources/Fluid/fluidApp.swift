@@ -27,6 +27,8 @@ struct FluidApp: App {
         NotchHubDebug.nowPlayingHistoryAutotestIfRequested()
         NotchHubDebug.typingTestIfRequested()
         NotchHubDebug.lagTestIfRequested()
+        NotchHubDebug.downloaderAutotestIfRequested()
+        NotchHubDebug.downloaderE2EIfRequested()
         NotificationProbe.runIfRequested()
     }
 

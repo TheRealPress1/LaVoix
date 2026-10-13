@@ -1,3 +1,4 @@
+import CryptoKit
 import SwiftUI
 
 /// `LAVOIX_NOTCH_RENDER=<file.png>` renders the open notch to an image and exits. Used to check the design
@@ -60,6 +61,13 @@ enum NotchHubDebug {
                     NotchWidget(id: "nowplaying", title: "Now Playing", systemImage: "music.note") { AnyView(NowPlayingWidgetView(store: store, staticLayout: true)) },
                 ])
                 model.selectedWidgetID = "nowplaying"
+            } else if widgetName.hasPrefix("download") {
+                let downloader = YouTubeDownloader.sample(ready: widgetName != "download-setup", empty: widgetName == "download-empty")
+                model = NotchHubModel(widgets: [
+                    NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
+                    NotchWidget(id: "download", title: "YouTube to MP3", systemImage: "arrow.down.circle") { AnyView(DownloaderWidgetView(downloader: downloader, nowPlaying: NowPlayingStore.sample(), staticLayout: true)) },
+                ])
+                model.selectedWidgetID = "download"
             } else if widgetName.hasPrefix("calendar") {
                 let store: CalendarStore
                 switch widgetName {
@@ -459,6 +467,179 @@ enum NotchHubDebug {
             }
             hub.stop()
             exit(0)
+        }
+    }
+
+    /// `LAVOIX_DOWNLOADER_AUTOTEST=1` checks the YouTube-to-MP3 tool with a fake yt-dlp (no network, nothing downloaded).
+    @MainActor static func downloaderAutotestIfRequested() {
+        guard ProcessInfo.processInfo.environment["LAVOIX_DOWNLOADER_AUTOTEST"] == "1" else { return }
+        Task { @MainActor in
+            var failures = 0
+            func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)"); if !ok { failures += 1 } }
+            let id = "aqz-KE-bpKQ"
+            let canonical = URL(string: "https://www.youtube.com/watch?v=\(id)")
+            /// Waits for something to become true (up to 5 s); the app is busy starting up when this test begins.
+            @MainActor func until(_ condition: () -> Bool) async {
+                for _ in 0..<100 {
+                    if condition() { return }
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+            }
+            // Links
+            check("a watch link", YouTubeDownloader.youTubeURL(from: "https://www.youtube.com/watch?v=\(id)") == canonical)
+            check("playlist and tracking parameters are dropped", YouTubeDownloader.youTubeURL(from: "https://www.youtube.com/watch?v=\(id)&list=PLabc&index=3&si=xyz") == canonical)
+            check("a short link", YouTubeDownloader.youTubeURL(from: "https://youtu.be/\(id)?si=abc") == canonical)
+            check("a link with no scheme and spaces around it", YouTubeDownloader.youTubeURL(from: "  www.youtube.com/watch?v=\(id)  \n") == canonical)
+            check("YouTube Music", YouTubeDownloader.youTubeURL(from: "https://music.youtube.com/watch?v=\(id)") == canonical)
+            check("Shorts", YouTubeDownloader.youTubeURL(from: "https://www.youtube.com/shorts/\(id)") == canonical)
+            check("not a video: the home page, a playlist, other sites, plain text",
+                  YouTubeDownloader.youTubeURL(from: "https://www.youtube.com/") == nil && YouTubeDownloader.youTubeURL(from: "https://www.youtube.com/playlist?list=PLabc") == nil
+                  && YouTubeDownloader.youTubeURL(from: "https://vimeo.com/123456789") == nil && YouTubeDownloader.youTubeURL(from: "hello there") == nil
+                  && YouTubeDownloader.youTubeURL(from: "https://evilyoutube.com/watch?v=\(id)") == nil)
+            // Parsing
+            check("progress lines", abs((YouTubeDownloader.progress(from: "LVP  45.3%") ?? 0) - 0.453) < 0.0001 && YouTubeDownloader.progress(from: "LVP 100.0%") == 1 && YouTubeDownloader.progress(from: "[download] 5%") == nil)
+            let infoJSON = "{\"id\":\"\(id)\",\"title\":\"Big Buck Bunny\",\"channel\":\"Blender\",\"duration\":635,\"view_count\":23432904,\"license\":\"Creative Commons Attribution license (reuse allowed)\"}"
+            let info = YouTubeDownloader.parseInfo(infoJSON)
+            check("video details are read", info?.title == "Big Buck Bunny" && info?.channel == "Blender" && info?.duration == 635 && info?.viewCount == 23_432_904 && info?.videoID == id)
+            check("Creative Commons is noticed", info?.isCreativeCommons == true && YouTubeDownloader.parseInfo("{\"title\":\"x\"}")?.isCreativeCommons == false)
+            check("junk is not mistaken for details", YouTubeDownloader.parseInfo("not json") == nil)
+            check("errors are made readable",
+                  YouTubeDownloader.friendlyError("ERROR: [youtube] abc: Video unavailable") == "Video unavailable"
+                  && YouTubeDownloader.friendlyError("ERROR: [youtube] abc: Sign in to confirm you’re not a bot").contains("sign-in")
+                  && YouTubeDownloader.friendlyError(nil) == "The download didn't finish.")
+            let args = YouTubeDownloader.downloadArguments(url: canonical!, ffmpeg: URL(fileURLWithPath: "/opt/homebrew/bin/ffmpeg"), folder: URL(fileURLWithPath: "/Users/me/Music/LaVoix"))
+            check("MP3 arguments: one video, best-quality MP3, ffmpeg's folder, output in the chosen folder",
+                  args.contains("--no-playlist") && args.contains("mp3") && args.contains("0") && args.contains("/opt/homebrew/bin")
+                  && args.contains { $0.hasPrefix("/Users/me/Music/LaVoix/") } && args.last == canonical?.absoluteString)
+            // Checksums
+            let blob = Data("pretend this is yt-dlp".utf8)
+            let sum = SHA256.hash(data: blob).map { String(format: "%02x", $0) }.joined()
+            check("a download that matches the published checksum is accepted", YouTubeDownloader.verify(data: blob, sums: "deadbeef  other_file\n\(sum)  yt-dlp_macos\n", name: "yt-dlp_macos"))
+            check("a download that doesn't match is refused", !YouTubeDownloader.verify(data: Data("tampered".utf8), sums: "\(sum)  yt-dlp_macos\n", name: "yt-dlp_macos"))
+            check("a missing entry is refused", !YouTubeDownloader.verify(data: blob, sums: "\(sum)  something_else\n", name: "yt-dlp_macos"))
+            // Finding tools
+            let tools = FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-dl-test-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
+            let fake = tools.appendingPathComponent("yt-dlp")
+            try? "#!/bin/sh\n".write(to: fake, atomically: true, encoding: .utf8)
+            check("a file that isn't executable is not a tool", YouTubeDownloader.firstExecutable([fake]) == nil)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+            check("an executable file is found, in the order given", YouTubeDownloader.firstExecutable([URL(fileURLWithPath: "/nope/nope"), fake]) == fake)
+
+            // A whole download with a fake yt-dlp
+            let out = tools.appendingPathComponent("music")
+            let downloader = YouTubeDownloader(supportDirectory: tools.appendingPathComponent("support"))
+            downloader.outputFolder = { out }
+            downloader.debugSetTools(ytDlp: fake, ffmpeg: URL(fileURLWithPath: "/opt/homebrew/bin/ffmpeg"))
+            downloader.thumbnailFetcher = { _ in NowPlayingStore.sampleArtwork(wide: true) }
+            let mp3 = out.appendingPathComponent("Big Buck Bunny.mp3")
+            downloader.runner = { _, arguments in
+                AsyncStream { continuation in
+                    Task {
+                        if arguments.contains("--dump-single-json") {
+                            continuation.yield(.line("WARNING: noise before the JSON"))
+                            continuation.yield(.line(infoJSON))
+                            continuation.yield(.exit(0))
+                        } else {
+                            for line in ["LVP   0.0%", "LVP  42.0%", "LVP 100.0%", "[ExtractAudio] Destination: x.mp3", "LVFILE \(mp3.path)"] {
+                                continuation.yield(.line(line)); try? await Task.sleep(nanoseconds: 30_000_000)
+                            }
+                            continuation.yield(.exit(0))
+                        }
+                        continuation.finish()
+                    }
+                }
+            }
+            check("a non-video link is refused without starting anything", !downloader.add("hello") && downloader.jobs.isEmpty)
+            check("a video link starts a job", downloader.add("https://youtu.be/\(id)") && downloader.jobs.count == 1 && downloader.jobs[0].state == .fetching)
+            await until { downloader.jobs[0].title == "Big Buck Bunny" }
+            check("the job picks up the title and channel from the lookup", downloader.jobs[0].title == "Big Buck Bunny" && downloader.jobs[0].channel == "Blender" && downloader.jobs[0].isCreativeCommons)
+            await until { downloader.jobs[0].state == .done }
+            await until { downloader.jobs[0].thumbnail != nil }
+            check("the job finishes with the file the tool reported", downloader.jobs[0].state == .done && downloader.jobs[0].file == mp3 && downloader.jobs[0].progress == 1)
+            check("the thumbnail arrives", downloader.jobs[0].thumbnail != nil)
+            // History survives a relaunch only for files that still exist
+            try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+            try? Data("mp3".utf8).write(to: mp3)
+            downloader.remove(UUID()) // no-op, forces a save path to be exercised safely
+            let reloaded = YouTubeDownloader(supportDirectory: tools.appendingPathComponent("support"))
+            check("finished downloads are remembered when the file is still there", reloaded.jobs.first?.title == "Big Buck Bunny" && reloaded.jobs.first?.state == .done)
+            try? FileManager.default.removeItem(at: mp3)
+            check("and forgotten when the file has gone", YouTubeDownloader(supportDirectory: tools.appendingPathComponent("support")).jobs.isEmpty)
+
+            // A failure, and a cancel
+            let failing = YouTubeDownloader(supportDirectory: tools.appendingPathComponent("support2"))
+            failing.debugSetTools(ytDlp: fake, ffmpeg: URL(fileURLWithPath: "/opt/homebrew/bin/ffmpeg"))
+            failing.runner = { _, _ in AsyncStream { c in c.yield(.line("ERROR: [youtube] \(id): Private video")); c.yield(.exit(1)); c.finish() } }
+            failing.add("https://youtu.be/\(id)")
+            await until { failing.jobs[0].state != .fetching }
+            check("a failed lookup shows the reason", failing.jobs[0].state == .failed("Private video"))
+
+            let slow = YouTubeDownloader(supportDirectory: tools.appendingPathComponent("support3"))
+            slow.debugSetTools(ytDlp: fake, ffmpeg: URL(fileURLWithPath: "/opt/homebrew/bin/ffmpeg"))
+            final class Stopped: @unchecked Sendable { var value = false }
+            let stopped = Stopped()
+            slow.runner = { _, _ in
+                AsyncStream { c in
+                    c.onTermination = { _ in stopped.value = true }
+                    Task { try? await Task.sleep(nanoseconds: 5_000_000_000); c.yield(.exit(0)); c.finish() }
+                }
+            }
+            slow.add("https://youtu.be/\(id)")
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            slow.cancel(slow.jobs[0].id)
+            await until { slow.jobs[0].state == .cancelled }
+            await until { stopped.value }
+            check("cancelling stops the tool and marks the job cancelled", slow.jobs[0].state == .cancelled && stopped.value)
+
+            // Tools not ready
+            let notReady = YouTubeDownloader(supportDirectory: tools.appendingPathComponent("support4"))
+            notReady.debugSetTools(ytDlp: nil, ffmpeg: nil)
+            check("nothing starts until both tools are there", !notReady.add("https://youtu.be/\(id)") && notReady.jobs.isEmpty)
+
+            try? FileManager.default.removeItem(at: tools)
+            print(failures == 0 ? "DOWNLOADER AUTOTEST ALL PASSED" : "DOWNLOADER AUTOTEST \(failures) FAILED")
+            exit(failures == 0 ? 0 : 1)
+        }
+    }
+
+    /// `LAVOIX_DOWNLOADER_E2E=<youtube link>` runs one real download through the real yt-dlp and ffmpeg into a temporary
+    /// folder, prints what happened, and deletes the file. Set `LAVOIX_YTDLP_PATH` to point at a yt-dlp.
+    @MainActor static func downloaderE2EIfRequested() {
+        guard let link = ProcessInfo.processInfo.environment["LAVOIX_DOWNLOADER_E2E"] else { return }
+        Task { @MainActor in
+            func out(_ text: String) { FileHandle.standardOutput.write(Data((text + "\n").utf8)) }
+            let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-dl-e2e-\(UUID().uuidString)")
+            let downloader = YouTubeDownloader(supportDirectory: scratch.appendingPathComponent("support"))
+            downloader.outputFolder = { scratch.appendingPathComponent("music") }
+            out("tools: yt-dlp=\(downloader.ytDlp?.path ?? "none") ffmpeg=\(downloader.ffmpeg?.path ?? "none") ready=\(downloader.isReady)")
+            guard downloader.add(link) else { out("E2E: link refused"); exit(1) }
+            var seen: [String] = []
+            let start = Date()
+            while Date().timeIntervalSince(start) < 240 {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                guard let job = downloader.jobs.first else { break }
+                let label = "\(job.state)" + (job.state == .downloading ? " \(Int(job.progress * 100))%" : "")
+                if seen.last != label, seen.count < 40, !(job.state == .downloading && seen.last?.hasPrefix("downloading") == true && Int(job.progress * 100) % 25 != 0) { seen.append(label) }
+                if !job.isRunning { break }
+            }
+            guard let job = downloader.jobs.first else { out("E2E: no job"); exit(1) }
+            out("states seen: \(seen.joined(separator: " > "))")
+            out("title=\(job.title) | channel=\(job.channel ?? "-") | views=\(job.viewCount.map(String.init) ?? "-") | CC=\(job.isCreativeCommons) | thumbnail=\(job.thumbnail != nil)")
+            out("final state: \(job.state) in \(Int(Date().timeIntervalSince(start))) s")
+            if let file = job.file {
+                let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? 0
+                out("file: \(file.lastPathComponent) (\(size / 1024) KB) inside music folder: \(file.path.hasPrefix(scratch.appendingPathComponent("music").path))")
+                let probe = Process()
+                probe.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/ffprobe")
+                probe.arguments = ["-v", "error", "-show_entries", "format=duration:stream=codec_name:format_tags=title,artist", "-of", "default=nw=1", file.path]
+                let pipe = Pipe(); probe.standardOutput = pipe
+                try? probe.run(); probe.waitUntilExit()
+                out("ffprobe: " + String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).replacingOccurrences(of: "\n", with: " | "))
+            }
+            try? FileManager.default.removeItem(at: scratch)
+            out(job.state == .done ? "E2E: DONE" : "E2E: FAILED")
+            exit(job.state == .done ? 0 : 1)
         }
     }
 

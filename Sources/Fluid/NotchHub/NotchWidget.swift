@@ -45,6 +45,11 @@ enum NotchWidgetRegistry {
                 AnyView(ShelfWidgetView(store: ShelfStore.shared))
             })
         }
+        if NotchDownloaderSettings.isEnabled {
+            widgets.append(NotchWidget(id: "download", title: "YouTube to MP3", systemImage: "arrow.down.circle") {
+                AnyView(DownloaderWidgetView(downloader: YouTubeDownloader.shared, nowPlaying: NowPlayingStore.shared))
+            })
+        }
         if NotchMessagesSettings.isEnabled {
             widgets.append(NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") {
                 AnyView(MessagesWidgetView(store: MessagesStore.shared))

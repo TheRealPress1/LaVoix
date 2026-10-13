@@ -65,7 +65,7 @@ enum NowPlayingArtwork {
         return await YouTubeInfo(viewCount: views, thumbnail: thumbnail)
     }
 
-    private static func fetchThumbnail(videoID: String) async -> NSImage? {
+    static func fetchThumbnail(videoID: String) async -> NSImage? {
         // Widescreen first (HD videos), then the always-present 16:9 medium size.
         for name in ["maxresdefault", "mqdefault"] {
             guard let url = URL(string: "https://i.ytimg.com/vi/\(videoID)/\(name).jpg"),
