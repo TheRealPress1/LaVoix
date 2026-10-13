@@ -137,6 +137,24 @@ enum NotchHubDebug {
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 out(card.debugReport(label))
             }
+            // A "meeting starting" prompt must go away on its own even while the meeting coordinator keeps republishing
+            // `idle`, and a message card must replace it instead of being swallowed.
+            let event = CalendarStore.sample().events[0]
+            card.startingDismissSeconds = 0.6
+            card.presentStarting(event)
+            for _ in 0..<5 { card.apply(state: .idle); try? await Task.sleep(nanoseconds: 50_000_000) }
+            out("starting prompt shown, idle republished: showing=\(card.isShowing) (expect true)")
+            hub.debugShowBanner(NotchBannerContent(chatID: 1, chatGUID: "g", title: "Maya", subtitle: nil, text: "hi", date: Date()))
+            out("message arrives over the prompt: banner=\(hub.model.banner != nil) prompt still showing=\(card.isShowing) (expect true, false)")
+            hub.dismissBanner()
+            card.presentStarting(event)
+            for _ in 0..<5 { card.apply(state: .idle); try? await Task.sleep(nanoseconds: 50_000_000) }
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            out("prompt goes away by itself despite idle republishes: showing=\(card.isShowing) (expect false)")
+            card.debugPresent(.recording)
+            hub.debugShowBanner(NotchBannerContent(chatID: 1, chatGUID: "g", title: "Maya", subtitle: nil, text: "hi", date: Date()))
+            out("a live recording keeps message cards away: banner=\(hub.model.banner != nil) (expect false)")
+            hub.dismissBanner()
             card.debugPresent(.recording)
             hub.debugSetOpen(true)
             try? await Task.sleep(nanoseconds: 800_000_000)

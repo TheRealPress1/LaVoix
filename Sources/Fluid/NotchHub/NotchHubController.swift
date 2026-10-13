@@ -64,9 +64,12 @@ final class NotchHubController {
         self.resignObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification, object: window, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            // Handled right away, in order with becoming key: a delayed task here could run after a later "became key" and
+            // leave the typing flag stuck on.
+            MainActor.assumeIsolated {
                 guard let self else { return }
-                self.endTextEntry()
+                self.isEditingText = false
+                self.window?.allowsKey = false
                 if self.model.banner != nil, !self.bannerHovered { self.scheduleBannerDismiss(after: 4, force: true) }
             }
         }
@@ -74,7 +77,7 @@ final class NotchHubController {
             forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
         ) { [weak self] _ in
             // The panel only becomes key when a text field is clicked; keep the notch open while typing.
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 guard let self else { return }
                 self.isEditingText = true
                 self.closeTask?.cancel()
@@ -228,8 +231,19 @@ final class NotchHubController {
 
     /// Drops a notification card out of the notch. Hover expands it for a reply; it dismisses itself otherwise.
     func showBanner(_ content: NotchBannerContent) {
-        guard self.isRunning, !self.recordingOverlayIsVisible, !self.isEditingText, !self.model.isOpen,
-              !NotchMeetingCardController.shared.isShowing else { return }
+        // A text-entry flag left over from a panel that is no longer the key window would block cards forever.
+        if self.isEditingText, !(self.window?.isKeyWindow ?? false) { self.isEditingText = false; self.window?.allowsKey = false }
+        let blocker = !self.isRunning ? "hub not running"
+            : self.recordingOverlayIsVisible ? "dictation overlay showing"
+            : self.isEditingText ? "typing a reply"
+            : self.model.isOpen ? "notch is open"
+            : NotchMeetingCardController.shared.blocksBanners ? "meeting recording card"
+            : nil
+        if let blocker {
+            DebugLogger.shared.debug("Message card not shown: \(blocker)", source: "NotchHub")
+            return
+        }
+        NotchMeetingCardController.shared.dismissPrompt()
         self.releaseTask?.cancel()
         self.window?.ignoresMouseEvents = false
         self.bannerHovered = false
@@ -325,6 +339,8 @@ final class NotchHubController {
 
     private func pointerMoved() {
         guard !self.ignoresPointer, let screen = NotchGeometry.targetScreen() else { return }
+        // If the panel is no longer the key window, typing is over, whatever the flag says.
+        if self.isEditingText, !(self.window?.isKeyWindow ?? false) { self.isEditingText = false; self.window?.allowsKey = false }
         let point = NSEvent.mouseLocation
         if self.model.banner != nil, !self.model.isOpen {
             let inside = NotchGeometry.bannerRect(for: screen, content: self.model.banner, expanded: self.model.bannerExpanded).contains(point)

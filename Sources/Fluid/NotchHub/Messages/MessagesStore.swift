@@ -114,6 +114,7 @@ final class MessagesStore: ObservableObject {
     /// Re-reads access, e.g. after the user grants Full Disk Access.
     func recheckAccess() {
         let access = self.database.checkAccess()
+        DebugLogger.shared.info("Messages database access: \(access)", source: "MessagesStore")
         switch access {
         case .granted:
             self.access = .granted
@@ -160,6 +161,7 @@ final class MessagesStore: ObservableObject {
     /// Tries again shortly after a failed read, backing off a little each time, for up to a few attempts.
     private func retryRefresh(announce: Bool) {
         self.refreshFailures += 1
+        DebugLogger.shared.info("Messages database read failed (attempt \(self.refreshFailures)); keeping what is shown", source: "MessagesStore")
         guard self.refreshFailures <= 6, self.retryTask == nil else { return }
         let delay = 0.6 * Double(self.refreshFailures)
         self.retryTask = Task { [weak self] in

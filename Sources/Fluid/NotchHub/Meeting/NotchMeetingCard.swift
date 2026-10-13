@@ -202,8 +202,21 @@ final class NotchMeetingCardController {
 
     private init() {}
 
-    /// True while the card is on screen, so notification cards stay out of its way.
+    /// True while the card is on screen.
     var isShowing: Bool { self.shouldShow }
+
+    /// Only a live recording (or its transcription) keeps message cards away. A "meeting starting" or "meeting ended"
+    /// card is just a prompt, so a new message replaces it instead of being swallowed.
+    var blocksBanners: Bool {
+        guard self.shouldShow else { return false }
+        return self.model.phase == .recording || self.model.phase == .processing
+    }
+
+    /// Takes away a prompt-style card (starting, ended, failed) to make room for a message card.
+    func dismissPrompt() {
+        guard self.wantsVisible, !self.blocksBanners else { return }
+        self.dismiss()
+    }
 
     func attach(coordinator: MeetingSessionCoordinator) {
         guard self.coordinator !== coordinator else { return }
@@ -233,7 +246,14 @@ final class NotchMeetingCardController {
 
     // MARK: - State
 
-    private func apply(state: MeetingCoordinatorState) {
+    func apply(state: MeetingCoordinatorState) {
+        // `idle` is re-published often. It must not wipe, or cancel the timer of, a "meeting starting" prompt that is on
+        // screen: cancelling the timer here left that card up for good, covering the notch and blocking message cards.
+        switch state {
+        case .idle, .preparing:
+            if self.model.phase == .starting, self.wantsVisible { return }
+        default: break
+        }
         self.dismissTask?.cancel()
         switch state {
         case .recording, .recordingDegraded:
@@ -263,8 +283,6 @@ final class NotchMeetingCardController {
             self.wantsVisible = true
             self.scheduleDismiss(after: 25)
         case .idle, .preparing:
-            // `idle` is re-published often; don't let it wipe a "meeting starting" prompt that is on screen.
-            if self.model.phase == .starting, self.wantsVisible { break }
             self.wantsVisible = false
             self.model.caption = ""
         }
@@ -312,8 +330,11 @@ final class NotchMeetingCardController {
         self.model.phase = .starting
         self.wantsVisible = true
         self.syncPanel()
-        self.scheduleDismiss(after: 90)
+        self.scheduleDismiss(after: self.startingDismissSeconds)
     }
+
+    /// How long the "meeting starting" prompt stays up. Tests shorten it.
+    var startingDismissSeconds: Double = 90
 
     /// Starts recording for a calendar event: an online call when it has a call link, otherwise in the room.
     func record(_ event: CalendarStore.Event) {
