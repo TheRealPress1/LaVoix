@@ -322,6 +322,11 @@ struct SettingsView: View {
                             )
                             Divider().opacity(0.2)
 
+                            if NotchCalendarSettings.isEnabled {
+                                NotchCalendarPickerView(store: CalendarStore.shared)
+                                Divider().opacity(0.2)
+                            }
+
                             self.settingsToggleRow(
                                 title: "Offer to record when a meeting starts",
                                 description: "A card drops out of the notch when a meeting with a call link or other guests begins.",

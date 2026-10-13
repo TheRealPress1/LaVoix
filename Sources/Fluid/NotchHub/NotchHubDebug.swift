@@ -332,6 +332,19 @@ enum NotchHubDebug {
 
             check("label: now", CalendarStore.whenLabel(start: now.addingTimeInterval(-60), end: now.addingTimeInterval(600), now: now) == "Now")
             check("label: minutes", CalendarStore.whenLabel(start: now.addingTimeInterval(12 * 60), end: now.addingTimeInterval(900 * 60), now: now) == "in 12 min")
+            // Merging two accounts
+            func dup(_ title: String, join: Bool = false, guests: Int = 0, cal: String) -> CalendarStore.Event {
+                CalendarStore.Event(id: UUID().uuidString, title: title, start: now, end: now.addingTimeInterval(1800), isAllDay: false, color: .blue,
+                                    location: nil, joinURL: join ? URL(string: "https://meet.google.com/abc-defg-hij") : nil, attendeeCount: guests, calendarTitle: cal)
+            }
+            let merged = CalendarStore.merged([dup("Standup", cal: "iCloud"), dup("standup", join: true, guests: 4, cal: "Google"), dup("Lunch", cal: "iCloud")])
+            check("the same meeting in two accounts is listed once", merged.map(\.title).sorted() == ["Lunch", "standup"])
+            check("the copy with the call link is the one kept", merged.first { $0.title.lowercased() == "standup" }?.joinURL != nil && merged.first { $0.title.lowercased() == "standup" }?.calendarTitle == "Google")
+            let sameCount = CalendarStore.merged([dup("Sync", guests: 2, cal: "iCloud"), dup("Sync", guests: 5, cal: "Google")])
+            check("with no link on either, the copy with more guests is kept", sameCount.count == 1 && sameCount[0].attendeeCount == 5)
+            let differentTimes = CalendarStore.merged([dup("Gym", cal: "iCloud"), CalendarStore.Event(id: "x", title: "Gym", start: now.addingTimeInterval(86400), end: now.addingTimeInterval(88200), isAllDay: false, color: .blue, location: nil, joinURL: nil, attendeeCount: 0)])
+            check("the same title at a different time is a different event", differentTimes.count == 2)
+
             // Month grid
             var cal = Calendar(identifier: .gregorian); cal.firstWeekday = 1
             let oct = DateComponents(calendar: cal, year: 2026, month: 10, day: 13).date!

@@ -29,6 +29,14 @@ final class CalendarStore: ObservableObject {
 
     enum Access: Equatable { case unknown, granted, denied }
 
+    /// One calendar (e.g. "Work") and the account it comes from (iCloud, Google, ...).
+    struct CalendarInfo: Identifiable, Equatable {
+        let id: String
+        let title: String
+        let account: String
+        let color: Color
+    }
+
     struct Event: Identifiable, Equatable {
         let id: String
         var title: String
@@ -39,6 +47,8 @@ final class CalendarStore: ObservableObject {
         var location: String?
         var joinURL: URL?
         var attendeeCount: Int
+        /// The calendar it lives in (e.g. "Work"), for telling accounts apart.
+        var calendarTitle: String = ""
 
         /// Worth offering to record: a call link, or other people invited.
         var looksLikeMeeting: Bool { !self.isAllDay && (self.joinURL != nil || self.attendeeCount >= 2) }
@@ -53,6 +63,9 @@ final class CalendarStore: ObservableObject {
     /// First day of the month being shown.
     @Published private(set) var displayedMonth = CalendarStore.startOfMonth(Date())
     @Published var selectedDay = Calendar.current.startOfDay(for: Date())
+    /// Every calendar on this Mac across all accounts, so you can choose which ones the notch shows.
+    @Published private(set) var calendars: [CalendarInfo] = []
+    @Published private(set) var hiddenCalendarIDs: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "LaVoixNotchCalendarHidden") ?? [])
 
     /// Called once per meeting when it is time to offer recording.
     var onMeetingDue: ((Event) -> Void)?
@@ -151,13 +164,19 @@ final class CalendarStore: ObservableObject {
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: self.now)
         guard let end = calendar.date(byAdding: .day, value: 2, to: dayStart) else { return }
-        let predicate = self.store.predicateForEvents(withStart: dayStart, end: end, calendars: nil)
+        self.loadCalendars()
+        guard let included = self.includedCalendars(), !included.isEmpty || self.hiddenCalendarIDs.isEmpty else {
+            self.events = []
+            self.reloadMonth()
+            return
+        }
+        let predicate = self.store.predicateForEvents(withStart: dayStart, end: end, calendars: included)
         let now = self.now
-        self.events = self.store.events(matching: predicate)
+        self.events = Self.merged(self.store.events(matching: predicate)
             .filter { $0.endDate > now && $0.status != .canceled && !Self.isDeclined($0) }
             .sorted { ($0.isAllDay ? 0 : 1, $0.startDate) < ($1.isAllDay ? 0 : 1, $1.startDate) }
-            .prefix(12)
-            .map(Self.makeEvent)
+            .map(Self.makeEvent))
+            .prefix(12).map { $0 }
         self.reloadMonth()
     }
 
@@ -181,12 +200,55 @@ final class CalendarStore: ObservableObject {
         guard self.access == .granted else { self.monthEvents = []; return }
         let days = Self.gridDays(forMonth: self.displayedMonth)
         guard let first = days.first, let last = days.last, let end = Calendar.current.date(byAdding: .day, value: 1, to: last) else { return }
-        let predicate = self.store.predicateForEvents(withStart: first, end: end, calendars: nil)
-        self.monthEvents = self.store.events(matching: predicate)
+        guard let included = self.includedCalendars(), !included.isEmpty || self.hiddenCalendarIDs.isEmpty else { self.monthEvents = []; return }
+        let predicate = self.store.predicateForEvents(withStart: first, end: end, calendars: included)
+        self.monthEvents = Self.merged(self.store.events(matching: predicate)
             .filter { $0.status != .canceled && !Self.isDeclined($0) }
             .sorted { ($0.isAllDay ? 0 : 1, $0.startDate) < ($1.isAllDay ? 0 : 1, $1.startDate) }
-            .prefix(400)
-            .map(Self.makeEvent)
+            .prefix(600)
+            .map(Self.makeEvent))
+    }
+
+    // MARK: - Which calendars
+
+    /// nil means "all of them" (nothing hidden); otherwise the calendars still shown.
+    private func includedCalendars() -> [EKCalendar]? {
+        guard !self.hiddenCalendarIDs.isEmpty else { return nil }
+        return self.store.calendars(for: .event).filter { !self.hiddenCalendarIDs.contains($0.calendarIdentifier) }
+    }
+
+    /// Reads the list of calendars across every account on this Mac (iCloud, Google, Exchange, ...).
+    func loadCalendars() {
+        guard self.access == .granted else { self.calendars = []; return }
+        self.calendars = self.store.calendars(for: .event)
+            .map { CalendarInfo(id: $0.calendarIdentifier, title: $0.title, account: $0.source.title, color: Color(nsColor: $0.color)) }
+            .sorted { ($0.account, $0.title) < ($1.account, $1.title) }
+    }
+
+    func setCalendar(_ id: String, visible: Bool) {
+        if visible { self.hiddenCalendarIDs.remove(id) } else { self.hiddenCalendarIDs.insert(id) }
+        UserDefaults.standard.set(Array(self.hiddenCalendarIDs), forKey: "LaVoixNotchCalendarHidden")
+        self.reload()
+    }
+
+    /// The same meeting often appears in two accounts (an invite in Google and a copy in iCloud). Show it once: same
+    /// title, start and end. Prefer the copy that has a call link or more guests.
+    static func merged(_ events: [Event]) -> [Event] {
+        var index: [String: Int] = [:]
+        var result: [Event] = []
+        for event in events {
+            let key = "\(event.title.lowercased())|\(event.start.timeIntervalSince1970)|\(event.end.timeIntervalSince1970)|\(event.isAllDay)"
+            if let existing = index[key] {
+                let old = result[existing]
+                if (old.joinURL == nil && event.joinURL != nil) || (old.joinURL == nil) == (event.joinURL == nil) && event.attendeeCount > old.attendeeCount {
+                    result[existing] = event
+                }
+                continue
+            }
+            index[key] = result.count
+            result.append(event)
+        }
+        return result
     }
 
     static func startOfMonth(_ date: Date, calendar: Calendar = .current) -> Date {
@@ -268,7 +330,8 @@ final class CalendarStore: ObservableObject {
             color: Color(nsColor: event.calendar?.color ?? .systemBlue),
             location: event.location.flatMap { $0.isEmpty ? nil : $0 },
             joinURL: Self.joinURL(in: [event.url?.absoluteString, event.location, event.notes]),
-            attendeeCount: event.attendees?.count ?? 0
+            attendeeCount: event.attendees?.count ?? 0,
+            calendarTitle: event.calendar?.title ?? ""
         )
     }
 }
