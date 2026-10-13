@@ -206,12 +206,13 @@ final class NotchHubController {
         self.model.reloadWidgets()
         let store = MessagesStore.shared
         store.onIncoming = { [weak self] message, name in
-            let title = message.isGroup ? (message.groupName.isEmpty ? "Group" : message.groupName) : name
+            let title = message.isGroup ? store.groupTitle(chatID: message.chatID, groupName: message.groupName) : name
             self?.showBanner(NotchBannerContent(
                 chatID: message.chatID,
                 chatGUID: message.chatGUID,
                 title: title,
                 avatarHandle: message.isGroup ? nil : message.senderHandle,
+                groupHandles: message.isGroup ? store.participantHandles(chatID: message.chatID) : [],
                 subtitle: message.isGroup ? name : nil,
                 text: NotchMessagesSettings.showsPreviews ? message.text : "New message",
                 date: message.date

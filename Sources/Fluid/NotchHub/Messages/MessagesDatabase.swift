@@ -62,7 +62,8 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
                 lastText: Self.messageText(text: Self.optionalString(row, 5), body: Self.blob(row, 6), hasAttachment: sqlite3_column_int(row, 9) != 0),
                 lastDate: Self.date(sqlite3_column_int64(row, 7)),
                 lastIsFromMe: sqlite3_column_int(row, 8) != 0,
-                unreadCount: Int(sqlite3_column_int(row, 10))
+                unreadCount: Int(sqlite3_column_int(row, 10)),
+                hasGroupName: !groupName.isEmpty
             )
         }
     }

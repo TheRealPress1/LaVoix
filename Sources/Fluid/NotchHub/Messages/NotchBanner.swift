@@ -9,6 +9,8 @@ struct NotchBannerContent: Equatable, Identifiable {
     let title: String
     /// The person's phone number or email, used to look up their photo. nil for group chats.
     var avatarHandle: String? = nil
+    /// Everyone in the group, so a group card can show overlapping avatars. Empty for one-to-one chats.
+    var groupHandles: [String] = []
     /// Who spoke, in a group chat.
     let subtitle: String?
     let text: String
@@ -58,7 +60,11 @@ struct NotchBannerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
-                NotchAvatar(name: self.content.title, handle: self.content.avatarHandle)
+                if self.content.groupHandles.isEmpty {
+                    NotchAvatar(name: self.content.title, handle: self.content.avatarHandle)
+                } else {
+                    NotchGroupAvatar(handles: self.content.groupHandles)
+                }
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .firstTextBaseline) {
                         Text(self.content.title)
@@ -188,5 +194,35 @@ struct NotchAvatar: View {
         ]
         let hash = self.name.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0xFFFF }
         return palette[hash % palette.count]
+    }
+}
+
+
+/// A group chat's picture: two overlapping avatars (the first two people in it), so it reads as a group at a glance.
+struct NotchGroupAvatar: View {
+    let handles: [String]
+    var size: CGFloat = 40
+    @ObservedObject private var contacts = ContactResolver.shared
+
+    var body: some View {
+        let inner = self.size * 0.68
+        ZStack {
+            if self.handles.count >= 2 {
+                self.avatar(self.handles[0], size: inner)
+                    .position(x: inner / 2, y: inner / 2)
+                self.avatar(self.handles[1], size: inner)
+                    .overlay(Circle().strokeBorder(Color.black, lineWidth: max(1.5, self.size * 0.05)))
+                    .position(x: self.size - inner / 2, y: self.size - inner / 2)
+            } else {
+                // Not enough people known to draw two: a plain group mark.
+                Circle().fill(Color.white.opacity(0.18))
+                Image(systemName: "person.2.fill").font(.system(size: self.size * 0.42)).foregroundStyle(.white.opacity(0.85))
+            }
+        }
+        .frame(width: self.size, height: self.size)
+    }
+
+    private func avatar(_ handle: String, size: CGFloat) -> some View {
+        NotchAvatar(name: self.contacts.name(for: handle) ?? handle, handle: handle, size: size)
     }
 }

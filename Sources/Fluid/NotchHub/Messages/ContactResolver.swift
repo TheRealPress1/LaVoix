@@ -60,6 +60,12 @@ final class ContactResolver: ObservableObject {
         return nil
     }
 
+    /// Preview support: pretend this handle has a name.
+    func debugSetName(_ name: String, for handle: String) {
+        self.names[Self.key(handle)] = name
+        self.version &+= 1
+    }
+
     /// Preview support: pretend this handle has a photo.
     func debugSetPhoto(_ image: NSImage, for handle: String) {
         self.photos[Self.key(handle)] = image

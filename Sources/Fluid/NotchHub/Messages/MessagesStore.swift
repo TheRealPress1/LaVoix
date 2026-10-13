@@ -65,7 +65,8 @@ final class MessagesStore: ObservableObject {
         store.access = access
         store.conversations = [
             MessageConversation(id: 1, guid: "g1", title: "Maya Chen", handles: ["+15551230001"], isGroup: false, lastText: "see you at the place 🍕", lastDate: now.addingTimeInterval(-120), lastIsFromMe: false, unreadCount: 2),
-            MessageConversation(id: 2, guid: "g2", title: "Launch crew", handles: [], isGroup: true, lastText: "shipping at 5", lastDate: now.addingTimeInterval(-1800), lastIsFromMe: false, unreadCount: 0),
+            MessageConversation(id: 2, guid: "g2", title: "Launch crew", handles: ["+15551230004", "+15551230005"], isGroup: true, lastText: "shipping at 5", lastDate: now.addingTimeInterval(-1800), lastIsFromMe: false, unreadCount: 0, hasGroupName: true),
+            MessageConversation(id: 5, guid: "g5", title: "+15551230004", handles: ["+15551230004", "+15551230005", "+15551230006"], isGroup: true, lastText: "Aryan is going to be in Jersey next week", lastDate: now.addingTimeInterval(-3000), lastIsFromMe: false, unreadCount: 1, hasGroupName: false),
             MessageConversation(id: 3, guid: "g3", title: "Dad", handles: ["+15551230003"], isGroup: false, lastText: "Call me when you land", lastDate: now.addingTimeInterval(-7200), lastIsFromMe: false, unreadCount: 1),
             MessageConversation(id: 4, guid: "g4", title: "Sam", handles: ["sam@example.com"], isGroup: false, lastText: "sounds good", lastDate: now.addingTimeInterval(-86400), lastIsFromMe: true, unreadCount: 0),
         ]
@@ -77,6 +78,13 @@ final class MessagesStore: ObservableObject {
             ThreadMessage(id: 3, text: "see you at the place 🍕", date: now.addingTimeInterval(-120), isFromMe: false, senderHandle: ""),
         ]
         store.threadCache[1] = store.thread
+        store.threadCache[5] = [
+            ThreadMessage(id: 20, text: "Aryan is going to be in Jersey next week", date: now.addingTimeInterval(-3000), isFromMe: false, senderHandle: "+15551230004"),
+            ThreadMessage(id: 21, text: "and will come work w us for a day", date: now.addingTimeInterval(-2990), isFromMe: false, senderHandle: "+15551230004"),
+            ThreadMessage(id: 22, text: "lets do dinner thursday", date: now.addingTimeInterval(-2900), isFromMe: false, senderHandle: "+15551230005"),
+            ThreadMessage(id: 23, text: "yes!! booking it", date: now.addingTimeInterval(-2800), isFromMe: true, senderHandle: ""),
+            ThreadMessage(id: 24, text: "perfect", date: now.addingTimeInterval(-2700), isFromMe: false, senderHandle: "+15551230006"),
+        ]
         store.threadCache[2] = [ThreadMessage(id: 10, text: "shipping at 5", date: now.addingTimeInterval(-1800), isFromMe: false, senderHandle: "")]
         return store
     }
@@ -216,12 +224,45 @@ final class MessagesStore: ObservableObject {
 
     // MARK: - Names
 
+    /// First name for someone in a chat, or their number when they aren't in Contacts.
+    func firstName(forHandle handle: String) -> String {
+        guard let full = self.contacts.name(for: handle) else { return handle }
+        return full.split(separator: " ").first.map(String.init) ?? full
+    }
+
+    /// "Krish, Aryan", "Krish, Aryan, Maya", "Krish, Aryan +2": an unnamed group, described by who is in it.
+    static func participantsSummary(_ names: [String]) -> String {
+        switch names.count {
+        case 0: return "Group"
+        case 1...3: return names.joined(separator: ", ")
+        default: return names.prefix(2).joined(separator: ", ") + " +\(names.count - 2)"
+        }
+    }
+
+    /// For a notification card: the group's name, or its members when it has none.
+    func groupTitle(chatID: Int64, groupName: String) -> String {
+        if !groupName.isEmpty { return groupName }
+        guard let chat = self.conversations.first(where: { $0.id == chatID }) else { return "Group" }
+        return self.title(for: chat)
+    }
+
+    func participantHandles(chatID: Int64) -> [String] {
+        self.conversations.first { $0.id == chatID }?.handles ?? []
+    }
+
+    func isGroup(chatID: Int64?) -> Bool {
+        guard let chatID else { return false }
+        return self.conversations.first { $0.id == chatID }?.isGroup ?? false
+    }
+
     func displayName(forHandle handle: String) -> String {
         self.contacts.name(for: handle) ?? handle
     }
 
     func title(for conversation: MessageConversation) -> String {
-        if conversation.isGroup { return conversation.title }
+        if conversation.isGroup {
+            return conversation.hasGroupName ? conversation.title : Self.participantsSummary(conversation.handles.map(self.firstName(forHandle:)))
+        }
         return conversation.handles.first.map(self.displayName(forHandle:)) ?? conversation.title
     }
 
@@ -311,7 +352,8 @@ final class MessagesStore: ObservableObject {
             guard old.lastDate <= item.date else { result.insert(old, at: index); continue }
             result.insert(MessageConversation(
                 id: old.id, guid: old.guid, title: old.title, handles: old.handles, isGroup: old.isGroup,
-                lastText: item.text, lastDate: item.date, lastIsFromMe: true, unreadCount: 0
+                lastText: item.text, lastDate: item.date, lastIsFromMe: true, unreadCount: 0,
+                hasGroupName: old.hasGroupName
             ), at: 0)
         }
         return result

@@ -111,7 +111,11 @@ private struct ConversationRow: View {
 
     var body: some View {
         HStack(spacing: 9) {
-            NotchAvatar(name: self.title, handle: self.conversation.isGroup ? nil : self.conversation.handles.first, size: 30)
+            if self.conversation.isGroup {
+                NotchGroupAvatar(handles: self.conversation.handles, size: 30)
+            } else {
+                NotchAvatar(name: self.title, handle: self.conversation.handles.first, size: 30)
+            }
 
             VStack(alignment: .leading, spacing: 1) {
                 HStack {
@@ -169,15 +173,17 @@ private struct ThreadView: View {
         VStack(spacing: 8) {
             if self.staticLayout {
                 VStack(spacing: 5) {
-                    ForEach(self.store.thread) { Bubble(message: $0) }
+                    ForEach(Array(self.store.thread.enumerated()), id: \.element.id) { index, message in
+                        Bubble(message: message, label: self.senderLabel(at: index))
+                    }
                     Spacer(minLength: 0)
                 }
             } else {
                 ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: false) {
                         VStack(spacing: 5) {
-                            ForEach(self.store.thread) { message in
-                                Bubble(message: message).id(message.id)
+                            ForEach(Array(self.store.thread.enumerated()), id: \.element.id) { index, message in
+                                Bubble(message: message, label: self.senderLabel(at: index)).id(message.id)
                             }
                         }
                         .padding(.vertical, 2)
@@ -237,12 +243,38 @@ private struct ThreadView: View {
         self.store.send(self.draft)
         self.draft = ""
     }
+
+    /// In a group, the first name of who is talking, shown above their first message in a run.
+    private func senderLabel(at index: Int) -> String? {
+        guard self.store.isGroup(chatID: self.store.selectedChatID) else { return nil }
+        let thread = self.store.thread
+        let message = thread[index]
+        guard !message.isFromMe, !message.senderHandle.isEmpty else { return nil }
+        if index > 0, !thread[index - 1].isFromMe, thread[index - 1].senderHandle == message.senderHandle { return nil }
+        return self.store.firstName(forHandle: message.senderHandle)
+    }
 }
 
 private struct Bubble: View {
     let message: ThreadMessage
+    var label: String? = nil
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let label {
+                Text(label)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .padding(.leading, 10)
+                    .padding(.top, 3)
+            }
+            self.row
+        }
+        // A message you just sent, not yet confirmed by Messages, is drawn dimmed.
+        .opacity(self.message.id < 0 ? 0.6 : 1)
+    }
+
+    private var row: some View {
         HStack {
             if self.message.isFromMe { Spacer(minLength: 40) }
             Text(NotchMessagesSettings.showsPreviews ? self.message.text : "Message")
@@ -255,7 +287,5 @@ private struct Bubble: View {
                 .fixedSize(horizontal: false, vertical: true)
             if !self.message.isFromMe { Spacer(minLength: 40) }
         }
-        // A message you just sent, not yet confirmed by Messages, is drawn dimmed.
-        .opacity(self.message.id < 0 ? 0.6 : 1)
     }
 }

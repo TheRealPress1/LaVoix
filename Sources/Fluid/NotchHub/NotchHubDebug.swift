@@ -43,8 +43,11 @@ enum NotchHubDebug {
                 let text = long
                     ? "Aryan gaspard is going to be in Jersey next week and will come work w us for a day. He asked if we could also set up a time to grab dinner on Thursday after the office, maybe somewhere in Hoboken so it's easy for everyone to get to. Let me know what works and I'll send the invite round to the whole group this afternoon so nobody misses it"
                     : "Are we still on for dinner tonight? I booked the place on 5th for 7:30 🍝"
+                ContactResolver.shared.debugSetName("Krish Bhatia", for: "+15551230004")
+                ContactResolver.shared.debugSetName("Aryan Shah", for: "+15551230005")
                 model.showBanner(NotchBannerContent(
-                    chatID: 1, chatGUID: "g", title: long ? "Group" : "Maya Chen", avatarHandle: long ? nil : "+15551230001",
+                    chatID: 1, chatGUID: "g", title: long ? "Krish, Aryan +1" : "Maya Chen", avatarHandle: long ? nil : "+15551230001",
+                    groupHandles: long ? ["+15551230004", "+15551230005", "+15551230006"] : [],
                     subtitle: long ? "Krish Bhatia" : nil, text: text, date: Date()
                 ))
                 model.setBannerExpanded(widgetName.hasSuffix("expanded"))
@@ -82,6 +85,12 @@ enum NotchHubDebug {
                 model.selectedWidgetID = isClip ? "clipboard" : "shelf"
             } else if widgetName.hasPrefix("messages") {
                 let store = MessagesStore.sample(access: widgetName == "messages-denied" ? .needsFullDiskAccess : .granted)
+                if widgetName == "messages-group" { store.select(5) }
+                if let stand_in = NSImage(systemSymbolName: "person.crop.circle.fill", accessibilityDescription: nil) {
+                    ContactResolver.shared.debugSetPhoto(stand_in, for: "+15551230001")
+                    ContactResolver.shared.debugSetName("Krish Bhatia", for: "+15551230004")
+                    ContactResolver.shared.debugSetName("Aryan Shah", for: "+15551230005")
+                }
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
                     NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") { AnyView(MessagesWidgetView(store: store, staticLayout: true)) },

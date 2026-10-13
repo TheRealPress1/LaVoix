@@ -11,6 +11,8 @@ struct MessageConversation: Identifiable, Equatable {
     let lastDate: Date
     let lastIsFromMe: Bool
     let unreadCount: Int
+    /// True when the group has been given a name; unnamed groups are shown by who is in them.
+    var hasGroupName = false
 }
 
 struct ThreadMessage: Identifiable, Equatable {
