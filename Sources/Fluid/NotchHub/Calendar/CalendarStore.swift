@@ -8,9 +8,10 @@ enum NotchCalendarSettings {
     private static let enabledKey = "LaVoixNotchCalendarEnabled"
     private static let promptKey = "LaVoixNotchCalendarPromptToRecord"
 
-    /// Off until the user turns it on, because it needs Calendar access.
+    /// On by default so the tab is easy to find. It reads nothing until you tap "Allow access" in the tab (or turn the
+    /// setting on), because macOS asks for Calendar access then.
     static var isEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: self.enabledKey) }
+        get { UserDefaults.standard.object(forKey: self.enabledKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: self.enabledKey) }
     }
 
