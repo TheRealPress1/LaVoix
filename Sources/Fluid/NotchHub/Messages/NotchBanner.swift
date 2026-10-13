@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// What a notification card shows.
@@ -12,6 +13,33 @@ struct NotchBannerContent: Equatable, Identifiable {
     let subtitle: String?
     let text: String
     let date: Date
+
+    /// Width left for the message text inside the card: card width minus side padding, avatar and spacing.
+    static let textWidth: CGFloat = NotchGeometry.bannerWidth - 44 - 40 - 12
+    static let textFont = NSFont.systemFont(ofSize: 13.5)
+    /// Longest message shown in full; anything beyond ends in an ellipsis.
+    static let maxLines = 5
+
+    private static var lineHeight: CGFloat { NSLayoutManager().defaultLineHeight(for: self.textFont) }
+
+    /// How many lines the message really needs at the card's width, so the card can grow to fit it.
+    var visibleLines: Int {
+        let bounds = (self.text as NSString).boundingRect(
+            with: CGSize(width: Self.textWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: Self.textFont]
+        )
+        return min(Self.maxLines, max(1, Int((bounds.height / Self.lineHeight).rounded(.up))))
+    }
+
+    /// Height of the message text block.
+    var textHeight: CGFloat { CGFloat(self.visibleLines) * Self.lineHeight + 2 }
+
+    /// Everything in the card that sits under the notch band, with the reply row only when expanded.
+    func contentHeight(expanded: Bool) -> CGFloat {
+        let header: CGFloat = 8 + 19 + (self.subtitle == nil ? 0 : 16) + 2
+        return header + self.textHeight + 18 + (expanded ? 12 + 34 : 0)
+    }
 }
 
 /// An iOS-style notification card that drops out of the notch. Hover to reveal a reply box.
@@ -49,7 +77,7 @@ struct NotchBannerView: View {
                     Text(self.content.text)
                         .font(.system(size: 13.5))
                         .foregroundStyle(.white.opacity(0.9))
-                        .lineLimit(self.expanded ? 4 : 2)
+                        .lineLimit(self.content.visibleLines)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }

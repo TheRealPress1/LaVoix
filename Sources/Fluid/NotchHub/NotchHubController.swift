@@ -312,7 +312,7 @@ final class NotchHubController {
         guard !self.ignoresPointer, let screen = NotchGeometry.targetScreen() else { return }
         let point = NSEvent.mouseLocation
         if self.model.banner != nil, !self.model.isOpen {
-            let inside = NotchGeometry.bannerRect(for: screen, expanded: self.model.bannerExpanded).contains(point)
+            let inside = NotchGeometry.bannerRect(for: screen, content: self.model.banner, expanded: self.model.bannerExpanded).contains(point)
             if inside, !self.bannerHovered {
                 self.bannerHovered = true
                 self.bannerTask?.cancel()

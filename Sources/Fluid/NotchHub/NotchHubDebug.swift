@@ -39,11 +39,15 @@ enum NotchHubDebug {
                     ContactResolver.shared.debugSetPhoto(stand_in, for: "+15551230001")
                 }
                 model = NotchHubModel()
+                let long = widgetName.contains("long")
+                let text = long
+                    ? "Aryan gaspard is going to be in Jersey next week and will come work w us for a day. He asked if we could also set up a time to grab dinner on Thursday after the office, maybe somewhere in Hoboken so it's easy for everyone to get to. Let me know what works and I'll send the invite round to the whole group this afternoon so nobody misses it"
+                    : "Are we still on for dinner tonight? I booked the place on 5th for 7:30 🍝"
                 model.showBanner(NotchBannerContent(
-                    chatID: 1, chatGUID: "g", title: "Maya Chen", avatarHandle: "+15551230001", subtitle: nil,
-                    text: "Are we still on for dinner tonight? I booked the place on 5th for 7:30 🍝", date: Date()
+                    chatID: 1, chatGUID: "g", title: long ? "Group" : "Maya Chen", avatarHandle: long ? nil : "+15551230001",
+                    subtitle: long ? "Krish Bhatia" : nil, text: text, date: Date()
                 ))
-                model.setBannerExpanded(widgetName == "banner-expanded")
+                model.setBannerExpanded(widgetName.hasSuffix("expanded"))
             } else if widgetName.hasPrefix("nowplaying") {
                 let store = widgetName == "nowplaying-empty"
                     ? NowPlayingStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-np-empty-\(UUID().uuidString)"))

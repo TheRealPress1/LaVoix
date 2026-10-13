@@ -21,7 +21,7 @@ struct NotchHubView: View {
         let size: CGSize = open
             ? NotchGeometry.openSize
             : (banner != nil
-                ? NotchGeometry.bannerSize(expanded: self.model.bannerExpanded, notchHeight: self.model.closedSize.height)
+                ? NotchGeometry.bannerSize(content: banner, expanded: self.model.bannerExpanded, notchHeight: self.model.closedSize.height)
                 : self.model.closedSize)
         let raised = open || banner != nil
         ZStack(alignment: .top) {
