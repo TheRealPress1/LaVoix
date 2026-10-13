@@ -122,6 +122,7 @@ final class NowPlayingStore: ObservableObject {
             bundleID: "com.apple.Music", isPlaying: playing, duration: 200, artwork: sampleArtwork()
         )
         store.elapsed = 74
+        store.isSample = true
         let now = Date()
         store.track?.site = NowPlayingSource(kind: .youtube, name: "YouTube")
         store.track?.bundleID = "company.thebrowser.dia"
@@ -142,15 +143,19 @@ final class NowPlayingStore: ObservableObject {
         return store
     }
 
+    /// Preview/test stores never talk to the music bridge.
+    private(set) var isSample = false
+
     /// Starts the listener if nobody else already has. Every `start()` must be matched by a `stop()`.
     func start() {
+        guard !self.isSample else { return }
         self.listenerUsers += 1
         guard self.listenerUsers == 1 else { return }
         self.startListening()
     }
 
     func stop() {
-        guard self.listenerUsers > 0 else { return }
+        guard !self.isSample, self.listenerUsers > 0 else { return }
         self.listenerUsers -= 1
         guard self.listenerUsers == 0 else { return }
         self.stopListening()

@@ -11,8 +11,9 @@ struct NotchHubView: View {
 
     private var isOpen: Bool { self.forceOpen || self.model.isOpen }
 
-    /// True shortly after the notch opens; from then on every tab's widget is mounted (hidden) so tab switches are instant.
-    @State private var warm = false
+    /// The tabs already built (hidden behind the selected one), so switching to them is instant. Filled in gradually after
+    /// the notch opens.
+    @State private var mounted: Set<String> = []
     @State private var warmTask: Task<Void, Never>?
 
     var body: some View {
@@ -58,7 +59,7 @@ struct NotchHubView: View {
             // quick crossfade instead of rebuilding a view and restarting its data source every time.
             ZStack(alignment: .top) {
                 ForEach(self.model.widgets) { widget in
-                    if self.warm || widget.id == selectedID {
+                    if self.mounted.contains(widget.id) || widget.id == selectedID {
                         let active = widget.id == selectedID
                         widget.content()
                             .padding(.horizontal, 34)
@@ -75,14 +76,20 @@ struct NotchHubView: View {
             .animation(.easeInOut(duration: 0.16), value: selectedID)
         }
         .onAppear {
+            // Bring the other tabs in one at a time, once the opening animation has settled, so no single frame has to
+            // build them all.
             self.warmTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 450_000_000)
-                if !Task.isCancelled { self.warm = true }
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                for widget in self.model.widgets {
+                    if Task.isCancelled { return }
+                    self.mounted.insert(widget.id)
+                    try? await Task.sleep(nanoseconds: 130_000_000)
+                }
             }
         }
         .onDisappear {
             self.warmTask?.cancel()
-            self.warm = false
+            self.mounted = []
         }
     }
 

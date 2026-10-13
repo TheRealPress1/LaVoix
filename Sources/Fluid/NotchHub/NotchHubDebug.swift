@@ -462,6 +462,71 @@ enum NotchHubDebug {
         }
     }
 
+    /// `LAVOIX_NOTCH_LAG_TEST=1` opens the notch on each tab in turn (with sample data for every widget) and reports how long
+    /// the main thread was blocked while it opened, and while the other tabs were being prepared right after.
+    @MainActor static func lagTestIfRequested() {
+        guard ProcessInfo.processInfo.environment["LAVOIX_NOTCH_LAG_TEST"] == "1" else { return }
+        Task { @MainActor in
+            func out(_ text: String) { FileHandle.standardOutput.write(Data((text + "\n").utf8)) }
+            let hub = NotchHubController.shared
+            let clipboard = ClipboardStore.sample()
+            let shelf = ShelfStore.sample()
+            let nowPlaying = NowPlayingStore.sample()
+            let calendar = CalendarStore.sample()
+            let messages = MessagesStore.sample()
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            hub.debugIgnorePointer(true)
+            hub.start()
+            ContactResolver.shared.debugSetName("Krish Bhatia", for: "+15551230004")
+            hub.model.debugSetWidgets([
+                NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(SystemStatsWidgetView()) },
+                NotchWidget(id: "nowplaying", title: "Now Playing", systemImage: "music.note") { AnyView(NowPlayingWidgetView(store: nowPlaying)) },
+                NotchWidget(id: "calendar", title: "Calendar", systemImage: "calendar") { AnyView(CalendarWidgetView(store: calendar)) },
+                NotchWidget(id: "clipboard", title: "Clipboard", systemImage: "doc.on.clipboard") { AnyView(ClipboardWidgetView(store: clipboard)) },
+                NotchWidget(id: "shelf", title: "Shelf", systemImage: "tray.fill") { AnyView(ShelfWidgetView(store: shelf)) },
+                NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") { AnyView(MessagesWidgetView(store: messages)) },
+            ])
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            if ProcessInfo.processInfo.environment["LAVOIX_NOTCH_LAG_PREWARM"] == "1" {
+                SystemStatsSampler.prefetch()
+                await hub.prewarmWidgets()
+                try? await Task.sleep(nanoseconds: 800_000_000)
+            }
+            // Watches the main thread: a timer that should fire every few milliseconds; a long gap means it was blocked.
+            final class Gaps: @unchecked Sendable { var last = DispatchTime.now().uptimeNanoseconds; var worst: Double = 0; var over16 = 0; var over50 = 0 }
+            let gaps = Gaps()
+            let timer = DispatchSource.makeTimerSource(queue: .main)
+            timer.schedule(deadline: .now(), repeating: .milliseconds(2), leeway: .microseconds(100))
+            timer.setEventHandler {
+                let now = DispatchTime.now().uptimeNanoseconds
+                let gap = Double(now - gaps.last) / 1_000_000
+                gaps.last = now
+                gaps.worst = max(gaps.worst, gap)
+                if gap > 16 { gaps.over16 += 1 }
+                if gap > 50 { gaps.over50 += 1 }
+            }
+            timer.resume()
+            for first in ["system", "nowplaying", "calendar", "messages"] {
+                hub.debugSetOpen(false)
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                hub.model.selectedWidgetID = first
+                gaps.worst = 0; gaps.over16 = 0; gaps.over50 = 0; gaps.last = DispatchTime.now().uptimeNanoseconds
+                hub.debugSetOpen(true)
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                let opening = (gaps.worst, gaps.over16, gaps.over50)
+                gaps.worst = 0; gaps.over16 = 0; gaps.over50 = 0
+                try? await Task.sleep(nanoseconds: 1_400_000_000)
+                let after = (gaps.worst, gaps.over16, gaps.over50)
+                out(String(format: "opening on %-10@ first 600 ms: worst stall %5.0f ms (%d over 16 ms, %d over 50 ms) | next 1.4 s while other tabs load: worst %5.0f ms (%d over 16 ms, %d over 50 ms)",
+                           first as NSString, opening.0, opening.1, opening.2, after.0, after.1, after.2))
+            }
+            timer.cancel()
+            hub.stop()
+            out("LAG TEST DONE")
+            exit(0)
+        }
+    }
+
     /// `LAVOIX_NOWPLAYING_HISTORY_AUTOTEST=1` checks the listening history (settling, merging, sources, cap, persistence)
     /// in a temporary folder.
     @MainActor static func nowPlayingHistoryAutotestIfRequested() {

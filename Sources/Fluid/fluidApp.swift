@@ -26,6 +26,7 @@ struct FluidApp: App {
         NotchHubDebug.calendarAutotestIfRequested()
         NotchHubDebug.nowPlayingHistoryAutotestIfRequested()
         NotchHubDebug.typingTestIfRequested()
+        NotchHubDebug.lagTestIfRequested()
         NotificationProbe.runIfRequested()
     }
 

@@ -16,6 +16,7 @@ final class NotchHubController {
     private var screenObserver: NSObjectProtocol?
     private var dragMonitor: Any?
     private var holdsNowPlayingListener = false
+    private var prewarmTask: Task<Void, Never>?
     private var openTask: Task<Void, Never>?
     private var closeTask: Task<Void, Never>?
     private var releaseTask: Task<Void, Never>?
@@ -89,6 +90,12 @@ final class NotchHubController {
         if NotchClipboardSettings.isEnabled { ClipboardStore.shared.start() }
         self.startCalendarIfEnabled()
         self.syncNowPlayingHistory()
+        SystemStatsSampler.prefetch()
+        self.prewarmTask = Task { @MainActor [weak self] in
+            // A little after launch, while nothing else is going on, so the first real open isn't the first time any of it runs.
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            await self?.prewarmWidgets()
+        }
         self.dragMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] _ in
             Task { @MainActor in self?.fileDragMoved() }
         }
@@ -122,12 +129,28 @@ final class NotchHubController {
         self.model.close()
         if let dragMonitor { NSEvent.removeMonitor(dragMonitor) }
         self.dragMonitor = nil
+        self.prewarmTask?.cancel()
         ClipboardStore.shared.stop()
         CalendarStore.shared.stop()
         self.releaseNowPlayingHistory()
         self.window?.orderOut(nil)
         self.window = nil
         NotchMeetingCardController.shared.hubStateChanged()
+    }
+
+    // MARK: - Warm-up
+
+    /// Builds each tab's view once, off screen and one at a time, so SwiftUI has already done its first-use work (fonts,
+    /// symbols, layout) before the notch is opened for real. Nothing is shown or started.
+    func prewarmWidgets() async {
+        for widget in self.model.widgets {
+            if Task.isCancelled || self.model.isOpen { return }
+            let host = NSHostingView(rootView: widget.content().environment(\.notchWidgetActive, false).frame(width: 592, height: 176))
+            host.frame = NSRect(x: 0, y: 0, width: 592, height: 176)
+            host.layoutSubtreeIfNeeded()
+            _ = host.fittingSize
+            try? await Task.sleep(nanoseconds: 120_000_000)
+        }
     }
 
     // MARK: - Clipboard and shelf

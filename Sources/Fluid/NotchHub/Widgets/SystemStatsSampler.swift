@@ -36,6 +36,59 @@ final class SystemStatsSampler: ObservableObject {
 
     @Published private(set) var snapshot = Snapshot()
 
+    /// The slow readings (disk, battery, the process scan for top apps). Cheap to keep, costly to take, so they are read
+    /// off the main thread and the latest ones are kept for the next time the tab opens.
+    struct SlowReadings: Sendable {
+        var diskFree: UInt64 = 0
+        var diskTotal: UInt64 = 0
+        var battery: Battery?
+        var topApps: [AppUse] = []
+    }
+
+    private static var cachedSlow: SlowReadings?
+    private var slowTask: Task<Void, Never>?
+
+    init() {
+        if let cached = Self.cachedSlow { self.snapshot = Self.snapshot(self.snapshot, applying: cached) }
+    }
+
+    private static func snapshot(_ base: Snapshot, applying slow: SlowReadings) -> Snapshot {
+        var next = base
+        next.diskFree = slow.diskFree
+        next.diskTotal = slow.diskTotal
+        next.battery = slow.battery
+        next.topApps = slow.topApps
+        return next
+    }
+
+    /// Takes the slow readings in the background so the first time the System tab opens they are already there.
+    static func prefetch() {
+        guard Self.cachedSlow == nil else { return }
+        Task.detached(priority: .utility) {
+            let slow = Self.readSlow()
+            await MainActor.run { if Self.cachedSlow == nil { Self.cachedSlow = slow } }
+        }
+    }
+
+    private nonisolated static func readSlow() -> SlowReadings {
+        let disk = Self.readDisk()
+        return SlowReadings(diskFree: disk.free, diskTotal: disk.total, battery: Self.readBattery(), topApps: Self.readTopApps(limit: 4))
+    }
+
+    private func refreshSlow() {
+        guard self.slowTask == nil else { return }
+        self.slowTask = Task.detached(priority: .utility) { [weak self] in
+            let slow = Self.readSlow()
+            await MainActor.run {
+                guard let self else { return }
+                Self.cachedSlow = slow
+                self.slowTask = nil
+                let next = Self.snapshot(self.snapshot, applying: slow)
+                if next != self.snapshot { self.snapshot = next }
+            }
+        }
+    }
+
     private var timer: Timer?
     private var lastCPU: (busy: UInt64, total: UInt64)?
     private var tick = 0
@@ -55,6 +108,8 @@ final class SystemStatsSampler: ObservableObject {
     func stop() {
         self.timer?.invalidate()
         self.timer = nil
+        self.slowTask?.cancel()
+        self.slowTask = nil
         self.lastCPU = nil
     }
 
@@ -68,14 +123,8 @@ final class SystemStatsSampler: ObservableObject {
         let swap = Self.readSwap()
         next.swapUsed = swap.used
         next.swapTotal = swap.total
-        // The slower readings refresh every few seconds.
-        if self.tick % 3 == 0 {
-            let disk = Self.readDisk()
-            next.diskFree = disk.free
-            next.diskTotal = disk.total
-            next.battery = Self.readBattery()
-            next.topApps = Self.readTopApps(limit: 4)
-        }
+        // The slower readings refresh every few seconds, in the background.
+        if self.tick % 3 == 0 { self.refreshSlow() }
         self.tick += 1
         if next != self.snapshot { self.snapshot = next }
     }
@@ -139,7 +188,7 @@ final class SystemStatsSampler: ObservableObject {
 
     // MARK: - Disk
 
-    private static func readDisk() -> (free: UInt64, total: UInt64) {
+    private nonisolated static func readDisk() -> (free: UInt64, total: UInt64) {
         let keys: Set<URLResourceKey> = [.volumeAvailableCapacityForImportantUsageKey, .volumeTotalCapacityKey]
         guard let values = try? URL(fileURLWithPath: "/").resourceValues(forKeys: keys) else { return (0, 0) }
         return (UInt64(max(values.volumeAvailableCapacityForImportantUsage ?? 0, 0)), UInt64(max(values.volumeTotalCapacity ?? 0, 0)))
@@ -147,7 +196,7 @@ final class SystemStatsSampler: ObservableObject {
 
     // MARK: - Battery
 
-    private static func readBattery() -> Battery? {
+    private nonisolated static func readBattery() -> Battery? {
         guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
               let list = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef] else { return nil }
         for source in list {
@@ -162,7 +211,7 @@ final class SystemStatsSampler: ObservableObject {
 
     // MARK: - Top apps by memory
 
-    private static func readTopApps(limit: Int) -> [AppUse] {
+    private nonisolated static func readTopApps(limit: Int) -> [AppUse] {
         let capacity = Int(proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)) / MemoryLayout<pid_t>.size + 32
         var pids = [pid_t](repeating: 0, count: capacity)
         let bytes = proc_listpids(UInt32(PROC_ALL_PIDS), 0, &pids, Int32(capacity * MemoryLayout<pid_t>.size))
@@ -186,7 +235,7 @@ final class SystemStatsSampler: ObservableObject {
     }
 
     /// Groups helper processes under their app ("Dia" instead of five "Browser Helper" lines).
-    private static func displayName(forPath path: String) -> String {
+    private nonisolated static func displayName(forPath path: String) -> String {
         let parts = path.split(separator: "/")
         if let app = parts.first(where: { $0.hasSuffix(".app") }) {
             return String(app.dropLast(4))

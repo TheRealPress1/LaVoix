@@ -71,6 +71,8 @@ final class CalendarStore: ObservableObject {
     var onMeetingDue: ((Event) -> Void)?
 
     private let store = EKEventStore()
+    /// Preview/test stores keep their made-up data and never touch EventKit.
+    private(set) var isSample = false
     private var timer: Timer?
     private var changeObserver: NSObjectProtocol?
     private var prompted: Set<String> = []
@@ -80,6 +82,7 @@ final class CalendarStore: ObservableObject {
     /// Sample data for debug rendering; never touches EventKit.
     static func sample(access: Access = .granted, empty: Bool = false) -> CalendarStore {
         let store = CalendarStore()
+        store.isSample = true
         store.access = access
         let now = Date()
         store.now = now
@@ -158,6 +161,7 @@ final class CalendarStore: ObservableObject {
     }
 
     func reload() {
+        guard !self.isSample else { return }
         self.refreshAccess()
         guard self.access == .granted else { self.events = []; self.monthEvents = []; return }
         self.now = Date()
@@ -197,6 +201,7 @@ final class CalendarStore: ObservableObject {
 
     /// Loads everything in the visible grid so the days can show dots and any day's list is already there.
     func reloadMonth() {
+        guard !self.isSample else { return }
         guard self.access == .granted else { self.monthEvents = []; return }
         let days = Self.gridDays(forMonth: self.displayedMonth)
         guard let first = days.first, let last = days.last, let end = Calendar.current.date(byAdding: .day, value: 1, to: last) else { return }
