@@ -432,7 +432,10 @@ enum NotchHubDebug {
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-np-test-\(UUID().uuidString)")
             let store = NowPlayingStore(directory: dir)
             store.settleDelay = 0.3
-            store.siteResolver = { track in track.bundleID == "company.thebrowser.dia" ? NowPlayingSource(kind: .youtube, name: "YouTube") : nil }
+            store.siteResolver = { track in
+                track.bundleID == "company.thebrowser.dia" ? NowPlayingStore.ResolvedSite(source: NowPlayingSource(kind: .youtube, name: "YouTube"), videoID: "dQw4w9WgXcQ") : nil
+            }
+            store.youTubeFetcher = { _ in NowPlayingArtwork.YouTubeInfo(viewCount: 1_234_567, thumbnail: NowPlayingStore.sampleArtwork(wide: true)) }
             @MainActor func track(_ title: String, artist: String = "A", app: String = "com.apple.Music", playing: Bool = true, art: Bool = false) -> NowPlayingStore.Track {
                 NowPlayingStore.Track(title: title, artist: artist, album: nil, appName: "App", bundleID: app, isPlaying: playing, duration: 200,
                                       artwork: art ? NowPlayingStore.sample().track?.artwork : nil, pid: nil)
@@ -460,10 +463,41 @@ enum NotchHubDebug {
             check("website is recorded", store.history[0].site?.kind == .youtube && store.history[0].source.name == "YouTube")
             check("thumbnail saved", store.thumbnail(for: store.history[0]) != nil)
 
+            check("YouTube video ID is kept", store.history[0].videoID == "dQw4w9WgXcQ")
+            check("view count is kept", store.history[0].viewCount == 1_234_567)
+
+            // 2b. A browser that hands over its own placeholder icon: the real YouTube thumbnail takes its place.
+            func genericIcon() -> NSImage {
+                // An image whose 8x8 fingerprint is exactly Chromium's default icon: one 8-pixel block per bit,
+                // bright where the bit is set, row 0 at the top.
+                let bits: UInt64 = 0xf7e1_fde4_e0f1_81c3
+                let image = NSImage(size: NSSize(width: 64, height: 64))
+                image.lockFocus()
+                for row in 0..<8 { for col in 0..<8 {
+                    let on = (bits >> UInt64(row * 8 + col)) & 1 == 1
+                    (on ? NSColor(white: 0.9, alpha: 1) : NSColor(white: 0.15, alpha: 1)).setFill()
+                    NSRect(x: col * 8, y: (7 - row) * 8, width: 8, height: 8).fill()
+                } }
+                image.unlockFocus()
+                return image
+            }
+            let placeholder = genericIcon()
+            check("the placeholder icon is recognised as generic", NowPlayingArtwork.isGeneric(placeholder))
+            check("real artwork is not mistaken for the placeholder", !NowPlayingArtwork.isGeneric(NowPlayingStore.sampleArtwork(wide: true)) && !NowPlayingArtwork.isGeneric(NowPlayingStore.sampleArtwork()))
+            store.trackChanged(nil)
+            var withPlaceholder = track("Another video", app: "company.thebrowser.dia")
+            withPlaceholder.artwork = placeholder
+            store.trackChanged(withPlaceholder)
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            check("the placeholder is dropped and YouTube's thumbnail shown instead", store.track?.artwork != nil && !NowPlayingArtwork.isGeneric(store.track!.artwork!))
+            check("view count shows on the playing track", store.track?.viewCount == 1_234_567)
+            await settle()
+            check("the logged entry gets the real thumbnail", store.history.first { $0.title == "Another video" }.flatMap { store.thumbnail(for: $0) } != nil)
+
             // 3. Skipping through songs doesn't log the ones skipped.
             store.trackChanged(track("Skipped 1")); store.trackChanged(track("Skipped 2")); store.trackChanged(track("Kept"))
             await settle()
-            check("only the song that settled is logged", store.history.map(\.title) == ["Kept", "Real video"])
+            check("only the song that settled is logged", store.history.map(\.title) == ["Kept", "Another video", "Real video"])
             check("native apps show their own name", store.history[0].source.name == "Apple Music" && store.history[0].site == nil)
             check("Spotify and Music get their own names",
                   NowPlayingSource.native(bundleID: "com.spotify.client", appName: "x").name == "Spotify"
@@ -473,7 +507,7 @@ enum NotchHubDebug {
             store.trackChanged(nil)
             store.trackChanged(track("Real video", app: "company.thebrowser.dia"))
             await settle()
-            check("replaying moves it to the top without a duplicate", store.history.map(\.title) == ["Real video", "Kept"])
+            check("replaying moves it to the top without a duplicate", store.history.map(\.title) == ["Real video", "Kept", "Another video"])
 
             // 5. Pausing before it settles doesn't count.
             store.trackChanged(track("Barely heard"))
@@ -485,12 +519,18 @@ enum NotchHubDebug {
             check("YouTube detected", NowPlayingSource.site(forHost: "www.youtube.com")?.kind == .youtube)
             check("YouTube Music is not YouTube", NowPlayingSource.site(forHost: "music.youtube.com")?.kind == .youtubeMusic)
             check("unknown sites give no label", NowPlayingSource.site(forHost: "mail.google.com") == nil)
+            check("video ID from a watch page", NowPlayingArtwork.youTubeVideoID(host: "www.youtube.com", path: "/watch", query: "v=dQw4w9WgXcQ&t=30s") == "dQw4w9WgXcQ")
+            check("video ID from a short link", NowPlayingArtwork.youTubeVideoID(host: "youtu.be", path: "/dQw4w9WgXcQ", query: "") == "dQw4w9WgXcQ")
+            check("video ID from a Shorts page", NowPlayingArtwork.youTubeVideoID(host: "youtube.com", path: "/shorts/dQw4w9WgXcQ", query: "") == "dQw4w9WgXcQ")
+            check("no video ID on the YouTube home page or other sites", NowPlayingArtwork.youTubeVideoID(host: "www.youtube.com", path: "/", query: "") == nil && NowPlayingArtwork.youTubeVideoID(host: "vimeo.com", path: "/watch", query: "v=dQw4w9WgXcQ") == nil)
+            check("view count is read from the page data", NowPlayingArtwork.viewCount(inPage: "x\"videoDetails\":{\"viewCount\":\"48210334\",\"author\":\"y\"}") == 48_210_334 && NowPlayingArtwork.viewCount(inPage: "nothing here") == nil)
+            check("view counts read well", NowPlayingArtwork.viewsText(1_234_567) == "1.2M views" && NowPlayingArtwork.viewsText(48_210) == "48K views" && NowPlayingArtwork.viewsText(312) == "312 views" && NowPlayingArtwork.viewsText(1) == "1 view" && NowPlayingArtwork.viewsText(2_500_000_000) == "2.5B views")
             check("browsers are recognised", NowPlayingSource.isBrowser("company.thebrowser.dia") && !NowPlayingSource.isBrowser("com.spotify.client"))
 
             // 7. Persistence, removal, cap, cleanup.
             check("history survives a relaunch", NowPlayingStore(directory: dir).history == store.history)
             store.removeFromHistory(store.history[0])
-            check("removing an item", store.history.map(\.title) == ["Kept"])
+            check("removing an item", store.history.map(\.title) == ["Kept", "Another video"])
             for i in 0..<130 { store.record(track("Song \(i)", art: i < 3)) }
             check("capped at \(NowPlayingStore.maxHistory)", store.history.count == NowPlayingStore.maxHistory)
             let jpgs = (try? FileManager.default.contentsOfDirectory(atPath: dir.path))?.filter { $0.hasSuffix(".jpg") } ?? []

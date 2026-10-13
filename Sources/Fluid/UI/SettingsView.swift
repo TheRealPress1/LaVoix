@@ -298,6 +298,16 @@ struct SettingsView: View {
                             Divider().opacity(0.2)
 
                             self.settingsToggleRow(
+                                title: "YouTube thumbnails and view counts",
+                                description: "For YouTube videos, fetch the video's own thumbnail and its view count. This contacts youtube.com for the videos you watch; turn it off to stay fully offline.",
+                                isOn: Binding(
+                                    get: { NotchNowPlayingSettings.looksUpYouTube },
+                                    set: { NotchNowPlayingSettings.looksUpYouTube = $0; SettingsStore.shared.objectWillChange.send() }
+                                )
+                            )
+                            Divider().opacity(0.2)
+
+                            self.settingsToggleRow(
                                 title: "Calendar in the notch",
                                 description: "See your next meeting, join its call, or record it with one click. Needs Calendar access; events stay on this Mac.",
                                 isOn: Binding(

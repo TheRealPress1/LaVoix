@@ -8,6 +8,14 @@ import MediaRemoteAdapter
 enum NotchNowPlayingSettings {
     private static let historyKey = "LaVoixNotchNowPlayingHistory"
 
+    private static let lookupsKey = "LaVoixNotchNowPlayingYouTubeLookups"
+
+    /// For YouTube videos, fetch YouTube's own thumbnail and view count. This contacts youtube.com and ytimg.com.
+    static var looksUpYouTube: Bool {
+        get { UserDefaults.standard.object(forKey: self.lookupsKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: self.lookupsKey) }
+    }
+
     /// Remember what played, even while the notch is closed. Needs the music listener to run in the background.
     static var keepsHistory: Bool {
         get { UserDefaults.standard.object(forKey: self.historyKey) as? Bool ?? true }
@@ -33,6 +41,9 @@ final class NowPlayingStore: ObservableObject {
         var pid: Int32?
         /// Where it's playing from: the app, or the website when it's in a browser and could be read.
         var site: NowPlayingSource?
+        /// For YouTube: the video's ID and view count, when lookups are on.
+        var videoID: String?
+        var viewCount: Int64?
 
         /// Same title in the same app is the same item, whatever the artist field says at the moment: browsers fill in
         /// the artist a beat after the title.
@@ -42,7 +53,7 @@ final class NowPlayingStore: ObservableObject {
             lhs.title == rhs.title && lhs.artist == rhs.artist && lhs.album == rhs.album
                 && lhs.bundleID == rhs.bundleID && lhs.isPlaying == rhs.isPlaying
                 && lhs.duration == rhs.duration && (lhs.artwork == nil) == (rhs.artwork == nil)
-                && lhs.site == rhs.site
+                && lhs.site == rhs.site && lhs.videoID == rhs.videoID && lhs.viewCount == rhs.viewCount
         }
     }
 
@@ -56,6 +67,8 @@ final class NowPlayingStore: ObservableObject {
         var date: Date
         /// The website or app it came from, e.g. YouTube. Older entries don't have one.
         var site: NowPlayingSource?
+        var videoID: String?
+        var viewCount: Int64?
 
         var key: String { "\(self.bundleID ?? "")|\(self.title)" }
         var source: NowPlayingSource { self.site ?? NowPlayingSource.native(bundleID: self.bundleID, appName: self.appName) }
@@ -82,8 +95,16 @@ final class NowPlayingStore: ObservableObject {
     var settleDelay: TimeInterval = 5
     private var candidateKey: String?
     private var settleTask: Task<Void, Never>?
-    /// Works out the website a browser track is on. Replaced in tests.
-    var siteResolver: (Track) async -> NowPlayingSource? = { track in await NowPlayingStore.resolveSite(for: track) }
+    /// What the browser's front tab says about a track. Replaced in tests.
+    struct ResolvedSite {
+        var source: NowPlayingSource?
+        var videoID: String?
+    }
+    var siteResolver: (Track) async -> ResolvedSite? = { track in await NowPlayingStore.resolveSite(for: track) }
+    /// Fetches YouTube's thumbnail and view count for a video ID. Replaced in tests.
+    var youTubeFetcher: (String) async -> NowPlayingArtwork.YouTubeInfo = { id in await NowPlayingArtwork.fetchYouTube(videoID: id) }
+    private var youTubeCache: [String: NowPlayingArtwork.YouTubeInfo] = [:]
+    private var genericThumbnails: Set<UUID> = []
 
     init(directory: URL? = nil) {
         self.directory = directory ?? FileManager.default
@@ -105,9 +126,14 @@ final class NowPlayingStore: ObservableObject {
         store.track?.site = NowPlayingSource(kind: .youtube, name: "YouTube")
         store.track?.bundleID = "company.thebrowser.dia"
         store.track?.appName = "Dia"
+        store.track?.title = "Weekend Update ft. James Austin Johnson and Ashley Padilla"
+        store.track?.artist = "Saturday Night Live"
+        store.track?.album = nil
+        store.track?.viewCount = 1_234_567
+        store.track?.artwork = sampleArtwork(wide: true)
         let yt = NowPlayingSource(kind: .youtube, name: "YouTube")
         store.history = [
-            HistoryItem(id: UUID(), title: "Weekend Update ft. James Austin Johnson and Ashley Padilla", artist: "Saturday Night Live", album: nil, appName: "Dia", bundleID: "company.thebrowser.dia", date: now.addingTimeInterval(-90), site: yt),
+            HistoryItem(id: UUID(), title: "Weekend Update ft. James Austin Johnson and Ashley Padilla", artist: "Saturday Night Live", album: nil, appName: "Dia", bundleID: "company.thebrowser.dia", date: now.addingTimeInterval(-90), site: yt, viewCount: 1_234_567),
             HistoryItem(id: UUID(), title: "Nights", artist: "Frank Ocean", album: "Blonde", appName: "Spotify", bundleID: "com.spotify.client", date: now.addingTimeInterval(-900), site: nil),
             HistoryItem(id: UUID(), title: "Shark Tank US | Can Aira Secure A Deal?", artist: "Sony Pictures Television", album: nil, appName: "Dia", bundleID: "company.thebrowser.dia", date: now.addingTimeInterval(-4000), site: yt),
             HistoryItem(id: UUID(), title: "Blinding Lights", artist: "The Weeknd", album: "After Hours", appName: "Music", bundleID: "com.apple.Music", date: now.addingTimeInterval(-9000), site: nil),
@@ -222,7 +248,14 @@ final class NowPlayingStore: ObservableObject {
             return
         }
         let previous = self.track
-        if let previous, previous.key == track.key { track.site = previous.site }
+        // A browser's placeholder icon is not artwork; treat it as none so a real thumbnail can take its place.
+        if let art = track.artwork, NowPlayingArtwork.isGeneric(art) { track.artwork = nil }
+        if let previous, previous.key == track.key {
+            track.site = previous.site
+            track.videoID = previous.videoID
+            track.viewCount = previous.viewCount
+            if track.artwork == nil { track.artwork = previous.artwork }
+        }
         self.track = track
 
         guard track.isPlaying else { self.cancelSettle(); return }
@@ -236,11 +269,14 @@ final class NowPlayingStore: ObservableObject {
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled, let self, self.candidateKey == track.key,
                   var current = self.track, current.key == track.key, current.isPlaying else { return }
-            if current.site == nil, let site = await self.siteResolver(current) {
-                current.site = site
-                if self.track?.key == current.key { self.track?.site = site }
+            if current.site == nil, let resolved = await self.siteResolver(current) {
+                current.site = resolved.source
+                current.videoID = resolved.videoID
+                if self.track?.key == current.key { self.track?.site = resolved.source; self.track?.videoID = resolved.videoID }
             }
+            if let current2 = self.track, current2.key == current.key { current = current2 }
             self.record(current)
+            if let id = current.videoID { await self.enrich(videoID: id, key: current.key) }
         }
     }
 
@@ -250,27 +286,62 @@ final class NowPlayingStore: ObservableObject {
         self.candidateKey = nil
     }
 
-    /// Looks up the website for the track on screen, so the logo and name show up while it plays.
+    /// Looks up the website for the track on screen, so the logo and name show up while it plays, and for YouTube videos
+    /// the real thumbnail and view count.
     private func resolveSiteNow(for track: Track) {
         guard self.resolvingKey != track.key else { return }
         self.resolvingKey = track.key
         Task { [weak self] in
             guard let self else { return }
-            let site = await self.siteResolver(track)
+            let resolved = await self.siteResolver(track)
             if self.resolvingKey == track.key { self.resolvingKey = nil }
-            if let site, self.track?.key == track.key, self.track?.site == nil { self.track?.site = site }
+            guard let resolved, self.track?.key == track.key else { return }
+            if self.track?.site == nil { self.track?.site = resolved.source }
+            if self.track?.videoID == nil { self.track?.videoID = resolved.videoID }
+            if let id = resolved.videoID { await self.enrich(videoID: id, key: track.key) }
         }
+    }
+
+    /// Adds YouTube's thumbnail (when the track has none) and view count to the track on screen and to its history entry.
+    private func enrich(videoID: String, key: String) async {
+        guard NotchNowPlayingSettings.looksUpYouTube else { return }
+        let info: NowPlayingArtwork.YouTubeInfo
+        if let cached = self.youTubeCache[videoID] {
+            info = cached
+        } else {
+            info = await self.youTubeFetcher(videoID)
+            if info.viewCount != nil || info.thumbnail != nil { self.youTubeCache[videoID] = info }
+        }
+        if var current = self.track, current.key == key {
+            if let views = info.viewCount { current.viewCount = views }
+            if current.artwork == nil, let thumbnail = info.thumbnail { current.artwork = thumbnail }
+            if current != self.track { self.track = current }
+        }
+        // Fill in the history entry too, if this was already logged.
+        guard let index = self.history.firstIndex(where: { $0.key == key }) else { return }
+        var item = self.history[index]
+        item.videoID = videoID
+        if let views = info.viewCount { item.viewCount = views }
+        if let thumbnail = info.thumbnail, self.thumbnail(for: item) == nil {
+            self.saveThumbnail(thumbnail, id: item.id)
+            self.genericThumbnails.remove(item.id)
+        }
+        self.history[index] = item
+        self.saveHistory()
     }
 
     private static let tabReader = AXBrowserTabReader()
 
     /// The website a browser track is on. Only the browser's front tab can be read, so this only works while that browser
     /// is the app you're using, and only for sites we recognise; otherwise the track keeps the browser's own name.
-    static func resolveSite(for track: Track) async -> NowPlayingSource? {
+    static func resolveSite(for track: Track) async -> ResolvedSite? {
         guard NowPlayingSource.isBrowser(track.bundleID), let bundle = track.bundleID, let pid = track.pid,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == pid, AXIsProcessTrusted(),
               let url = await self.tabReader.frontmostTabURL(bundleIdentifier: bundle, processID: pid) else { return nil }
-        return NowPlayingSource.site(forHost: url.host)
+        let source = NowPlayingSource.site(forHost: url.host)
+        let videoID = NowPlayingArtwork.youTubeVideoID(host: url.host, path: url.path, query: url.query)
+        guard source != nil || videoID != nil else { return nil }
+        return ResolvedSite(source: source ?? (videoID == nil ? nil : NowPlayingSource(kind: .youtube, name: "YouTube")), videoID: videoID)
     }
 
     // MARK: - History
@@ -284,6 +355,8 @@ final class NowPlayingStore: ObservableObject {
             if let artist = track.artist, !artist.isEmpty { existing.artist = artist }
             if let album = track.album, !album.isEmpty { existing.album = album }
             if let site = track.site { existing.site = site }
+            if let id = track.videoID { existing.videoID = id }
+            if let views = track.viewCount { existing.viewCount = views }
             if let artwork = track.artwork, !FileManager.default.fileExists(atPath: self.thumbnailURL(existing.id).path) {
                 self.saveThumbnail(artwork, id: existing.id)
             }
@@ -291,7 +364,8 @@ final class NowPlayingStore: ObservableObject {
         } else {
             let item = HistoryItem(
                 id: UUID(), title: track.title, artist: track.artist, album: track.album,
-                appName: track.appName, bundleID: track.bundleID, date: date, site: track.site
+                appName: track.appName, bundleID: track.bundleID, date: date, site: track.site,
+                videoID: track.videoID, viewCount: track.viewCount
             )
             if let artwork = track.artwork { self.saveThumbnail(artwork, id: item.id) }
             self.history.insert(item, at: 0)
@@ -313,8 +387,11 @@ final class NowPlayingStore: ObservableObject {
     }
 
     func thumbnail(for item: HistoryItem) -> NSImage? {
+        if self.genericThumbnails.contains(item.id) { return nil }
         if let cached = self.thumbnailCache[item.id] { return cached }
         guard let image = NSImage(contentsOf: self.thumbnailURL(item.id)) else { return nil }
+        // Thumbnails saved before the placeholder was recognised may be the browser's icon; don't show those.
+        if NowPlayingArtwork.isGeneric(image) { self.genericThumbnails.insert(item.id); return nil }
         self.thumbnailCache[item.id] = image
         return image
     }
@@ -378,10 +455,11 @@ final class NowPlayingStore: ObservableObject {
         if deduped.count != saved.count { self.saveHistory() }
     }
 
-    private static func sampleArtwork() -> NSImage {
-        let image = NSImage(size: NSSize(width: 120, height: 120))
+    static func sampleArtwork(wide: Bool = false) -> NSImage {
+        let size = wide ? NSSize(width: 320, height: 180) : NSSize(width: 120, height: 120)
+        let image = NSImage(size: size)
         image.lockFocus()
-        NSGradient(colors: [.systemPink, .systemIndigo])?.draw(in: NSRect(x: 0, y: 0, width: 120, height: 120), angle: 45)
+        NSGradient(colors: [.systemPink, .systemIndigo])?.draw(in: NSRect(origin: .zero, size: size), angle: 45)
         image.unlockFocus()
         return image
     }

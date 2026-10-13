@@ -153,6 +153,8 @@ protocol WindowSnapshotProviding: AnyObject {
 nonisolated struct BrowserTabURL: Sendable, Equatable {
     var host: String
     var path: String
+    /// The part after `?`, e.g. `v=abc123` for a YouTube watch page. Empty when there is none.
+    var query: String = ""
 }
 
 @MainActor
@@ -1014,7 +1016,7 @@ final class AXBrowserTabReader: BrowserTabReading {
 
     private nonisolated static func parse(_ urlString: String) -> BrowserTabURL? {
         guard let components = URLComponents(string: urlString), let host = components.host else { return nil }
-        return BrowserTabURL(host: host, path: components.path)
+        return BrowserTabURL(host: host, path: components.path, query: components.query ?? "")
     }
 }
 
