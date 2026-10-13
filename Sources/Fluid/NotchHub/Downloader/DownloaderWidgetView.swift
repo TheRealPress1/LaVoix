@@ -25,6 +25,10 @@ struct DownloaderWidgetView: View {
         .onChange(of: self.focused) { _, isFocused in
             if isFocused { NotchHubController.shared.beginTextEntry() }
         }
+        // Pasting a link into the box is enough: as soon as it is a complete YouTube video link, it starts.
+        .onChange(of: self.link) { _, text in
+            if YouTubeDownloader.youTubeURL(from: text) != nil { self.start(text) }
+        }
     }
 
     // MARK: - Left: where to paste

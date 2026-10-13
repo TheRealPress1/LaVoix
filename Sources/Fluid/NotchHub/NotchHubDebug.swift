@@ -492,6 +492,7 @@ enum NotchHubDebug {
             check("a link with no scheme and spaces around it", YouTubeDownloader.youTubeURL(from: "  www.youtube.com/watch?v=\(id)  \n") == canonical)
             check("YouTube Music", YouTubeDownloader.youTubeURL(from: "https://music.youtube.com/watch?v=\(id)") == canonical)
             check("Shorts", YouTubeDownloader.youTubeURL(from: "https://www.youtube.com/shorts/\(id)") == canonical)
+            check("a half-typed or half-pasted link does not start anything", YouTubeDownloader.youTubeURL(from: "https://www.youtube.com/watch?v=aqz-KE-bp") == nil && YouTubeDownloader.youTubeURL(from: "https://www.youtube.com/watch?v=") == nil)
             check("not a video: the home page, a playlist, other sites, plain text",
                   YouTubeDownloader.youTubeURL(from: "https://www.youtube.com/") == nil && YouTubeDownloader.youTubeURL(from: "https://www.youtube.com/playlist?list=PLabc") == nil
                   && YouTubeDownloader.youTubeURL(from: "https://vimeo.com/123456789") == nil && YouTubeDownloader.youTubeURL(from: "hello there") == nil

@@ -299,7 +299,7 @@ struct SettingsView: View {
 
                             self.settingsToggleRow(
                                 title: "YouTube to MP3 tool in the notch",
-                                description: "Paste a YouTube link, or take the video that's playing, and get an MP3. Uses the free yt-dlp and ffmpeg tools on this Mac. YouTube's terms don't allow downloading, so keep it to audio you have the right to save: your own videos, Creative Commons, podcasts.",
+                                description: "Paste a YouTube link, or take the video that's playing, and get an MP3. Uses the free yt-dlp and ffmpeg tools on this Mac.",
                                 isOn: Binding(
                                     get: { NotchDownloaderSettings.isEnabled },
                                     set: { enabled in
