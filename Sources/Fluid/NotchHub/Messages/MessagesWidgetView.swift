@@ -270,8 +270,6 @@ private struct Bubble: View {
             }
             self.row
         }
-        // A message you just sent, not yet confirmed by Messages, is drawn dimmed.
-        .opacity(self.message.id < 0 ? 0.6 : 1)
     }
 
     private var row: some View {

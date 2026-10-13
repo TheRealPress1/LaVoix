@@ -32,7 +32,7 @@ final class MessagesStore: ObservableObject {
     /// database. `cacheStamps` remembers which last-message date each cached thread was read at.
     private var threadCache: [Int64: [ThreadMessage]] = [:]
     private var cacheStamps: [Int64: Date] = [:]
-    /// Messages you just sent that the Messages database hasn't shown yet. They are drawn right away (dimmed) and dropped
+    /// Messages you just sent that the Messages database hasn't shown yet. They are drawn right away, looking like any sent message, and dropped
     /// as soon as the real message appears, so sending feels instant even when Messages is slow to confirm.
     private struct PendingMessage {
         let tempID: Int64
