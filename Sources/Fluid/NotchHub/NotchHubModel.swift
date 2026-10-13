@@ -39,6 +39,12 @@ final class NotchHubModel: ObservableObject {
         self.bannerExpanded = false
     }
 
+    /// Replaces the widgets outright. For self-tests that need a specific widget (e.g. Messages with sample data).
+    func debugSetWidgets(_ widgets: [NotchWidget]) {
+        self.widgets = widgets
+        self.selectedWidgetID = widgets.first?.id ?? ""
+    }
+
     func reloadWidgets() {
         self.widgets = NotchWidgetRegistry.all()
         if !self.widgets.contains(where: { $0.id == self.selectedWidgetID }) {

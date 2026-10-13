@@ -26,6 +26,7 @@ final class NotchHubController {
     var bannerHasDraft = false
     private var unreadObserver: AnyCancellable?
     private var resignObserver: NSObjectProtocol?
+    private var becomeKeyObserver: NSObjectProtocol?
     private(set) var isEditingText = false
 
     private let openDelay: UInt64 = 90_000_000
@@ -69,6 +70,17 @@ final class NotchHubController {
                 if self.model.banner != nil, !self.bannerHovered { self.scheduleBannerDismiss(after: 4, force: true) }
             }
         }
+        self.becomeKeyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            // The panel only becomes key when a text field is clicked; keep the notch open while typing.
+            Task { @MainActor in
+                guard let self else { return }
+                self.isEditingText = true
+                self.closeTask?.cancel()
+                self.closeTask = nil
+            }
+        }
         self.startMessagesIfEnabled()
         NotchMeetingCardController.shared.hubStateChanged()
         if NotchClipboardSettings.isEnabled { ClipboardStore.shared.start() }
@@ -96,6 +108,8 @@ final class NotchHubController {
         self.screenObserver = nil
         if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
         self.resignObserver = nil
+        if let becomeKeyObserver { NotificationCenter.default.removeObserver(becomeKeyObserver) }
+        self.becomeKeyObserver = nil
         self.peekTask?.cancel()
         self.bannerTask?.cancel()
         self.model.hideBanner()
@@ -398,6 +412,7 @@ final class NotchHubController {
     // MARK: - Debug
 
     func debugIgnorePointer(_ value: Bool) { self.ignoresPointer = value }
+    var debugWindow: NSWindow? { self.window }
 
     func debugShowBanner(_ content: NotchBannerContent) { self.showBanner(content) }
     func debugSetBannerExpanded(_ expanded: Bool) { self.model.setBannerExpanded(expanded) }

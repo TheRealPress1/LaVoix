@@ -288,6 +288,67 @@ enum NotchHubDebug {
         }
     }
 
+    /// `LAVOIX_NOTCH_TYPING_TEST=1` opens the notch on Messages (sample data), clicks the reply field with a synthetic
+    /// mouse click, and reports whether the notch became the key window with a text editor focused, then types into it.
+    @MainActor static func typingTestIfRequested() {
+        guard ProcessInfo.processInfo.environment["LAVOIX_NOTCH_TYPING_TEST"] == "1" else { return }
+        Task { @MainActor in
+            func out(_ text: String) { FileHandle.standardOutput.write(Data((text + "\n").utf8)) }
+            func fields(in view: NSView) -> [NSView] {
+                var found: [NSView] = []
+                if view is NSTextField || view is NSTextView { found.append(view) }
+                for sub in view.subviews { found += fields(in: sub) }
+                return found
+            }
+            @MainActor func state(_ label: String, _ window: NSWindow) {
+                out("[\(label)] key=\(window.isKeyWindow) responder=\(window.firstResponder.map { String(describing: type(of: $0)) } ?? "none") editing=\(NotchHubController.shared.isEditingText)")
+            }
+            let hub = NotchHubController.shared
+            let store = MessagesStore.sample()
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            hub.debugIgnorePointer(true)
+            hub.start()
+            hub.model.debugSetWidgets([
+                NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") { AnyView(MessagesWidgetView(store: store)) },
+            ])
+            hub.debugSetOpen(true)
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard let window = hub.debugWindow, let content = window.contentView else { out("no window"); exit(1) }
+            state("opened", window)
+            let found = fields(in: content)
+            out("text fields found: \(found.map { String(describing: type(of: $0)) })")
+            guard let field = found.first else { out("TYPING TEST: no text field in the hierarchy"); exit(1) }
+            let rect = field.convert(field.bounds, to: nil)
+            let point = NSPoint(x: rect.midX, y: rect.midY)
+            out("field frame in window: \(Int(rect.minX)),\(Int(rect.minY)) \(Int(rect.width))x\(Int(rect.height)); window frame \(window.frame)")
+            out("view under the click: \(content.hitTest(point).map { String(describing: type(of: $0)) } ?? "none")")
+            let monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { event in
+                out("mouse event delivered: \(event.type == .leftMouseDown ? "down" : "up") window=\(event.window === window)")
+                return event
+            }
+            _ = monitor
+            // Click the middle of the reply capsule, a little left of the field's own bounds as a real click would land.
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                if let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                    // Queue it like a real click; handing a mouse-down straight to a text field blocks waiting for the mouse-up.
+                    NSApp.postEvent(event, atStart: false)
+                }
+            }
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            state("after click", window)
+            if let editor = window.firstResponder as? NSTextView {
+                editor.insertText("hello", replacementRange: NSRange(location: NSNotFound, length: 0))
+                out("typed text now reads: \"\(editor.string)\"")
+                out("TYPING TEST: PASS")
+            } else {
+                out("TYPING TEST: FAIL (no text editor is first responder)")
+            }
+            hub.stop()
+            exit(0)
+        }
+    }
+
     /// `LAVOIX_NOWPLAYING_HISTORY_AUTOTEST=1` checks the listening history (logging, de-duplication, cap, persistence)
     /// in a temporary folder.
     @MainActor static func nowPlayingHistoryAutotestIfRequested() {

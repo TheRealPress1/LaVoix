@@ -20,13 +20,17 @@ final class NotchHubWindow: NSPanel {
         self.level = .mainMenu + 3
         self.collectionBehavior = [.fullScreenAuxiliary, .stationary, .canJoinAllSpaces, .ignoresCycle]
         self.ignoresMouseEvents = true
+        // Become the key window only when a click lands on something that needs typing (a text field), not for
+        // ordinary clicks, so the notch never takes the keyboard from the app you're working in unless you ask.
+        self.becomesKeyOnlyIfNeeded = true
         // The notch is always black, so controls inside it must render for dark mode even when macOS is light.
         self.appearance = NSAppearance(named: .darkAqua)
     }
 
-    /// Becomes true only while the user is typing a reply, so the notch never steals focus otherwise.
+    /// Set while a reply is being typed. Kept so callers can ask for the keyboard explicitly (hovering a card).
     var allowsKey = false
 
-    override var canBecomeKey: Bool { self.allowsKey }
+    /// Always able to become key; `becomesKeyOnlyIfNeeded` keeps that from happening unless a text field is clicked.
+    override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 }

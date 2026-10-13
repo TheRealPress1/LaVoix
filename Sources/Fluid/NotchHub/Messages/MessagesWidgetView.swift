@@ -225,6 +225,11 @@ private struct ThreadView: View {
             }
         }
         .onChange(of: self.store.selectedChatID) { _, _ in self.draft = "" }
+        // However the field got focus (a click on the native field, or the tap handler), make sure the notch has the
+        // keyboard and stays open while you type.
+        .onChange(of: self.focused) { _, isFocused in
+            if isFocused { NotchHubController.shared.beginTextEntry() }
+        }
         .onDisappear { NotchHubController.shared.endTextEntry() }
     }
 
