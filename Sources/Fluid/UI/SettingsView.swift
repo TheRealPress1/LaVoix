@@ -375,6 +375,29 @@ struct SettingsView: View {
                             )
                             Divider().opacity(0.2)
 
+                            if NotchMessagesSettings.isEnabled {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack(alignment: .center) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Turn off Messages' own banners")
+                                                .font(self.theme.typography.bodyStrong)
+                                                .foregroundStyle(self.settingsTitleText)
+                                            Text("macOS will keep showing its banner in the top right as well. Set Messages to \"None\" under Notification style, in System Settings, and message cards will come only from the notch. The notch still sees every message.")
+                                                .font(self.theme.typography.bodySmall)
+                                                .foregroundStyle(self.settingsSecondaryText)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                        Spacer()
+                                        Button("Open Settings") {
+                                            if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.apple.MobileSMS") {
+                                                NSWorkspace.shared.open(url)
+                                            }
+                                        }
+                                    }
+                                }
+                                Divider().opacity(0.2)
+                            }
+
                             self.settingsToggleRow(
                                 title: "Show message text in the notch",
                                 description: "Turn off to show who messaged without showing what they said.",
