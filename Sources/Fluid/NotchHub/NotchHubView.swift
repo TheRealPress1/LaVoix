@@ -20,7 +20,7 @@ struct NotchHubView: View {
         let open = self.isOpen
         let banner = open ? nil : self.model.banner
         let size: CGSize = open
-            ? NotchGeometry.openSize
+            ? (self.model.tabsExpanded ? NotchGeometry.openSize : NotchGeometry.openSizeCollapsed)
             : (banner != nil
                 ? NotchGeometry.bannerSize(content: banner, expanded: self.model.bannerExpanded, notchHeight: self.model.closedSize.height)
                 : self.model.closedSize)
@@ -46,6 +46,7 @@ struct NotchHubView: View {
         }
         .frame(width: NotchGeometry.windowSize.width, height: NotchGeometry.windowSize.height, alignment: .top)
         .animation(.spring(response: 0.42, dampingFraction: 0.82), value: open)
+        .animation(.spring(response: 0.36, dampingFraction: 0.86), value: self.model.tabsExpanded)
         .animation(.spring(response: 0.42, dampingFraction: 0.82), value: self.model.banner?.id)
         .animation(.spring(response: 0.38, dampingFraction: 0.85), value: self.model.bannerExpanded)
     }
@@ -75,16 +76,19 @@ struct NotchHubView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .animation(.easeInOut(duration: 0.16), value: selectedID)
-            // The tab icons sit along the bottom edge, like a dock. ImageRenderer can't draw a ScrollView, so previews get
-            // the plain row.
-            Group {
-                if self.forceOpen || Self.previewStatic {
-                    self.tabButtons.padding(.horizontal, 34).frame(maxWidth: .infinity, alignment: .leading).frame(height: NotchGeometry.tabRowHeight)
-                } else {
-                    self.tabRow
+            // The tab icons unfold along the bottom edge when the title's arrow is clicked. ImageRenderer can't draw a
+            // ScrollView, so previews get the plain row.
+            if self.model.tabsExpanded {
+                Group {
+                    if self.forceOpen || Self.previewStatic {
+                        self.tabButtons.padding(.horizontal, 34).frame(maxWidth: .infinity, alignment: .leading).frame(height: NotchGeometry.tabRowHeight)
+                    } else {
+                        self.tabRow
+                    }
                 }
+                .padding(.bottom, NotchGeometry.tabRowBottomInset)
+                .transition(.opacity)
             }
-            .padding(.bottom, NotchGeometry.tabRowBottomInset)
         }
         .onAppear { self.mounted = selectedID.map { [$0] } ?? [] }
         .onChange(of: selectedID) { old, new in
@@ -93,15 +97,27 @@ struct NotchHubView: View {
         .onDisappear { self.mounted = [] }
     }
 
-    /// The band behind the camera carries the current tab's name on the left; the tab icons sit in their own row along the
-    /// bottom edge, so they are never covered however many there are.
+    /// The band behind the camera carries the current tab's name on the left, with an arrow that unfolds the tab icons along
+    /// the bottom edge, so they are never covered however many there are.
     private var header: some View {
         HStack(spacing: 0) {
-            Text(self.model.selectedWidget?.title ?? "")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.5))
-                .lineLimit(1)
+            Button {
+                self.model.tabsExpanded.toggle()
+            } label: {
+                HStack(spacing: 5) {
+                    Text(self.model.selectedWidget?.title ?? "")
+                        .font(.system(size: 12, weight: .medium))
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .rotationEffect(.degrees(self.model.tabsExpanded ? 180 : 0))
+                }
+                .foregroundStyle(.white.opacity(self.model.tabsExpanded ? 0.8 : 0.5))
                 .frame(maxWidth: (NotchGeometry.openSize.width - self.model.closedSize.width) / 2 - 46, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(self.model.tabsExpanded ? "Hide the tabs" : "Show the tabs")
             Spacer(minLength: 0)
         }
         .padding(.leading, 38)
@@ -135,6 +151,7 @@ struct NotchHubView: View {
                 Button {
                     NotchHubController.shared.verifyTabSwitch(to: widget.id)
                     self.model.selectedWidgetID = widget.id
+                    self.model.tabsExpanded = false
                 } label: {
                     Image(systemName: widget.systemImage)
                         .font(.system(size: 13, weight: .medium))

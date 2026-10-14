@@ -6,6 +6,8 @@ import SwiftUI
 final class NotchHubModel: ObservableObject {
     @Published private(set) var isOpen = false
     @Published var selectedWidgetID: String
+    /// The row of tab icons is folded away until the title's arrow is clicked.
+    @Published var tabsExpanded = false
     @Published private(set) var closedSize: CGSize = .init(width: 190, height: 32)
 
     @Published private(set) var widgets: [NotchWidget]
@@ -68,6 +70,7 @@ final class NotchHubModel: ObservableObject {
     }
 
     func close() {
+        self.tabsExpanded = false
         guard self.isOpen else { return }
         self.isOpen = false
     }

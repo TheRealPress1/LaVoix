@@ -7,7 +7,10 @@ enum NotchHubDebug {
     @MainActor static func renderIfRequested() {
         guard let path = ProcessInfo.processInfo.environment["LAVOIX_NOTCH_RENDER"] else { return }
         Task { @MainActor in
-            let widgetName = ProcessInfo.processInfo.environment["LAVOIX_NOTCH_RENDER_WIDGET"] ?? "system"
+            var widgetName = ProcessInfo.processInfo.environment["LAVOIX_NOTCH_RENDER_WIDGET"] ?? "system"
+            // A trailing "+tabs" renders the notch with its tab row unfolded.
+            let tabsUnfolded = widgetName.hasSuffix("+tabs")
+            if tabsUnfolded { widgetName = String(widgetName.dropLast(5)) }
             if widgetName.hasPrefix("meeting") {
                 let model = NotchMeetingModel()
                 model.event = CalendarStore.sample().events.first
@@ -130,6 +133,7 @@ enum NotchHubDebug {
                 model = NotchHubModel()
             }
             model.setClosedSize(CGSize(width: 190, height: 32))
+            model.tabsExpanded = tabsUnfolded || widgetName == "tabs-many"
             let view = NotchHubView(model: model, forceOpen: !widgetName.hasPrefix("banner"))
                 .padding(20)
                 .background(Color(white: 0.16))

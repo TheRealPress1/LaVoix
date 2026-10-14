@@ -6,6 +6,10 @@ enum NotchGeometry {
     /// Height of the row of tab icons along the bottom edge.
     static let tabRowHeight: CGFloat = 30
     static let tabRowBottomInset: CGFloat = 8
+    /// What the tab row adds to the open notch while it is unfolded.
+    static var tabRowTotal: CGFloat { self.tabRowHeight + self.tabRowBottomInset }
+    /// The open notch with the tab row folded away.
+    static var openSizeCollapsed: CGSize { CGSize(width: self.openSize.width, height: self.openSize.height - self.tabRowTotal) }
     /// Extra transparent room around the open notch for the drop shadow.
     static let shadowPadding: CGFloat = 24
 
