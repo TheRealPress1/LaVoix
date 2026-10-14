@@ -55,12 +55,6 @@ struct NotchHubView: View {
         return VStack(spacing: 0) {
             self.header
                 .frame(height: max(self.model.closedSize.height, 28))
-            // ImageRenderer can't draw a ScrollView, so previews get the plain row.
-            if self.forceOpen || Self.previewStatic {
-                self.tabButtons.frame(maxWidth: .infinity).frame(height: NotchGeometry.tabRowHeight)
-            } else {
-                self.tabRow
-            }
             // Widgets stay mounted once shown (and the rest are warmed up just after opening), so switching tabs is a
             // quick crossfade instead of rebuilding a view and restarting its data source every time.
             ZStack(alignment: .top) {
@@ -70,7 +64,7 @@ struct NotchHubView: View {
                         widget.content()
                             .padding(.horizontal, 34)
                             .padding(.top, 8)
-                            .padding(.bottom, 22)
+                            .padding(.bottom, 6)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                             .opacity(active ? 1 : 0)
                             .allowsHitTesting(active)
@@ -79,7 +73,18 @@ struct NotchHubView: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .animation(.easeInOut(duration: 0.16), value: selectedID)
+            // The tab icons sit along the bottom edge, like a dock. ImageRenderer can't draw a ScrollView, so previews get
+            // the plain row.
+            Group {
+                if self.forceOpen || Self.previewStatic {
+                    self.tabButtons.frame(maxWidth: .infinity).frame(height: NotchGeometry.tabRowHeight)
+                } else {
+                    self.tabRow
+                }
+            }
+            .padding(.bottom, NotchGeometry.tabRowBottomInset)
         }
         .onAppear { self.mounted = selectedID.map { [$0] } ?? [] }
         .onChange(of: selectedID) { old, new in
@@ -88,8 +93,8 @@ struct NotchHubView: View {
         .onDisappear { self.mounted = [] }
     }
 
-    /// The band behind the camera carries the current tab's name on the left; the tab icons sit in their own row below it,
-    /// so they are never covered however many there are.
+    /// The band behind the camera carries the current tab's name on the left; the tab icons sit in their own row along the
+    /// bottom edge, so they are never covered however many there are.
     private var header: some View {
         HStack(spacing: 0) {
             Text(self.model.selectedWidget?.title ?? "")

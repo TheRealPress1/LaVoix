@@ -2,9 +2,10 @@ import AppKit
 
 /// Where the notch is and how big it is, measured from the screen rather than hard-coded.
 enum NotchGeometry {
-    static let openSize = CGSize(width: 660, height: 268)
-    /// Height of the row of tab icons under the camera band.
+    static let openSize = CGSize(width: 660, height: 276)
+    /// Height of the row of tab icons along the bottom edge.
     static let tabRowHeight: CGFloat = 30
+    static let tabRowBottomInset: CGFloat = 8
     /// Extra transparent room around the open notch for the drop shadow.
     static let shadowPadding: CGFloat = 24
 
