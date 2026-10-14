@@ -36,6 +36,7 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var autoDetectEnabled: Bool
     var browserDetectionEnabled: Bool
     var autoNotesEnabled: Bool
+    var brainExportEnabled: Bool
     var notesCommand: String
 
     init(settings: SettingsStore = .shared) {
@@ -43,6 +44,7 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         self.autoDetectEnabled = settings.meetingAutoDetectEnabled
         self.browserDetectionEnabled = settings.meetingAutoDetectBrowserEnabled
         self.autoNotesEnabled = settings.meetingAutoNotesEnabled
+        self.brainExportEnabled = settings.meetingBrainExportEnabled
         self.notesCommand = settings.meetingNotesCommand
         self.languageCode = defaults.languageCode ?? "en"
         self.mode = defaults.mode
@@ -1161,6 +1163,7 @@ struct MeetingTranscriptionView: View {
         self.setupDraft.autoDetectEnabled = SettingsStore.shared.meetingAutoDetectEnabled
         self.setupDraft.browserDetectionEnabled = SettingsStore.shared.meetingAutoDetectBrowserEnabled
         self.setupDraft.autoNotesEnabled = SettingsStore.shared.meetingAutoNotesEnabled
+        self.setupDraft.brainExportEnabled = SettingsStore.shared.meetingBrainExportEnabled
         self.setupDraft.notesCommand = SettingsStore.shared.meetingNotesCommand
         self.setupDraftBeforeEditing = self.setupDraft
         self.draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
@@ -1217,6 +1220,7 @@ struct MeetingTranscriptionView: View {
         settings.meetingAutoDetectEnabled = self.setupDraft.autoDetectEnabled
         settings.meetingAutoDetectBrowserEnabled = self.setupDraft.browserDetectionEnabled
         settings.meetingAutoNotesEnabled = self.setupDraft.autoNotesEnabled
+        settings.meetingBrainExportEnabled = self.setupDraft.brainExportEnabled
         settings.meetingNotesCommand = self.setupDraft.notesCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         settings.meetingAudioRetentionPolicy = self.draftMeetingAudioRetentionPolicy
         if previousRetentionPolicy != self.draftMeetingAudioRetentionPolicy {

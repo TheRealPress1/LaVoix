@@ -128,6 +128,7 @@ final class MeetingNotesViewModel: ObservableObject {
                 self.phase = .idle
                 if let directory = self.directory {
                     let saved = Saved(transcriptHash: Self.fingerprint(transcript: transcript, notes: notes), modelID: modelID, text: text)
+                    if kind == .executive { MeetingAutoAnalysis.shared.exportToBrain(session, summary: text) }
                     MeetingReadableFiles.write(
                         MeetingReadableFiles.summaryMarkdown(for: session, text: text, writtenBy: modelID),
                         named: MeetingReadableFiles.summaryFileName(for: kind), in: directory

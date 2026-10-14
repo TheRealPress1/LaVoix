@@ -2109,6 +2109,28 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Copy each finished meeting into myOS's Brain as a Markdown note (default: ON; does nothing if myOS isn't set up).
+    var meetingBrainExportEnabled: Bool {
+        get {
+            let value = self.defaults.object(forKey: Keys.meetingBrainExportEnabled)
+            if value == nil { return true }
+            return self.defaults.bool(forKey: Keys.meetingBrainExportEnabled)
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.meetingBrainExportEnabled)
+        }
+    }
+
+    /// Overrides the myOS Brain folder LaVoix writes to; empty means the folder myOS itself records.
+    var meetingBrainFolderOverride: String {
+        get { self.defaults.string(forKey: Keys.meetingBrainFolderOverride) ?? "" }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.meetingBrainFolderOverride)
+        }
+    }
+
     /// A shell command that writes meeting notes (prompt on stdin, notes on stdout), e.g. `claude -p`. Empty means the
     /// on-device model.
     var meetingNotesCommand: String {
@@ -5855,6 +5877,8 @@ private extension SettingsStore {
         static let meetingAudioRetentionPolicy = "MeetingAudioRetentionPolicy"
         static let meetingTranscriptionBackendID = "MeetingTranscriptionBackendID"
         static let meetingAutoDetectEnabled = "MeetingAutoDetectEnabled"
+        static let meetingBrainExportEnabled = "MeetingBrainExportEnabled"
+        static let meetingBrainFolderOverride = "MeetingBrainFolderOverride"
         static let meetingNotesCommand = "MeetingNotesCommand"
         static let meetingAutoNotesEnabled = "MeetingAutoNotesEnabled"
         static let meetingAutoDetectBrowserEnabled = "MeetingAutoDetectBrowserEnabled"

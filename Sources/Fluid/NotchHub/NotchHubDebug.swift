@@ -229,6 +229,10 @@ enum NotchHubDebug {
             }
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-autonotes-\(UUID().uuidString)")
             let store = MeetingSessionStore(rootDirectory: root)
+            // Never write fixtures into the real myOS Brain.
+            let brain = root.appendingPathComponent("brain")
+            SettingsStore.shared.meetingBrainFolderOverride = brain.path
+            SettingsStore.shared.meetingBrainExportEnabled = true
             let track = UUID()
             var session = MeetingSession(
                 configuration: MeetingCaptureConfiguration(
@@ -283,6 +287,58 @@ enum NotchHubDebug {
             await settle()
             check("empty transcript: stays idle", service.status == .idle)
 
+            // myOS Brain export.
+            func brainFiles() -> [URL] {
+                ((try? FileManager.default.contentsOfDirectory(at: brain, includingPropertiesForKeys: nil)) ?? [])
+                    .filter { !$0.lastPathComponent.hasPrefix(".") }
+            }
+            @MainActor func waitForBrain(containing text: String) async -> String? {
+                for _ in 0..<60 {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    if let file = brainFiles().first, let body = try? String(contentsOf: file, encoding: .utf8), body.contains(text) { return body }
+                }
+                return brainFiles().first.flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+            }
+            service.start(session: session)
+            await settle()
+            let note = await waitForBrain(containing: "- Ship on Thursday.")
+            check("brain: one note, titled by its first line", brainFiles().count == 1 && note?.hasPrefix("# Auto notes fixture\n") == true)
+            check("brain: no YAML frontmatter (Brain titles come from the first line)", note?.hasPrefix("---") == false)
+            check("brain: summary inside the markers", note?.contains(MeetingBrainExporter.beginMarker + "\n## Summary\n\n- Ship on Thursday.\n" + MeetingBrainExporter.endMarker) == true)
+            check("brain: meeting id comment and transcript path", note?.contains("<!-- lavoix:meeting id=") == true && note?.contains("transcript.md") == true)
+            check("brain: file name is stable and safe", brainFiles().first.map { $0.lastPathComponent == MeetingBrainExporter.fileName(for: session) && $0.lastPathComponent.hasPrefix("meeting-") && $0.pathExtension == "md" } == true)
+            check("brain: no temp files left behind", ((try? FileManager.default.contentsOfDirectory(atPath: brain.path)) ?? []).allSatisfy { !$0.hasSuffix(".tmp") })
+
+            if let file = brainFiles().first, let body = try? String(contentsOf: file, encoding: .utf8) {
+                try? (body + "\nMy own thoughts after the call.\n").write(to: file, atomically: true, encoding: .utf8)
+            }
+            service.generatorOverride = { _, _ in "- Changed to Friday." }
+            service.start(session: session)
+            await settle()
+            let refreshed = await waitForBrain(containing: "- Changed to Friday.")
+            check("brain: a new summary replaces only the block", refreshed?.contains("- Changed to Friday.") == true && refreshed?.contains("- Ship on Thursday.") == false)
+            check("brain: text the user wrote outside the block survives", refreshed?.contains("My own thoughts after the call.") == true)
+
+            if let file = brainFiles().first {
+                let stripped = "# Auto notes fixture\n\nI deleted the markers.\n"
+                try? stripped.write(to: file, atomically: true, encoding: .utf8)
+                service.generatorOverride = { _, _ in "- Should not appear." }
+                service.start(session: session)
+                await settle()
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                check("brain: a note whose markers were removed is left alone", (try? String(contentsOf: file, encoding: .utf8)) == stripped)
+                try? FileManager.default.removeItem(at: file)
+            }
+            SettingsStore.shared.meetingBrainExportEnabled = false
+            service.start(session: session)
+            await settle()
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            check("brain: export off writes nothing", brainFiles().isEmpty)
+            SettingsStore.shared.meetingBrainExportEnabled = true
+            check("brain: finds myOS's folder from its bootstrap database or reports none", {
+                let bogus = FileManager.default.temporaryDirectory.appendingPathComponent("nope-\(UUID().uuidString).db")
+                return MeetingBrainExporter.brainDirectory(override: nil, bootstrapDatabase: bogus) == nil
+            }())
             service.generatorOverride = { _, _ in throw MeetingNotesError.emptyOutput }
             service.start(session: session)
             await settle()
@@ -313,6 +369,7 @@ enum NotchHubDebug {
             check("auto-notes via command: written, model id is command:cat", viaCommand?.text == "- written by my command" && viaCommand?.modelID == "command:cat")
             SettingsStore.shared.meetingNotesCommand = ""
 
+            SettingsStore.shared.meetingBrainFolderOverride = ""
             try? FileManager.default.removeItem(at: root)
             print(failures == 0 ? "AUTONOTES AUTOTEST ALL PASSED" : "AUTONOTES AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)

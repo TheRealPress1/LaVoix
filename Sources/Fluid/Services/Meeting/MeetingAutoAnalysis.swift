@@ -29,6 +29,7 @@ final class MeetingAutoAnalysis: ObservableObject {
         self.status = .idle
         // The readable transcript is always kept, whether or not notes are written.
         self.writeTranscriptFile(session)
+        self.exportToBrain(session, summary: nil)
         guard SettingsStore.shared.meetingAutoNotesEnabled else { return }
         guard session.transcriptSegments.contains(where: { !$0.isEcho && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { return }
         self.task?.cancel()
@@ -88,6 +89,7 @@ final class MeetingAutoAnalysis: ObservableObject {
                 MeetingReadableFiles.summaryMarkdown(for: session, text: text, writtenBy: modelID),
                 named: MeetingReadableFiles.summaryFileName(for: kind), in: directory
             )
+            self.exportToBrain(session, summary: text)
             self.status = .ready(session.id)
             DebugLogger.shared.log("auto-notes written session=\(session.id)", source: "MeetingAutoAnalysis")
         } catch is CancellationError {
@@ -95,6 +97,25 @@ final class MeetingAutoAnalysis: ObservableObject {
         } catch {
             DebugLogger.shared.log("auto-notes failed: \(error.localizedDescription)", source: "MeetingAutoAnalysis")
             self.status = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Copies the meeting into myOS's Brain: creates the note, or refreshes just its summary block.
+    func exportToBrain(_ session: MeetingSession, summary: String?) {
+        let settings = SettingsStore.shared
+        guard settings.meetingBrainExportEnabled,
+              let brain = MeetingBrainExporter.brainDirectory(override: settings.meetingBrainFolderOverride),
+              session.transcriptSegments.contains(where: { !$0.isEcho }) else { return }
+        let store = self.store
+        Task.detached(priority: .utility) {
+            let directory = try? await store.existingSessionDirectory(for: session.id)
+            let notes = directory.flatMap { try? String(contentsOf: $0.appendingPathComponent("notes.md"), encoding: .utf8) } ?? ""
+            let transcript = directory?.appendingPathComponent("transcript.md").path
+            do {
+                try MeetingBrainExporter.upsert(session: session, summary: summary, userNotes: notes, transcriptPath: transcript, brainDirectory: brain)
+            } catch {
+                DebugLogger.shared.warning("Brain export failed: \(error.localizedDescription)", source: "MeetingBrainExporter")
+            }
         }
     }
 

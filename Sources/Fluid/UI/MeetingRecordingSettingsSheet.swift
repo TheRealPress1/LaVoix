@@ -428,6 +428,20 @@ struct MeetingRecordingSettingsSheet: View {
                             .accessibilityLabel("Write notes automatically")
                     }
                     Divider()
+                    MeetingAdaptiveSetupRow(
+                        title: "Save meetings to myOS",
+                        detail: MeetingBrainExporter.brainDirectory(override: SettingsStore.shared.meetingBrainFolderOverride).map {
+                            "Adds a note with the summary to your myOS Brain: \($0.path)"
+                        } ?? "myOS isn't set up on this Mac, so there is nothing to save to.",
+                        trailingSwitch: true
+                    ) {
+                        Toggle("Save meetings to myOS", isOn: self.$draft.brainExportEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .meetingHoverFeedback()
+                            .accessibilityLabel("Save meetings to myOS")
+                    }
+                    Divider()
                     MeetingNotesCommandRow(command: self.$draft.notesCommand)
                 }
             }
