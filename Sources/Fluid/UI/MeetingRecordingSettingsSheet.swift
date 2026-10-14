@@ -442,6 +442,18 @@ struct MeetingRecordingSettingsSheet: View {
                             .accessibilityLabel("Save meetings to myOS")
                     }
                     Divider()
+                    MeetingAdaptiveSetupRow(
+                        title: "Share contacts with myOS",
+                        detail: "Writes your address book (names, phones, emails) to myOS's data folder so the same person is recognised everywhere. That folder may sync through iCloud. Off by default.",
+                        trailingSwitch: true
+                    ) {
+                        Toggle("Share contacts with myOS", isOn: self.$draft.shareContactsEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .meetingHoverFeedback()
+                            .accessibilityLabel("Share contacts with myOS")
+                    }
+                    Divider()
                     MeetingNotesCommandRow(command: self.$draft.notesCommand)
                 }
             }

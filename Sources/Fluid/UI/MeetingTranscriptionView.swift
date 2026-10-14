@@ -37,6 +37,7 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var browserDetectionEnabled: Bool
     var autoNotesEnabled: Bool
     var brainExportEnabled: Bool
+    var shareContactsEnabled: Bool
     var notesCommand: String
 
     init(settings: SettingsStore = .shared) {
@@ -45,6 +46,7 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         self.browserDetectionEnabled = settings.meetingAutoDetectBrowserEnabled
         self.autoNotesEnabled = settings.meetingAutoNotesEnabled
         self.brainExportEnabled = settings.meetingBrainExportEnabled
+        self.shareContactsEnabled = settings.shareContactsWithMyOSEnabled
         self.notesCommand = settings.meetingNotesCommand
         self.languageCode = defaults.languageCode ?? "en"
         self.mode = defaults.mode
@@ -1164,6 +1166,7 @@ struct MeetingTranscriptionView: View {
         self.setupDraft.browserDetectionEnabled = SettingsStore.shared.meetingAutoDetectBrowserEnabled
         self.setupDraft.autoNotesEnabled = SettingsStore.shared.meetingAutoNotesEnabled
         self.setupDraft.brainExportEnabled = SettingsStore.shared.meetingBrainExportEnabled
+        self.setupDraft.shareContactsEnabled = SettingsStore.shared.shareContactsWithMyOSEnabled
         self.setupDraft.notesCommand = SettingsStore.shared.meetingNotesCommand
         self.setupDraftBeforeEditing = self.setupDraft
         self.draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
@@ -1221,6 +1224,8 @@ struct MeetingTranscriptionView: View {
         settings.meetingAutoDetectBrowserEnabled = self.setupDraft.browserDetectionEnabled
         settings.meetingAutoNotesEnabled = self.setupDraft.autoNotesEnabled
         settings.meetingBrainExportEnabled = self.setupDraft.brainExportEnabled
+        settings.shareContactsWithMyOSEnabled = self.setupDraft.shareContactsEnabled
+        if self.setupDraft.shareContactsEnabled { ContactsInboxScheduler.shared.start(); ContactsInboxScheduler.shared.schedule(after: 2) }
         settings.meetingNotesCommand = self.setupDraft.notesCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         settings.meetingAudioRetentionPolicy = self.draftMeetingAudioRetentionPolicy
         if previousRetentionPolicy != self.draftMeetingAudioRetentionPolicy {

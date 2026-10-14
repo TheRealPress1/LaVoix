@@ -2122,6 +2122,16 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Share the address book with myOS as a snapshot file, so people can be recognised across sources (default: OFF).
+    /// The myOS data folder may sync through iCloud, so this is opt-in.
+    var shareContactsWithMyOSEnabled: Bool {
+        get { self.defaults.bool(forKey: Keys.shareContactsWithMyOSEnabled) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.shareContactsWithMyOSEnabled)
+        }
+    }
+
     /// Overrides the myOS Brain folder LaVoix writes to; empty means the folder myOS itself records.
     var meetingBrainFolderOverride: String {
         get { self.defaults.string(forKey: Keys.meetingBrainFolderOverride) ?? "" }
@@ -5878,6 +5888,7 @@ private extension SettingsStore {
         static let meetingTranscriptionBackendID = "MeetingTranscriptionBackendID"
         static let meetingAutoDetectEnabled = "MeetingAutoDetectEnabled"
         static let meetingBrainExportEnabled = "MeetingBrainExportEnabled"
+        static let shareContactsWithMyOSEnabled = "ShareContactsWithMyOSEnabled"
         static let meetingBrainFolderOverride = "MeetingBrainFolderOverride"
         static let meetingNotesCommand = "MeetingNotesCommand"
         static let meetingAutoNotesEnabled = "MeetingAutoNotesEnabled"

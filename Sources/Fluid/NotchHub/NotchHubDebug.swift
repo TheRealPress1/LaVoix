@@ -1,3 +1,4 @@
+import Contacts
 import CryptoKit
 import SwiftUI
 
@@ -372,6 +373,62 @@ enum NotchHubDebug {
             SettingsStore.shared.meetingBrainFolderOverride = ""
             try? FileManager.default.removeItem(at: root)
             print(failures == 0 ? "AUTONOTES AUTOTEST ALL PASSED" : "AUTONOTES AUTOTEST \(failures) FAILED")
+            exit(failures == 0 ? 0 : 1)
+        }
+    }
+
+    /// `LAVOIX_CONTACTS_EXPORT_AUTOTEST=1` checks the contacts snapshot the engine hands to myOS, using made-up cards and a
+    /// temporary folder. With `LAVOIX_CONTACTS_CONTRACT_DIR=<dir>` it also leaves the file there so myOS's importer can
+    /// be run against exactly what LaVoix writes.
+    @MainActor static func contactsExportAutotestIfRequested() {
+        let env = ProcessInfo.processInfo.environment
+        guard env["LAVOIX_CONTACTS_EXPORT_AUTOTEST"] == "1" else { return }
+        Task { @MainActor in
+            var failures = 0
+            func check(_ name: String, _ ok: Bool) {
+                print("\(ok ? "PASS" : "FAIL") \(name)")
+                if !ok { failures += 1 }
+            }
+            let root = env["LAVOIX_CONTACTS_CONTRACT_DIR"].map { URL(fileURLWithPath: $0) }
+                ?? FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-contacts-\(UUID().uuidString)")
+            try? FileManager.default.removeItem(at: root)
+            let defaults = UserDefaults(suiteName: "lavoix.contacts.autotest.\(UUID().uuidString)")!
+
+            let mutable = CNMutableContact()
+            mutable.givenName = " Yuri "
+            mutable.familyName = "Pereira"
+            mutable.organizationName = "Acme"
+            mutable.emailAddresses = [CNLabeledValue(label: CNLabelWork, value: "Yuri@Example.com" as NSString)]
+            mutable.phoneNumbers = [CNLabeledValue(label: CNLabelPhoneNumberMobile, value: CNPhoneNumber(stringValue: "+1 (415) 234-5678"))]
+            let mapped = ContactsInboxExporter.card(from: mutable)
+            check("maps a contact and trims names", mapped.given == "Yuri" && mapped.family == "Pereira" && mapped.organization == "Acme")
+            check("maps emails and phones", mapped.emails == ["Yuri@Example.com"] && mapped.phones == ["+1 (415) 234-5678"])
+            check("empty fields become nil", mapped.nickname == nil)
+
+            let cards = [
+                ContactsInboxExporter.Card(external_id: "B", given: "Maman", family: nil, nickname: nil, organization: nil, emails: [], phones: ["+33612345678"]),
+                ContactsInboxExporter.Card(external_id: "A", given: "Yuri", family: "Pereira", nickname: nil, organization: "Acme", emails: ["y@example.com"], phones: ["+14152345678"]),
+                ContactsInboxExporter.Card(external_id: "C", given: nil, family: nil, nickname: nil, organization: "Pizza Place", emails: [], phones: ["+14155550100"]),
+            ]
+            let first = try? ContactsInboxExporter.write(cards: cards, dataDirectory: root, defaults: defaults, now: Date(timeIntervalSince1970: 1_800_000_000))
+            let url = first ?? nil
+            check("writes inbox/contacts/contacts-<UTC time>.json", url?.lastPathComponent == "contacts-20270115T080000Z.json" && url?.deletingLastPathComponent().lastPathComponent == "contacts")
+            let json = url.flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            check("schema 1, source contacts", (json?["schema"] as? Int) == 1 && (json?["source"] as? String) == "contacts")
+            check("contacts sorted by id, snake_case keys", ((json?["contacts"] as? [[String: Any]])?.map { $0["external_id"] as? String }) == ["A", "B", "C"])
+            check("no temp files left", ((try? FileManager.default.contentsOfDirectory(atPath: url?.deletingLastPathComponent().path ?? "")) ?? []).allSatisfy { !$0.hasSuffix(".tmp") })
+            let again = try? ContactsInboxExporter.write(cards: cards.reversed(), dataDirectory: root, defaults: defaults, now: Date(timeIntervalSince1970: 1_800_000_100))
+            check("an unchanged address book writes nothing (order does not matter)", (again ?? nil) == nil)
+            var changed = cards
+            changed[0].emails = ["maman@example.com"]
+            for step in 1...4 {
+                _ = try? ContactsInboxExporter.write(cards: changed + [ContactsInboxExporter.Card(external_id: "N\(step)", given: "N", family: "\(step)", nickname: nil, organization: nil, emails: [], phones: [])], dataDirectory: root, defaults: defaults, now: Date(timeIntervalSince1970: 1_800_000_200 + Double(step) * 100))
+            }
+            let kept = ((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("inbox/contacts").path)) ?? []).filter { $0.hasSuffix(".json") }
+            check("only the newest \(ContactsInboxExporter.keptSnapshots) snapshots are kept", kept.count == ContactsInboxExporter.keptSnapshots)
+            check("never reads Contacts without permission", CNContactStore.authorizationStatus(for: .contacts) == .authorized || ContactsInboxExporter.fetchCards() == nil)
+            if env["LAVOIX_CONTACTS_CONTRACT_DIR"] == nil { try? FileManager.default.removeItem(at: root) }
+            print(failures == 0 ? "CONTACTS EXPORT AUTOTEST ALL PASSED" : "CONTACTS EXPORT AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)
         }
     }
