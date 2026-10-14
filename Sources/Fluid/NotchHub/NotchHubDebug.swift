@@ -124,6 +124,14 @@ enum NotchHubDebug {
                 ])
                 model.selectedWidgetID = "messages"
                 model.setBadge("messages", 3)
+            } else if widgetName.hasPrefix("people") {
+                let store = widgetName == "people-empty" ? PeopleStore() : PeopleStore.sample()
+                if widgetName == "people-empty" { store.refresh() }
+                model = NotchHubModel(widgets: [
+                    NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
+                    NotchWidget(id: "people", title: "People", systemImage: "person.2.fill") { AnyView(PeopleWidgetView(store: store, staticLayout: true)) },
+                ])
+                model.selectedWidgetID = "people"
             } else if widgetName == "tabs-many" {
                 let symbols = ["gauge.with.dots.needle.33percent", "music.note", "calendar", "doc.on.clipboard", "tray.fill", "arrow.down.circle", "message.fill", "mic.fill", "photo", "folder", "globe", "bolt.fill", "star.fill", "timer", "note.text", "lock.fill", "person.2.fill", "chart.bar.fill"]
                 model = NotchHubModel(widgets: symbols.enumerated().map { index, symbol in
@@ -529,6 +537,49 @@ enum NotchHubDebug {
             check("no temp files left", ((try? FileManager.default.contentsOfDirectory(atPath: written?.deletingLastPathComponent().path ?? "")) ?? []).allSatisfy { !$0.hasSuffix(".tmp") })
             if env["LAVOIX_MESSAGES_CONTRACT_DIR"] == nil { try? FileManager.default.removeItem(at: base) } else { try? FileManager.default.removeItem(at: dbURL) }
             print(failures == 0 ? "MESSAGES EXPORT AUTOTEST ALL PASSED" : "MESSAGES EXPORT AUTOTEST \(failures) FAILED")
+            exit(failures == 0 ? 0 : 1)
+        }
+    }
+
+    /// `LAVOIX_PEOPLE_AUTOTEST=1` builds a fake myOS database and checks what the People tab reads from it.
+    @MainActor static func peopleAutotestIfRequested() {
+        guard ProcessInfo.processInfo.environment["LAVOIX_PEOPLE_AUTOTEST"] == "1" else { return }
+        Task { @MainActor in
+            var failures = 0
+            func check(_ name: String, _ ok: Bool) {
+                print("\(ok ? "PASS" : "FAIL") \(name)")
+                if !ok { failures += 1 }
+            }
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-people-\(UUID().uuidString).db")
+            var db: OpaquePointer?
+            sqlite3_open(url.path, &db)
+            sqlite3_exec(db, """
+            CREATE TABLE person (id TEXT PRIMARY KEY, display_name TEXT, merged_into TEXT);
+            CREATE TABLE person_score (person_id TEXT PRIMARY KEY, urgency REAL, circle_effective INTEGER, days_since INTEGER, reason TEXT, strength REAL);
+            CREATE TABLE nudge_snooze (person_id TEXT PRIMARY KEY, until TEXT);
+            INSERT INTO person VALUES ('a','Ann Close',NULL),('b','Bo Mid',NULL),('c','Cy Snoozed',NULL),('d','Di Merged','a'),('e','Ed Fine',NULL),('f','Flo Old',NULL);
+            INSERT INTO person_score VALUES ('a', 8.5, 5, 20, '20 days since you last spoke · aim for every 7 · you wrote last', 90),
+                                            ('b', 3.0, 50, 70, '70 days since you last spoke · aim for every 30', 40),
+                                            ('c', 9.0, 15, 40, '40 days since you last spoke · aim for every 14', 70),
+                                            ('d', 9.9, 5, 99, 'x', 99),
+                                            ('e', 0, 15, 1, '', 80),
+                                            ('f', 0, NULL, NULL, '', 0);
+            INSERT INTO nudge_snooze VALUES ('c', '2099-01-01T00:00:00Z');
+            """, nil, nil, nil)
+            sqlite3_close(db)
+            let result = PeopleDatabase.read(url: url, now: Date())
+            check("reads a database in myOS's layout", result != nil)
+            check("nudges are ordered by urgency", result?.nudges.map(\.name) == ["Ann Close", "Bo Mid"])
+            check("a snoozed person and a merged person are not shown", result?.nudges.contains { $0.name == "Cy Snoozed" || $0.name == "Di Merged" } == false)
+            check("someone who is not due is not a nudge", result?.nudges.contains { $0.name == "Ed Fine" } == false)
+            check("circle and days come through", result?.nudges.first.map { $0.circle == 5 && $0.daysSince == 20 } == true)
+            check("recently in touch is ordered by days since", result?.recent.prefix(2).map(\.name) == ["Ed Fine", "Ann Close"])
+            check("people never contacted are left out of recents", result?.recent.contains { $0.name == "Flo Old" } == false)
+            check("a snooze that has ended brings the nudge back", PeopleDatabase.read(url: url, now: Date(timeIntervalSince1970: 4_200_000_000))?.nudges.contains { $0.name == "Cy Snoozed" } == true)
+            check("a missing database reports nil, not a crash", PeopleDatabase.read(url: url.appendingPathExtension("nope")) == nil)
+            check("short reason reads naturally", PeopleWidgetView.shortReason(PersonNudge(id: "x", name: "x", circle: 5, daysSince: 20, reason: "20 days since you last spoke · aim for every 7 · you wrote last")) == "20 days ago · aim for every 7 days")
+            try? FileManager.default.removeItem(at: url)
+            print(failures == 0 ? "PEOPLE AUTOTEST ALL PASSED" : "PEOPLE AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)
         }
     }

@@ -50,6 +50,11 @@ enum NotchWidgetRegistry {
                 AnyView(DownloaderWidgetView(downloader: YouTubeDownloader.shared))
             })
         }
+        if PeopleDatabase.isAvailable {
+            widgets.append(NotchWidget(id: "people", title: "People", systemImage: "person.2.fill") {
+                AnyView(PeopleWidgetView(store: PeopleStore.shared))
+            })
+        }
         if NotchMessagesSettings.isEnabled {
             widgets.append(NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") {
                 AnyView(MessagesWidgetView(store: MessagesStore.shared))

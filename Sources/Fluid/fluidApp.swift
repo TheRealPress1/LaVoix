@@ -24,6 +24,7 @@ struct FluidApp: App {
         NotchHubDebug.autoNotesAutotestIfRequested()
         NotchHubDebug.contactsExportAutotestIfRequested()
         NotchHubDebug.messagesExportAutotestIfRequested()
+        NotchHubDebug.peopleAutotestIfRequested()
         NotchHubDebug.clipboardAutotestIfRequested()
         NotchHubDebug.messagesAutotestIfRequested()
         NotchHubDebug.calendarAutotestIfRequested()
