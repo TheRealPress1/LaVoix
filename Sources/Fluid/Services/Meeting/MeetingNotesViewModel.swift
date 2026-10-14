@@ -95,13 +95,14 @@ final class MeetingNotesViewModel: ObservableObject {
     // MARK: - Generating
 
     func generate(session: MeetingSession, asr: ASRService?) {
-        guard !self.isGenerating,
-              LocalCleanupProvider.isDownloaded(modelID: LocalCleanupSettings.modelID),
+        let backend = MeetingNotesBackend.current
+        guard !self.isGenerating, backend.isReady,
               let selectionLock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
         self.phase = .generating("Preparing…")
         let kind = self.kind
         let notes = self.notes
-        let modelID = LocalCleanupSettings.modelID
+        let modelID = backend.modelID
+        let command = backend.command
         self.task = Task {
             defer { MeetingSummaryActivityCoordinator.shared.unlockSelection(selectionLock) }
             do {
@@ -111,7 +112,7 @@ final class MeetingNotesViewModel: ObservableObject {
                 }
                 let run: () async throws -> String = {
                     try await MeetingNotesGenerator.generate(
-                        transcript: transcript, kind: kind, userNotes: notes, modelID: modelID,
+                        transcript: transcript, kind: kind, userNotes: notes, modelID: modelID, command: command,
                         progress: { message in Task { @MainActor [weak self] in self?.setProgress(message) } }
                     )
                 }

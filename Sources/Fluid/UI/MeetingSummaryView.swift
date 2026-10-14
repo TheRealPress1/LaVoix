@@ -79,7 +79,7 @@ struct MeetingSummaryView: View {
 
     @ViewBuilder
     private func controls(_ session: MeetingSession) -> some View {
-        if self.local.status != .ready {
+        if self.local.status != .ready, SettingsStore.shared.meetingNotesCommand.trimmingCharacters(in: .whitespaces).isEmpty {
             self.modelSetup
         } else {
             HStack(spacing: 12) {
@@ -97,7 +97,7 @@ struct MeetingSummaryView: View {
                         self.model.generate(session: session, asr: self.asrService)
                     }
                     .disabled(!self.isQuiescent)
-                    .help(self.isQuiescent ? "Runs on this Mac" : "Finish the recording first")
+                    .help(self.isQuiescent ? (SettingsStore.shared.meetingNotesCommand.isEmpty ? "Runs on this Mac" : "Runs your notes command") : "Finish the recording first")
                     if self.model.isStale, !self.model.output.isEmpty {
                         Text("Your notes changed since these were written.")
                             .font(.fluidSystem(size: 12))

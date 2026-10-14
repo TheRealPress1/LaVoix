@@ -38,7 +38,8 @@ final class MeetingAutoAnalysis: ObservableObject {
 
     private func run(session: MeetingSession) async {
         let kind = MeetingSummaryKind.executive
-        guard self.generatorOverride != nil || LocalCleanupProvider.isDownloaded(modelID: LocalCleanupSettings.modelID) else {
+        let backend = MeetingNotesBackend.current
+        guard self.generatorOverride != nil || backend.isReady else {
             self.status = .failed("Download the on-device model to get automatic notes.")
             return
         }
@@ -47,7 +48,8 @@ final class MeetingAutoAnalysis: ObservableObject {
             return
         }
         defer { MeetingSummaryActivityCoordinator.shared.unlockSelection(lock) }
-        let modelID = LocalCleanupSettings.modelID
+        let modelID = backend.modelID
+        let command = backend.command
         do {
             guard let directory = try await self.store.existingSessionDirectory(for: session.id) else {
                 self.status = .failed("The meeting folder is missing.")
@@ -61,7 +63,7 @@ final class MeetingAutoAnalysis: ObservableObject {
             let run: () async throws -> String = {
                 if let override { return try await override(transcript, notes) }
                 return try await MeetingNotesGenerator.generate(
-                    transcript: transcript, kind: kind, userNotes: notes, modelID: modelID,
+                    transcript: transcript, kind: kind, userNotes: notes, modelID: modelID, command: command,
                     progress: { message in Task { @MainActor in MeetingAutoAnalysis.shared.setProgress(message) } }
                 )
             }

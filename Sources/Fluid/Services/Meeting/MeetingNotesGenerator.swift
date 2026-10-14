@@ -124,6 +124,7 @@ nonisolated enum MeetingNotesGenerator {
         kind: MeetingSummaryKind,
         userNotes: String,
         modelID: String,
+        command: String? = nil,
         progress: (@Sendable (String) -> Void)? = nil
     ) async throws -> String {
         // The meeting's own date is withheld so the model has nothing to turn "Thursday" or "tomorrow" into.
@@ -133,6 +134,20 @@ nonisolated enum MeetingNotesGenerator {
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { throw MeetingNotesError.emptyTranscript }
+
+        if let command, !command.isEmpty {
+            // The user's own model decides how much it can read, so there is no chunking.
+            progress?("Writing notes…")
+            let system = MeetingNotesPrompt.system(
+                kind: kind, hasUserNotes: !userNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            )
+            let user = MeetingNotesPrompt.user(transcript: body, userNotes: userNotes)
+            let output = try await MeetingNotesCommand.run(command: command, input: system + "\n\n---\n\n" + user)
+            let cleaned = MeetingNotesDateGuard.apply(to: output, source: body + "\n" + userNotes)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { throw MeetingNotesError.emptyOutput }
+            return cleaned
+        }
 
         var source = body
         if body.count > directCharacterLimit {

@@ -35,11 +35,15 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var titleWasEdited = false
     var autoDetectEnabled: Bool
     var browserDetectionEnabled: Bool
+    var autoNotesEnabled: Bool
+    var notesCommand: String
 
     init(settings: SettingsStore = .shared) {
         let defaults = settings.meetingRecordingDefaults
         self.autoDetectEnabled = settings.meetingAutoDetectEnabled
         self.browserDetectionEnabled = settings.meetingAutoDetectBrowserEnabled
+        self.autoNotesEnabled = settings.meetingAutoNotesEnabled
+        self.notesCommand = settings.meetingNotesCommand
         self.languageCode = defaults.languageCode ?? "en"
         self.mode = defaults.mode
         self.title = Self.defaultTitle(mode: defaults.mode, applicationDisplayName: nil)
@@ -1156,6 +1160,8 @@ struct MeetingTranscriptionView: View {
     private func openMeetingSettings() {
         self.setupDraft.autoDetectEnabled = SettingsStore.shared.meetingAutoDetectEnabled
         self.setupDraft.browserDetectionEnabled = SettingsStore.shared.meetingAutoDetectBrowserEnabled
+        self.setupDraft.autoNotesEnabled = SettingsStore.shared.meetingAutoNotesEnabled
+        self.setupDraft.notesCommand = SettingsStore.shared.meetingNotesCommand
         self.setupDraftBeforeEditing = self.setupDraft
         self.draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
         self.isShowingMeetingSettings = true
@@ -1210,6 +1216,8 @@ struct MeetingTranscriptionView: View {
         let previousRetentionPolicy = settings.meetingAudioRetentionPolicy
         settings.meetingAutoDetectEnabled = self.setupDraft.autoDetectEnabled
         settings.meetingAutoDetectBrowserEnabled = self.setupDraft.browserDetectionEnabled
+        settings.meetingAutoNotesEnabled = self.setupDraft.autoNotesEnabled
+        settings.meetingNotesCommand = self.setupDraft.notesCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         settings.meetingAudioRetentionPolicy = self.draftMeetingAudioRetentionPolicy
         if previousRetentionPolicy != self.draftMeetingAudioRetentionPolicy {
             Task { await self.coordinator.sweepExpiredAudio() }

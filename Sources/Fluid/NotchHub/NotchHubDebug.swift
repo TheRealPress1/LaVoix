@@ -265,6 +265,31 @@ enum NotchHubDebug {
             await settle()
             if case .failed = service.status { check("model failure surfaces as failed", true) } else { check("model failure surfaces as failed", false) }
 
+            // The custom command: prompt in on stdin, notes out on stdout.
+            let echoed = try? await MeetingNotesCommand.run(command: "cat", input: "hello stdin")
+            check("command: stdin reaches the command, stdout comes back", echoed == "hello stdin")
+            let viaLogin = try? await MeetingNotesCommand.run(command: "echo $0", input: "")
+            check("command: runs under zsh", viaLogin == "/bin/zsh" || viaLogin == "zsh")
+            do { _ = try await MeetingNotesCommand.run(command: "echo oops >&2; exit 3", input: ""); check("command: non-zero exit is an error", false) }
+            catch { check("command: non-zero exit is an error (\(error.localizedDescription))", error.localizedDescription.contains("code 3") && error.localizedDescription.contains("oops")) }
+            do { _ = try await MeetingNotesCommand.run(command: "true", input: ""); check("command: empty output is an error", false) }
+            catch { check("command: empty output is an error", true) }
+            let t0 = Date()
+            do { _ = try await MeetingNotesCommand.run(command: "sleep 10", input: "", timeout: 1); check("command: timeout", false) }
+            catch { check("command: times out and kills it (\(Int(Date().timeIntervalSince(t0)))s)", Date().timeIntervalSince(t0) < 4) }
+            let big = String(repeating: "word ", count: 400_000)
+            let bigOut = try? await MeetingNotesCommand.run(command: "cat", input: big)
+            check("command: a 2 MB prompt does not deadlock", bigOut?.count == big.trimmingCharacters(in: .whitespaces).count)
+            service.generatorOverride = nil
+            SettingsStore.shared.meetingNotesCommand = "cat >/dev/null; echo '- written by my command'"
+            service.start(session: session)
+            await settle()
+            let viaCommand = (try? await store.existingSessionDirectory(for: session.id)).flatMap { $0 }
+                .flatMap { try? Data(contentsOf: $0.appendingPathComponent("manual-summary-executive.json")) }
+                .flatMap { try? JSONDecoder().decode(MeetingNotesViewModel.Saved.self, from: $0) }
+            check("auto-notes via command: written, model id is command:cat", viaCommand?.text == "- written by my command" && viaCommand?.modelID == "command:cat")
+            SettingsStore.shared.meetingNotesCommand = ""
+
             try? FileManager.default.removeItem(at: root)
             print(failures == 0 ? "AUTONOTES AUTOTEST ALL PASSED" : "AUTONOTES AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)

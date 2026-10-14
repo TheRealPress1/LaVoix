@@ -2109,6 +2109,16 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// A shell command that writes meeting notes (prompt on stdin, notes on stdout), e.g. `claude -p`. Empty means the
+    /// on-device model.
+    var meetingNotesCommand: String {
+        get { self.defaults.string(forKey: Keys.meetingNotesCommand) ?? "" }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.meetingNotesCommand)
+        }
+    }
+
     /// Tier 2 browser-tab meeting auto-detection (default: OFF — reads the frontmost tab's URL).
     var meetingAutoDetectBrowserEnabled: Bool {
         get { self.defaults.bool(forKey: Keys.meetingAutoDetectBrowserEnabled) }
@@ -5845,6 +5855,7 @@ private extension SettingsStore {
         static let meetingAudioRetentionPolicy = "MeetingAudioRetentionPolicy"
         static let meetingTranscriptionBackendID = "MeetingTranscriptionBackendID"
         static let meetingAutoDetectEnabled = "MeetingAutoDetectEnabled"
+        static let meetingNotesCommand = "MeetingNotesCommand"
         static let meetingAutoNotesEnabled = "MeetingAutoNotesEnabled"
         static let meetingAutoDetectBrowserEnabled = "MeetingAutoDetectBrowserEnabled"
         static let microphoneSelectionMode = "MicrophoneSelectionMode"

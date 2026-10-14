@@ -414,6 +414,24 @@ struct MeetingRecordingSettingsSheet: View {
                 }
             }
 
+            FluidManagementGroup(title: "Notes") {
+                VStack(spacing: 0) {
+                    MeetingAdaptiveSetupRow(
+                        title: "Write notes automatically",
+                        detail: "When a meeting ends, write the executive summary on its own.",
+                        trailingSwitch: true
+                    ) {
+                        Toggle("Write notes automatically", isOn: self.$draft.autoNotesEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .meetingHoverFeedback()
+                            .accessibilityLabel("Write notes automatically")
+                    }
+                    Divider()
+                    MeetingNotesCommandRow(command: self.$draft.notesCommand)
+                }
+            }
+
             if self.draft.autoDetectEnabled,
                self.appServices.meetingAutoDetectHealth == .zoomWindowTitleUnreadable
             {
@@ -598,6 +616,60 @@ private struct MeetingAdaptiveSetupRow<Content: View>: View {
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+}
+
+
+/// The "use my own model" row: a command that gets the prompt on stdin and prints the notes, plus a Test button.
+private struct MeetingNotesCommandRow: View {
+    @Binding var command: String
+    @Environment(\.theme) private var theme
+    @State private var isTesting = false
+    @State private var result: (ok: Bool, text: String)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            Text("Use your own model")
+                .font(self.theme.typography.bodyStrong)
+                .foregroundStyle(self.theme.palette.primaryText)
+            Text("A shell command that reads the prompt on stdin and prints the notes, for example claude -p. Leave empty to use the on-device model. The transcript is sent to whatever this command talks to.")
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+            HStack(spacing: 8) {
+                TextField("claude -p", text: self.$command)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12, design: .monospaced))
+                    .autocorrectionDisabled()
+                Button(self.isTesting ? "Testing…" : "Test") { self.runTest() }
+                    .meetingGlassAction()
+                    .disabled(self.isTesting || self.command.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            if let result {
+                Text(result.text)
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(result.ok ? self.theme.palette.secondaryText : self.theme.palette.warning)
+                    .lineLimit(4)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func runTest() {
+        let command = self.command.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.isTesting = true
+        self.result = nil
+        Task {
+            do {
+                let sample = "Maya: Let's ship the beta on Thursday.\nJon: I'll send the release notes tonight."
+                let text = try await MeetingNotesGenerator.generate(
+                    transcript: sample, kind: .executive, userNotes: "", modelID: MeetingNotesCommand.modelID(for: command), command: command
+                )
+                self.result = (true, "Works. It wrote: " + String(text.prefix(160)))
+            } catch {
+                self.result = (false, error.localizedDescription)
+            }
+            self.isTesting = false
         }
     }
 }
