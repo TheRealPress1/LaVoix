@@ -29,6 +29,7 @@ final class NotchHubController {
     private var resignObserver: NSObjectProtocol?
     private var becomeKeyObserver: NSObjectProtocol?
     private var clickMonitor: Any?
+    private var localClickMonitor: Any?
     private var stallTask: Task<Void, Never>?
     private(set) var isEditingText = false
 
@@ -92,6 +93,11 @@ final class NotchHubController {
         self.clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in
             Task { @MainActor in self?.checkClickPassedThrough() }
         }
+        // Clicks delivered to this app while the notch is open: says which window and view took them.
+        self.localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
+            self?.noteClickInsideApp(event)
+            return event
+        }
         self.startMessagesIfEnabled()
         NotchMeetingCardController.shared.hubStateChanged()
         if NotchClipboardSettings.isEnabled { ClipboardStore.shared.start() }
@@ -138,6 +144,8 @@ final class NotchHubController {
         self.dragMonitor = nil
         if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
         self.clickMonitor = nil
+        if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor) }
+        self.localClickMonitor = nil
         self.stopStallWatch()
         self.prewarmTask?.cancel()
         ClipboardStore.shared.stop()
@@ -483,6 +491,17 @@ final class NotchHubController {
         }
     }
 
+    private func noteClickInsideApp(_ event: NSEvent) {
+        guard self.model.isOpen, let screen = NotchGeometry.targetScreen() else { return }
+        let point = NSEvent.mouseLocation
+        guard NotchGeometry.openRect(for: screen).contains(point) else { return }
+        let target = event.window
+        let isHub = target === self.window
+        let hit = target?.contentView?.hitTest(event.locationInWindow).map { String(describing: type(of: $0)) } ?? "none"
+        let name = target.map { String(describing: type(of: $0)) } ?? "no window"
+        DebugLogger.shared.info("Click in open notch: window=\(isHub ? "hub" : name) level=\(target?.level.rawValue ?? 0) hit=\(hit) \(self.stateSummary)", source: "NotchHub")
+    }
+
     /// While the notch is open, notes every time the main thread was too busy to run a 100 ms sleep on time. A stall
     /// here is what makes tab clicks queue up.
     private func startStallWatch() {
@@ -512,6 +531,7 @@ final class NotchHubController {
 
     /// Called after a tab click; says so in the log if the selection did not change.
     func verifyTabSwitch(to id: String) {
+        DebugLogger.shared.info("Tab click on \(id) (was \(self.model.selectedWidgetID))", source: "NotchHub")
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 200_000_000)
             guard let self, self.model.selectedWidgetID != id else { return }

@@ -88,8 +88,8 @@ struct NotchHubView: View {
             ForEach(self.model.widgets) { widget in
                 let selected = widget.id == self.model.selectedWidget?.id
                 Button {
-                    self.model.selectedWidgetID = widget.id
                     NotchHubController.shared.verifyTabSwitch(to: widget.id)
+                    self.model.selectedWidgetID = widget.id
                 } label: {
                     Image(systemName: widget.systemImage)
                         .font(.system(size: 13, weight: .medium))
