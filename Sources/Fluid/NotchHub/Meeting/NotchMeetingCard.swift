@@ -39,7 +39,7 @@ struct NotchMeetingCardView: View {
     var onDismiss: () -> Void = {}
 
     var body: some View {
-        let size = NotchGeometry.meetingCardSize(notchHeight: self.notchHeight)
+        let size = NotchGeometry.meetingCardSize(notchHeight: self.notchHeight, compact: self.model.phase == .starting)
         ZStack(alignment: .top) {
             NotchHubShape(topCornerRadius: 10, bottomCornerRadius: 28)
                 .fill(Color.black)
@@ -64,27 +64,32 @@ struct NotchMeetingCardView: View {
                 Circle().fill(self.model.event?.color ?? .blue).frame(width: 9, height: 9)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(self.model.event?.title ?? "Meeting").font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                    Text("Starting now").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+                    if let event = self.model.event {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            Text(Self.countdown(to: event.start, now: context.date))
+                                .font(.system(size: 11).monospacedDigit()).foregroundStyle(.white.opacity(0.55))
+                        }
+                    }
                 }
                 Spacer(minLength: 8)
                 if self.model.event?.joinURL != nil {
                     Button(action: self.onJoin) {
-                        Text("Join").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
-                            .padding(.horizontal, 12).padding(.vertical, 5).background(Capsule().fill(Color.white.opacity(0.16)))
+                        Text("Join").font(.system(size: 12, weight: .semibold)).foregroundStyle(.black)
+                            .padding(.horizontal, 14).padding(.vertical, 5).background(Capsule().fill(Color.white))
                     }
                     .buttonStyle(.plain)
                 }
                 Button(action: self.onRecordEvent) {
-                    Text("Record").font(.system(size: 12, weight: .semibold)).foregroundStyle(.black)
-                        .padding(.horizontal, 12).padding(.vertical, 5).background(Capsule().fill(Color.white))
+                    Image(systemName: "record.circle").font(.system(size: 15)).foregroundStyle(.white.opacity(self.model.event?.joinURL == nil ? 0.95 : 0.6))
                 }
                 .buttonStyle(.plain)
+                .help("Record this meeting")
                 Button(action: self.onDismiss) {
-                    Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(.white.opacity(0.5))
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.white.opacity(0.45))
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.top, 8)
+            .padding(.top, 4)
         case .recording:
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 8) {
@@ -161,6 +166,14 @@ struct NotchMeetingCardView: View {
             }
             .padding(.top, 8)
         }
+    }
+
+    /// "Starts in 1:45", "Starting now", "Started 2 min ago".
+    static func countdown(to start: Date, now: Date) -> String {
+        let seconds = Int(start.timeIntervalSince(now).rounded(.up))
+        if seconds > 0 { return "Starts in " + String(format: "%d:%02d", seconds / 60, seconds % 60) }
+        if seconds > -30 { return "Starting now" }
+        return "Started \(max(1, -seconds / 60)) min ago"
     }
 
     static func clock(_ seconds: TimeInterval) -> String {
@@ -330,7 +343,7 @@ final class NotchMeetingCardController {
         self.model.phase = .starting
         self.wantsVisible = true
         self.syncPanel()
-        self.scheduleDismiss(after: self.startingDismissSeconds)
+        self.scheduleDismiss(after: max(0, event.start.timeIntervalSinceNow) + self.startingDismissSeconds)
     }
 
     /// How long the "meeting starting" prompt stays up. Tests shorten it.
@@ -381,7 +394,7 @@ final class NotchMeetingCardController {
             self.panel?.orderOut(nil)
             return
         }
-        let frame = NotchGeometry.meetingCardFrame(for: screen)
+        let frame = NotchGeometry.meetingCardFrame(for: screen, compact: self.model.phase == .starting)
         let panel = self.panel ?? self.makePanel(frame: frame, notchHeight: NotchGeometry.closedSize(for: screen).height)
         self.panel = panel
         panel.setFrame(frame, display: true)

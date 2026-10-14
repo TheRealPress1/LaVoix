@@ -40,12 +40,13 @@ enum NotchGeometry {
     static let meetingCardPadding: CGFloat = 16
 
     /// Live-meeting card size; like the notification card, its top band sits behind the hardware notch.
-    static func meetingCardSize(notchHeight: CGFloat) -> CGSize {
-        CGSize(width: 400, height: notchHeight + 66)
+    /// The "meeting starting soon" heads-up is a slim single strip.
+    static func meetingCardSize(notchHeight: CGFloat, compact: Bool = false) -> CGSize {
+        CGSize(width: compact ? 360 : 400, height: notchHeight + (compact ? 44 : 66))
     }
 
-    @MainActor static func meetingCardFrame(for screen: NSScreen) -> NSRect {
-        let size = self.meetingCardSize(notchHeight: self.closedSize(for: screen).height)
+    @MainActor static func meetingCardFrame(for screen: NSScreen, compact: Bool = false) -> NSRect {
+        let size = self.meetingCardSize(notchHeight: self.closedSize(for: screen).height, compact: compact)
         let width = size.width + self.meetingCardPadding * 2
         let height = size.height + self.meetingCardPadding
         return NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height)

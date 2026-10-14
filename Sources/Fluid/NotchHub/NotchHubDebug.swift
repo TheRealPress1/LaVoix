@@ -147,7 +147,8 @@ enum NotchHubDebug {
             }
             // A "meeting starting" prompt must go away on its own even while the meeting coordinator keeps republishing
             // `idle`, and a message card must replace it instead of being swallowed.
-            let event = CalendarStore.sample().events[0]
+            var event = CalendarStore.sample().events[0]
+            event.start = Date()   // the prompt stays up until shortly after the meeting starts
             card.startingDismissSeconds = 0.6
             card.presentStarting(event)
             for _ in 0..<5 { card.apply(state: .idle); try? await Task.sleep(nanoseconds: 50_000_000) }
@@ -353,6 +354,11 @@ enum NotchHubDebug {
             check("offers to record a call that is starting", CalendarStore.dueForPrompt(events: [call], now: now, prompted: []) == call)
             check("does not offer twice", CalendarStore.dueForPrompt(events: [call], now: now, prompted: ["call"]) == nil)
             check("not before it is about to start", CalendarStore.dueForPrompt(events: [event("later", start: 10, url: true)], now: now, prompted: []) == nil)
+            check("a heads-up appears 2 minutes ahead", CalendarStore.dueForPrompt(events: [event("soon", start: 1.8, url: true)], now: now, prompted: []) != nil)
+            check("but not 3 minutes ahead", CalendarStore.dueForPrompt(events: [event("notyet", start: 3, url: true)], now: now, prompted: []) == nil)
+            check("countdown reads well", NotchMeetingCardView.countdown(to: now.addingTimeInterval(105), now: now) == "Starts in 1:45"
+                  && NotchMeetingCardView.countdown(to: now.addingTimeInterval(-5), now: now) == "Starting now"
+                  && NotchMeetingCardView.countdown(to: now.addingTimeInterval(-150), now: now) == "Started 2 min ago")
             check("still offers a few minutes after the start", CalendarStore.dueForPrompt(events: [event("late", start: -4, url: true)], now: now, prompted: []) != nil)
             check("not long after the start", CalendarStore.dueForPrompt(events: [event("old", start: -12, url: true)], now: now, prompted: []) == nil)
             check("skips solo events with no call link", CalendarStore.dueForPrompt(events: [event("gym", start: 0)], now: now, prompted: []) == nil)

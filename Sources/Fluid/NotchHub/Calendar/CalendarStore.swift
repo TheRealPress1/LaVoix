@@ -307,12 +307,12 @@ final class CalendarStore: ObservableObject {
 
     // MARK: - Logic (pure, so it can be tested)
 
-    /// The meeting to offer recording for: one that starts within the next 30 seconds or began in the last 5
-    /// minutes, and hasn't been offered yet.
+    /// The meeting to give a heads-up for: one that starts within the next 2 minutes or began in the last 5 minutes, and
+    /// hasn't been shown yet.
     static func dueForPrompt(events: [Event], now: Date, prompted: Set<String>) -> Event? {
         events.first { event in
             event.looksLikeMeeting && !prompted.contains(event.id)
-                && event.start.timeIntervalSince(now) <= 30 && now.timeIntervalSince(event.start) <= 300
+                && event.start.timeIntervalSince(now) <= 120 && now.timeIntervalSince(event.start) <= 300
         }
     }
 
