@@ -249,6 +249,12 @@ enum NotchHubDebug {
             check("fingerprint matches the notes screen's stale check",
                   saved?.transcriptHash == MeetingNotesViewModel.fingerprint(transcript: transcript, notes: ""))
 
+            let summaryMD = dir.flatMap { try? String(contentsOf: $0.appendingPathComponent("summary.md"), encoding: .utf8) }
+            check("summary.md has the title and the notes", summaryMD?.hasPrefix("# Auto notes fixture") == true && summaryMD?.contains("- Ship on Thursday.") == true)
+            let transcriptMD = dir.flatMap { try? String(contentsOf: $0.appendingPathComponent("transcript.md"), encoding: .utf8) }
+            check("transcript.md has the speaker, time and words", transcriptMD?.contains("· 00:00\nWe will ship on Thursday.") == true)
+            print(summaryMD ?? "no summary.md"); print(transcriptMD ?? "no transcript.md")
+
             if let file { try? FileManager.default.removeItem(at: file) }
             SettingsStore.shared.meetingAutoNotesEnabled = false
             service.start(session: session)

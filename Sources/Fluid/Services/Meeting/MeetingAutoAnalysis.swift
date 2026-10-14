@@ -27,6 +27,8 @@ final class MeetingAutoAnalysis: ObservableObject {
     func start(session: MeetingSession) {
         self.task?.cancel()
         self.status = .idle
+        // The readable transcript is always kept, whether or not notes are written.
+        self.writeTranscriptFile(session)
         guard SettingsStore.shared.meetingAutoNotesEnabled else { return }
         guard session.transcriptSegments.contains(where: { !$0.isEcho && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { return }
         self.task?.cancel()
@@ -82,6 +84,10 @@ final class MeetingAutoAnalysis: ObservableObject {
                     to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic
                 )
             }.value
+            MeetingReadableFiles.write(
+                MeetingReadableFiles.summaryMarkdown(for: session, text: text, writtenBy: modelID),
+                named: MeetingReadableFiles.summaryFileName(for: kind), in: directory
+            )
             self.status = .ready(session.id)
             DebugLogger.shared.log("auto-notes written session=\(session.id)", source: "MeetingAutoAnalysis")
         } catch is CancellationError {
@@ -89,6 +95,15 @@ final class MeetingAutoAnalysis: ObservableObject {
         } catch {
             DebugLogger.shared.log("auto-notes failed: \(error.localizedDescription)", source: "MeetingAutoAnalysis")
             self.status = .failed(error.localizedDescription)
+        }
+    }
+
+    private func writeTranscriptFile(_ session: MeetingSession) {
+        let store = self.store
+        Task.detached(priority: .utility) {
+            guard session.transcriptSegments.contains(where: { !$0.isEcho }),
+                  let directory = try? await store.existingSessionDirectory(for: session.id) else { return }
+            MeetingReadableFiles.write(MeetingReadableFiles.transcriptMarkdown(for: session), named: "transcript.md", in: directory)
         }
     }
 

@@ -128,6 +128,10 @@ final class MeetingNotesViewModel: ObservableObject {
                 self.phase = .idle
                 if let directory = self.directory {
                     let saved = Saved(transcriptHash: Self.fingerprint(transcript: transcript, notes: notes), modelID: modelID, text: text)
+                    MeetingReadableFiles.write(
+                        MeetingReadableFiles.summaryMarkdown(for: session, text: text, writtenBy: modelID),
+                        named: MeetingReadableFiles.summaryFileName(for: kind), in: directory
+                    )
                     try? await Task.detached(priority: .utility) {
                         try JSONEncoder().encode(saved).write(
                             to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic
