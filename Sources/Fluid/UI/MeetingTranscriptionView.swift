@@ -39,6 +39,7 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var brainExportEnabled: Bool
     var shareContactsEnabled: Bool
     var shareMessagesEnabled: Bool
+    var shareCalendarEnabled: Bool
     var messagesExcluded: String
     var notesCommand: String
 
@@ -50,6 +51,7 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         self.brainExportEnabled = settings.meetingBrainExportEnabled
         self.shareContactsEnabled = settings.shareContactsWithMyOSEnabled
         self.shareMessagesEnabled = settings.shareMessagesWithMyOSEnabled
+        self.shareCalendarEnabled = settings.shareCalendarWithMyOSEnabled
         self.messagesExcluded = settings.messagesExcludedHandles
         self.notesCommand = settings.meetingNotesCommand
         self.languageCode = defaults.languageCode ?? "en"
@@ -1172,6 +1174,7 @@ struct MeetingTranscriptionView: View {
         self.setupDraft.brainExportEnabled = SettingsStore.shared.meetingBrainExportEnabled
         self.setupDraft.shareContactsEnabled = SettingsStore.shared.shareContactsWithMyOSEnabled
         self.setupDraft.shareMessagesEnabled = SettingsStore.shared.shareMessagesWithMyOSEnabled
+        self.setupDraft.shareCalendarEnabled = SettingsStore.shared.shareCalendarWithMyOSEnabled
         self.setupDraft.messagesExcluded = SettingsStore.shared.messagesExcludedHandles
         self.setupDraft.notesCommand = SettingsStore.shared.meetingNotesCommand
         self.setupDraftBeforeEditing = self.setupDraft
@@ -1232,6 +1235,8 @@ struct MeetingTranscriptionView: View {
         settings.meetingBrainExportEnabled = self.setupDraft.brainExportEnabled
         settings.shareContactsWithMyOSEnabled = self.setupDraft.shareContactsEnabled
         settings.shareMessagesWithMyOSEnabled = self.setupDraft.shareMessagesEnabled
+        settings.shareCalendarWithMyOSEnabled = self.setupDraft.shareCalendarEnabled
+        if self.setupDraft.shareCalendarEnabled { CalendarLinksScheduler.shared.start() }
         settings.messagesExcludedHandles = self.setupDraft.messagesExcluded
         if self.setupDraft.shareMessagesEnabled { MessagesInboxScheduler.shared.start() }
         if self.setupDraft.shareContactsEnabled { ContactsInboxScheduler.shared.start(); ContactsInboxScheduler.shared.schedule(after: 2) }

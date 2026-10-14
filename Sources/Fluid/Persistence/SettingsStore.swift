@@ -2132,6 +2132,15 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Link calendar events to the people myOS knows (ids only, never emails) and share that with myOS (default: OFF).
+    var shareCalendarWithMyOSEnabled: Bool {
+        get { self.defaults.bool(forKey: Keys.shareCalendarWithMyOSEnabled) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.shareCalendarWithMyOSEnabled)
+        }
+    }
+
     /// Share who-messaged-whom-and-when (never message text) with myOS for relationship signals (default: OFF).
     var shareMessagesWithMyOSEnabled: Bool {
         get { self.defaults.bool(forKey: Keys.shareMessagesWithMyOSEnabled) }
@@ -5907,6 +5916,7 @@ private extension SettingsStore {
         static let meetingAutoDetectEnabled = "MeetingAutoDetectEnabled"
         static let meetingBrainExportEnabled = "MeetingBrainExportEnabled"
         static let shareContactsWithMyOSEnabled = "ShareContactsWithMyOSEnabled"
+        static let shareCalendarWithMyOSEnabled = "ShareCalendarWithMyOSEnabled"
         static let shareMessagesWithMyOSEnabled = "ShareMessagesWithMyOSEnabled"
         static let messagesExcludedHandles = "MessagesExcludedHandles"
         static let meetingBrainFolderOverride = "MeetingBrainFolderOverride"

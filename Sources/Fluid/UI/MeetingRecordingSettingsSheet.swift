@@ -455,6 +455,18 @@ struct MeetingRecordingSettingsSheet: View {
                     }
                     Divider()
                     MeetingAdaptiveSetupRow(
+                        title: "Link calendar events to people in myOS",
+                        detail: "Matches invitees to people myOS knows, on this Mac, and shares only who was in which event (event title, time and person ids). Email addresses are never written. Needs Calendar access. Off by default.",
+                        trailingSwitch: true
+                    ) {
+                        Toggle("Link calendar events to people in myOS", isOn: self.$draft.shareCalendarEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .meetingHoverFeedback()
+                            .accessibilityLabel("Link calendar events to people in myOS")
+                    }
+                    Divider()
+                    MeetingAdaptiveSetupRow(
                         title: "Share message activity with myOS",
                         detail: "For one-to-one chats with real history, shares only how many messages, on which days, who sent them and how quickly you reply. Message text is never read. Needs Full Disk Access. Off by default.",
                         trailingSwitch: true

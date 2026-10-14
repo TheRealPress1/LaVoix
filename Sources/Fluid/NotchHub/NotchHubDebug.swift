@@ -598,6 +598,32 @@ enum NotchHubDebug {
             check("no email address can appear in the file", !body.isEmpty && !body.contains("@"))
             check("writing again replaces the same file", ((try? MeetingInboxExporter.write(payload, meetingID: meetingID, start: start, dataDirectory: out)) ?? nil) == file)
             if ProcessInfo.processInfo.environment["LAVOIX_MEETING_CONTRACT_DIR"] == nil { try? FileManager.default.removeItem(at: out) }
+            // Calendar links and recording-to-calendar matching.
+            let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+            func cand(_ id: String, _ startMin: Double, _ lenMin: Double, _ emails: [String]) -> CalendarLinks.Candidate {
+                CalendarLinks.Candidate(id: id, title: "Event \(id)", start: t0.addingTimeInterval(startMin * 60), end: t0.addingTimeInterval((startMin + lenMin) * 60), emails: emails, attendeeCount: emails.count + 1)
+            }
+            let events = [cand("early", -90, 30, ["ann@x.com"]), cand("main", 0, 60, ["ann@x.com", "bo@y.com", "stranger@q.com"]), cand("later", 120, 30, ["bo@y.com"])]
+            check("a recording is matched to the event it overlapped most", CalendarLinks.bestOverlap(events, start: t0.addingTimeInterval(120), end: t0.addingTimeInterval(55 * 60))?.id == "main")
+            check("a recording that started a few minutes late still matches", CalendarLinks.bestOverlap(events, start: t0.addingTimeInterval(10 * 60), end: t0.addingTimeInterval(70 * 60))?.id == "main")
+            check("a recording with no nearby event matches nothing", CalendarLinks.bestOverlap(events, start: t0.addingTimeInterval(600 * 60), end: t0.addingTimeInterval(660 * 60)) == nil)
+            check("a recording entirely inside an event belongs to it", CalendarLinks.bestOverlap([cand("long", 0, 240, ["ann@x.com"])], start: t0.addingTimeInterval(120 * 60), end: t0.addingTimeInterval(130 * 60))?.id == "long")
+            check("an event that ended before the recording started does not match", CalendarLinks.bestOverlap([cand("over", -120, 30, ["ann@x.com"])], start: t0, end: t0.addingTimeInterval(1800)) == nil)
+            let people = PeopleDatabase.emailMap(emails: ["ann@x.com", "bo@y.com", "stranger@q.com", "di@z.com"], url: url)
+            check("emails map to known people; strangers and merged people are absent", Set(people.keys) == ["ann@x.com", "bo@y.com"] && people["ann@x.com"]?.id == "a")
+            let linked = CalendarLinks.items(candidates: events + [cand("nobody", 300, 30, ["stranger@q.com"])], people: people)
+            check("only events with a known invitee are linked", linked.map(\.external_id) == ["cal:early", "cal:main", "cal:later"])
+            check("person ids are unique and sorted; unknown invitees are counted", linked.first { $0.external_id == "cal:main" }.map { $0.person_ids == ["a", "b"] && $0.unknown_attendees == 1 } == true)
+            let calOut = ProcessInfo.processInfo.environment["LAVOIX_CALENDAR_CONTRACT_DIR"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-cal-\(UUID().uuidString)")
+            try? FileManager.default.removeItem(at: calOut)
+            let defaults = UserDefaults(suiteName: "lavoix.calendar.autotest.\(UUID().uuidString)")!
+            let calFile = (try? CalendarLinks.write(items: linked, dataDirectory: calOut, defaults: defaults, now: t0)) ?? nil
+            let calBody = calFile.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+            check("written to inbox/calendar, with no email address in it", calFile?.deletingLastPathComponent().lastPathComponent == "calendar" && !calBody.isEmpty && !calBody.contains("@") && calBody.contains("\"source\":\"calendar\""))
+            check("an unchanged calendar writes nothing", ((try? CalendarLinks.write(items: linked, dataDirectory: calOut, defaults: defaults, now: t0.addingTimeInterval(9))) ?? nil) == nil)
+            let linkedPayload = MeetingInboxExporter.payload(meetingID: UUID(), title: "T", start: t0, end: t0.addingTimeInterval(600), personIDs: ["a"], unknownAttendees: 0, noteFile: nil, calendarEventID: "main-id")
+            check("a recording's payload carries the calendar event it belongs to", linkedPayload.calendar_external_id == "cal:main-id")
+            if ProcessInfo.processInfo.environment["LAVOIX_CALENDAR_CONTRACT_DIR"] == nil { try? FileManager.default.removeItem(at: calOut) }
             try? FileManager.default.removeItem(at: url)
             print(failures == 0 ? "PEOPLE AUTOTEST ALL PASSED" : "PEOPLE AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)

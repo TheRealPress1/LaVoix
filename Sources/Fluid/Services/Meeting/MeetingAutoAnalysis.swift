@@ -105,13 +105,27 @@ final class MeetingAutoAnalysis: ObservableObject {
     func exportMeetingEvent(_ session: MeetingSession) {
         let settings = SettingsStore.shared
         guard settings.meetingBrainExportEnabled,
-              let entry = MeetingAttendeeRegistry.shared.take(session.id), !entry.personIDs.isEmpty,
               let data = ContactsInboxExporter.dataDirectory(brainOverride: settings.meetingBrainFolderOverride) else { return }
-        let payload = MeetingInboxExporter.payload(
-            meetingID: session.id, title: session.title, start: session.startedAt, end: session.endedAt,
-            personIDs: entry.personIDs, unknownAttendees: entry.unknown, noteFile: MeetingBrainExporter.fileName(for: session)
-        )
+        let remembered = MeetingAttendeeRegistry.shared.take(session.id)
         Task.detached(priority: .utility) {
+            var ids = remembered?.personIDs ?? []
+            var unknown = remembered?.unknown ?? 0
+            var calendarID = remembered?.calendarEventID
+            // Not started from a calendar event (auto-detected, or started by hand): find the event it overlapped.
+            if remembered == nil, let end = session.endedAt,
+               let candidates = CalendarLinks.fetch(start: session.startedAt - 3600, end: end + 3600),
+               let match = CalendarLinks.bestOverlap(candidates, start: session.startedAt, end: end) {
+                let people = PeopleDatabase.emailMap(emails: match.emails)
+                ids = Array(Set(match.emails.compactMap { people[$0]?.id }))
+                unknown = max(0, match.emails.count - ids.count)
+                calendarID = match.id
+            }
+            guard !ids.isEmpty else { return }
+            let payload = MeetingInboxExporter.payload(
+                meetingID: session.id, title: session.title, start: session.startedAt, end: session.endedAt,
+                personIDs: ids, unknownAttendees: unknown, noteFile: MeetingBrainExporter.fileName(for: session),
+                calendarEventID: calendarID
+            )
             do { try MeetingInboxExporter.write(payload, meetingID: session.id, start: session.startedAt, dataDirectory: data) }
             catch { DebugLogger.shared.warning("Meeting event export failed: \(error.localizedDescription)", source: "MeetingInbox") }
         }

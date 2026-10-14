@@ -64,6 +64,35 @@ nonisolated enum PeopleDatabase {
         return out
     }
 
+    /// email (lowercased) -> the known person it belongs to, for many addresses at once. Read-only, in memory.
+    static func emailMap(emails: [String], url: URL = defaultURL) -> [String: KnownPerson] {
+        let wanted = Array(Set(emails.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { $0.contains("@") }))
+        guard !wanted.isEmpty else { return [:] }
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db else { sqlite3_close(db); return [:] }
+        defer { sqlite3_close(db) }
+        sqlite3_busy_timeout(db, 800)
+        let sql = """
+        SELECT i.value_norm, p.id, p.display_name, s.days_since
+        FROM identity i JOIN person p ON p.id = i.person_id AND p.merged_into IS NULL
+        LEFT JOIN person_score s ON s.person_id = p.id WHERE i.kind = 'email'
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement else { sqlite3_finalize(statement); return [:] }
+        defer { sqlite3_finalize(statement) }
+        let wantedSet = Set(wanted)
+        var out: [String: KnownPerson] = [:]
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let email = String(cString: sqlite3_column_text(statement, 0))
+            guard wantedSet.contains(email) else { continue }
+            out[email] = KnownPerson(
+                id: String(cString: sqlite3_column_text(statement, 1)), name: String(cString: sqlite3_column_text(statement, 2)),
+                daysSince: sqlite3_column_type(statement, 3) == SQLITE_NULL ? nil : Int(sqlite3_column_int(statement, 3))
+            )
+        }
+        return out
+    }
+
     /// nil if the database could not be read (missing, locked, or not yet migrated to the scoring tables).
     static func read(url: URL = defaultURL, now: Date = Date(), nudgeLimit: Int = 5, recentLimit: Int = 5) -> (nudges: [PersonNudge], recent: [PersonRecent])? {
         var db: OpaquePointer?

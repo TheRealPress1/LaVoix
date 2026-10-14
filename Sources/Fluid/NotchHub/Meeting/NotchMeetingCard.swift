@@ -532,7 +532,7 @@ final class NotchMeetingCardController {
                 let session = try await coordinator.startRecording(configuration: configuration)
                 let emails = event.attendeeEmails
                 let known = await Task.detached(priority: .utility) { PeopleDatabase.known(emails: emails) }.value
-                MeetingAttendeeRegistry.shared.set(session.id, personIDs: known.map(\.id), unknown: max(0, event.attendeeCount - 1 - known.count))
+                MeetingAttendeeRegistry.shared.set(session.id, personIDs: known.map(\.id), unknown: max(0, event.attendeeCount - 1 - known.count), calendarEventID: event.id)
             } catch {
                 self.dismissTask?.cancel()
                 self.model.phase = .failed(error.localizedDescription)

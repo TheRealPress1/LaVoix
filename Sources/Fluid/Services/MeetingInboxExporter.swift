@@ -14,17 +14,21 @@ nonisolated enum MeetingInboxExporter {
         var person_ids: [String]
         var unknown_attendees: Int
         var note_file: String?
+        /// The calendar event this recording belongs to (same id as in the calendar snapshot), so myOS counts it once.
+        var calendar_external_id: String?
     }
 
     static func payload(
-        meetingID: UUID, title: String, start: Date, end: Date?, personIDs: [String], unknownAttendees: Int, noteFile: String?
+        meetingID: UUID, title: String, start: Date, end: Date?, personIDs: [String], unknownAttendees: Int, noteFile: String?,
+        calendarEventID: String? = nil
     ) -> Payload {
         let iso = ISO8601DateFormatter()
         let minutes = end.map { max(1, Int(($0.timeIntervalSince(start) / 60).rounded())) } ?? 1
         return Payload(
             external_id: "meeting:\(meetingID.uuidString.lowercased())", occurred_at: iso.string(from: start),
             ended_at: end.map(iso.string(from:)), title: title, minutes: minutes,
-            person_ids: Array(Set(personIDs)).sorted(), unknown_attendees: max(0, unknownAttendees), note_file: noteFile
+            person_ids: Array(Set(personIDs)).sorted(), unknown_attendees: max(0, unknownAttendees), note_file: noteFile,
+            calendar_external_id: calendarEventID.map { "cal:" + $0 }
         )
     }
 
@@ -55,12 +59,12 @@ nonisolated enum MeetingInboxExporter {
 /// Who was invited to the meeting being recorded, remembered until it ends. In memory only.
 nonisolated final class MeetingAttendeeRegistry: @unchecked Sendable {
     static let shared = MeetingAttendeeRegistry()
-    struct Entry { let personIDs: [String]; let unknown: Int }
+    struct Entry { let personIDs: [String]; let unknown: Int; let calendarEventID: String? }
     private let lock = NSLock()
     private var entries: [UUID: Entry] = [:]
 
-    func set(_ id: UUID, personIDs: [String], unknown: Int) {
-        self.lock.withLock { self.entries[id] = Entry(personIDs: personIDs, unknown: unknown) }
+    func set(_ id: UUID, personIDs: [String], unknown: Int, calendarEventID: String? = nil) {
+        self.lock.withLock { self.entries[id] = Entry(personIDs: personIDs, unknown: unknown, calendarEventID: calendarEventID) }
     }
 
     func take(_ id: UUID) -> Entry? {
