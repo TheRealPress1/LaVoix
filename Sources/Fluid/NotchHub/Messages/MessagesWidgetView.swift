@@ -144,7 +144,7 @@ private struct ConversationRow: View {
 
     private var preview: String {
         guard NotchMessagesSettings.showsPreviews else { return self.conversation.unreadCount > 0 ? "New message" : "Message" }
-        return (self.conversation.lastIsFromMe ? "You: " : "") + self.conversation.lastText
+        return self.conversation.lastText
     }
 
     private var initials: String {
