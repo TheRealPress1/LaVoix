@@ -49,7 +49,13 @@ enum NotchHubDebug {
                 }
                 model = NotchHubModel()
                 let long = widgetName.contains("long")
-                let text = long
+                let linky = widgetName.contains("link")
+                if linky {
+                    for sample in ["see https://example.com/a?b=1 now", "docs at example.org/path.", "email me@x.com", "no link here", "1.5 is fine", "www.apple.com, ok"] {
+                        print("LINKS \(sample.debugDescription) ->", NotchLinkText.links(in: sample).map { $0.url.absoluteString })
+                    }
+                }
+                let text = linky ? "Here's the doc: https://docs.google.com/document/d/1AbC/edit and the repo github.com/TheRealPress1/LaVoix" : long
                     ? "Aryan gaspard is going to be in Jersey next week and will come work w us for a day. He asked if we could also set up a time to grab dinner on Thursday after the office, maybe somewhere in Hoboken so it's easy for everyone to get to. Let me know what works and I'll send the invite round to the whole group this afternoon so nobody misses it"
                     : "Are we still on for dinner tonight? I booked the place on 5th for 7:30 🍝"
                 ContactResolver.shared.debugSetName("Krish Bhatia", for: "+15551230004")

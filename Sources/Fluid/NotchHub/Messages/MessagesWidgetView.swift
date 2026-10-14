@@ -275,7 +275,8 @@ private struct Bubble: View {
     private var row: some View {
         HStack {
             if self.message.isFromMe { Spacer(minLength: 40) }
-            Text(NotchMessagesSettings.showsPreviews ? self.message.text : "Message")
+            Text(NotchMessagesSettings.showsPreviews ? NotchLinkText.attributed(self.message.text, linkColor: self.message.isFromMe ? .white : Color(red: 0.45, green: 0.72, blue: 1.0)) : AttributedString("Message"))
+                .environment(\.openURL, NotchLinkText.openAction)
                 .font(.system(size: 12.5))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 10)

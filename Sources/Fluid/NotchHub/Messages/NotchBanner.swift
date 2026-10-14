@@ -80,7 +80,12 @@ struct NotchBannerView: View {
                             .font(.system(size: 11.5, weight: .medium))
                             .foregroundStyle(.white.opacity(0.5))
                     }
-                    Text(self.content.text)
+                    Text(NotchLinkText.attributed(self.content.text))
+                        .environment(\.openURL, OpenURLAction { url in
+                            NSWorkspace.shared.open(url)
+                            NotchHubController.shared.dismissBanner()
+                            return .handled
+                        })
                         .font(.system(size: 13.5))
                         .foregroundStyle(.white.opacity(0.9))
                         .lineLimit(self.content.visibleLines)
