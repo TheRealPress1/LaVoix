@@ -17,6 +17,12 @@ enum NotchHubDebug {
                 switch widgetName {
                 case "meeting-listening": model.caption = ""
                 case "meeting-starting": model.phase = .starting
+                case "meeting-detected", "meeting-detected-starting", "meeting-detected-error":
+                    model.phase = .detected
+                    model.detectedName = "Zoom · in Google Chrome"
+                    model.detectedIcon = NSImage(systemSymbolName: "video.fill", accessibilityDescription: nil)
+                    model.detectedStarting = widgetName.hasSuffix("starting")
+                    model.detectedError = widgetName.hasSuffix("error") ? "Zoom is no longer available to record." : nil
                 case "meeting-processing": model.phase = .processing; model.endedAt = Date()
                 case "meeting-ended": model.phase = .ended; model.endedAt = Date()
                 case "meeting-failed": model.phase = .failed("Recording was interrupted. Your audio is saved.")
@@ -160,6 +166,17 @@ enum NotchHubDebug {
             for _ in 0..<5 { card.apply(state: .idle); try? await Task.sleep(nanoseconds: 50_000_000) }
             try? await Task.sleep(nanoseconds: 900_000_000)
             out("prompt goes away by itself despite idle republishes: showing=\(card.isShowing) (expect false)")
+            // A detected call: the card shows on the notch, a message card replaces it, and withdrawing never touches a
+            // recording card that took its place.
+            let shown = card.presentDetected(icon: nil, name: "Zoom")
+            out("detected card presented: \(shown) showing=\(card.isShowingDetected) (expect true, true)")
+            card.updateDetected(starting: true, error: nil)
+            for _ in 0..<5 { card.apply(state: .preparing(UUID())); try? await Task.sleep(nanoseconds: 30_000_000) }
+            out("detected card survives preparing: showing=\(card.isShowingDetected) (expect true)")
+            card.debugPresent(.recording)
+            card.withdrawDetected()
+            out("withdraw leaves a recording card alone: showing=\(card.isShowing) (expect true)")
+            card.dismiss()
             card.debugPresent(.recording)
             hub.debugShowBanner(NotchBannerContent(chatID: 1, chatGUID: "g", title: "Maya", subtitle: nil, text: "hi", date: Date()))
             out("a live recording keeps message cards away: banner=\(hub.model.banner != nil) (expect false)")

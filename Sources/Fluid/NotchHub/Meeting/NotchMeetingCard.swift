@@ -8,10 +8,15 @@ final class NotchMeetingModel: ObservableObject {
     enum Phase: Equatable {
         /// A calendar meeting is starting; offer to record or join.
         case starting
+        /// A call was detected (Zoom, Teams, Meet…); one click on the card starts recording.
+        case detected
         case recording
         case processing
         case ended
         case failed(String)
+
+        /// The slim one-row card.
+        var isCompact: Bool { self == .starting || self == .detected }
     }
 
     @Published var phase: Phase = .recording
@@ -22,6 +27,11 @@ final class NotchMeetingModel: ObservableObject {
     @Published var caption = ""
     @Published var sourceName = ""
     @Published var event: CalendarStore.Event?
+    /// The detected call: its app icon, name, and what the card says while starting or after a failed start.
+    @Published var detectedIcon: NSImage?
+    @Published var detectedName = ""
+    @Published var detectedStarting = false
+    @Published var detectedError: String?
 
     var duration: TimeInterval { max(0, (self.endedAt ?? Date()).timeIntervalSince(self.startedAt)) }
 }
@@ -37,9 +47,12 @@ struct NotchMeetingCardView: View {
     var onRecordEvent: () -> Void = {}
     var onJoin: () -> Void = {}
     var onDismiss: () -> Void = {}
+    var onDetectedTap: () -> Void = {}
+    var onDetectedNeverAgain: () -> Void = {}
+    var onDetectedHover: (Bool) -> Void = { _ in }
 
     var body: some View {
-        let size = NotchGeometry.meetingCardSize(notchHeight: self.notchHeight, compact: self.model.phase == .starting)
+        let size = NotchGeometry.meetingCardSize(notchHeight: self.notchHeight, compact: self.model.phase.isCompact)
         ZStack(alignment: .top) {
             NotchHubShape(topCornerRadius: 10, bottomCornerRadius: 28)
                 .fill(Color.black)
@@ -94,6 +107,49 @@ struct NotchMeetingCardView: View {
                 .buttonStyle(.plain)
             }
             .padding(.top, 4)
+        case .detected:
+            HStack(spacing: 10) {
+                Button(action: self.onDetectedTap) {
+                    HStack(spacing: 10) {
+                        if let icon = self.model.detectedIcon {
+                            Image(nsImage: icon).resizable().aspectRatio(contentMode: .fit)
+                                .frame(width: 26, height: 26)
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        }
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(self.model.detectedName.isEmpty ? "Meeting detected" : self.model.detectedName)
+                                .font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                            if let error = self.model.detectedError {
+                                Text(error).font(.system(size: 11)).foregroundStyle(.orange).lineLimit(1)
+                            } else {
+                                Text(self.model.detectedStarting ? "Starting…" : "Click to record")
+                                    .font(.system(size: 11)).foregroundStyle(.white.opacity(0.55))
+                            }
+                        }
+                        Spacer(minLength: 8)
+                        if self.model.detectedStarting {
+                            ProgressView().controlSize(.small).tint(.white)
+                        } else {
+                            ZStack {
+                                Circle().strokeBorder(Color.white.opacity(0.55), lineWidth: 1.5).frame(width: 20, height: 20)
+                                Circle().fill(Color(red: 1, green: 0.27, blue: 0.23)).frame(width: 11, height: 11)
+                            }
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(self.model.detectedStarting)
+                .help("Record this meeting")
+                Button(action: self.onDismiss) {
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.white.opacity(0.45))
+                }
+                .buttonStyle(.plain)
+                .disabled(self.model.detectedStarting)
+                .contextMenu { Button("Don’t show again", action: self.onDetectedNeverAgain) }
+            }
+            .padding(.top, 4)
+            .onHover { self.onDetectedHover($0) }
         case .recording:
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 8) {
@@ -229,9 +285,17 @@ final class NotchMeetingCardController {
         return self.model.phase == .recording || self.model.phase == .processing
     }
 
+    /// True while the "meeting detected" card is the thing on screen.
+    var isShowingDetected: Bool { self.shouldShow && self.model.phase == .detected }
+
     /// Takes away a prompt-style card (starting, ended, failed) to make room for a message card.
     func dismissPrompt() {
         guard self.wantsVisible, !self.blocksBanners else { return }
+        if self.model.phase == .detected {
+            // A message replaces the detection prompt; the detector treats that as the prompt timing out.
+            MeetingDetectionPromptController.shared.notchCardReplaced()
+            return
+        }
         self.dismiss()
     }
 
@@ -268,7 +332,7 @@ final class NotchMeetingCardController {
         // screen: cancelling the timer here left that card up for good, covering the notch and blocking message cards.
         switch state {
         case .idle, .preparing:
-            if self.model.phase == .starting, self.wantsVisible { return }
+            if self.model.phase.isCompact, self.wantsVisible { return }
         default: break
         }
         self.dismissTask?.cancel()
@@ -350,6 +414,42 @@ final class NotchMeetingCardController {
         self.scheduleDismiss(after: max(0, event.start.timeIntervalSinceNow) + self.startingDismissSeconds)
     }
 
+    // MARK: - Detected call
+
+    /// Shows the "meeting detected" card. Returns false when the notch can't show it, so the caller falls back to the
+    /// floating prompt. Timing belongs to `MeetingDetectionPromptController`, so no dismiss timer runs here.
+    func presentDetected(icon: NSImage?, name: String) -> Bool {
+        guard NotchHubController.shared.isRunning, NotchGeometry.targetScreen() != nil else { return false }
+        if let state = self.coordinator?.state {
+            switch state {
+            case .idle, .completed, .interrupted, .failed: break
+            default: return false
+            }
+        }
+        self.dismissTask?.cancel()
+        self.model.detectedIcon = icon
+        self.model.detectedName = name
+        self.model.detectedStarting = false
+        self.model.detectedError = nil
+        self.model.phase = .detected
+        self.wantsVisible = true
+        self.syncPanel()
+        return true
+    }
+
+    func updateDetected(starting: Bool, error: String?) {
+        guard self.model.phase == .detected else { return }
+        self.model.detectedStarting = starting
+        self.model.detectedError = error
+    }
+
+    /// Takes the detected card away, but leaves a recording card that has since replaced it alone.
+    func withdrawDetected() {
+        guard self.model.phase == .detected else { return }
+        self.wantsVisible = false
+        self.syncPanel()
+    }
+
     /// How long the "meeting starting" prompt stays up. Tests shorten it.
     var startingDismissSeconds: Double = 90
 
@@ -382,6 +482,10 @@ final class NotchMeetingCardController {
     }
 
     func dismiss() {
+        if self.model.phase == .detected, self.wantsVisible, MeetingDetectionPromptController.shared.request != nil {
+            MeetingDetectionPromptController.shared.dismissTapped()
+            return
+        }
         self.dismissTask?.cancel()
         self.wantsVisible = false
         self.syncPanel()
@@ -398,7 +502,7 @@ final class NotchMeetingCardController {
             self.panel?.orderOut(nil)
             return
         }
-        let frame = NotchGeometry.meetingCardFrame(for: screen, compact: self.model.phase == .starting)
+        let frame = NotchGeometry.meetingCardFrame(for: screen, compact: self.model.phase.isCompact)
         let panel = self.panel ?? self.makePanel(frame: frame, notchHeight: NotchGeometry.closedSize(for: screen).height)
         self.panel = panel
         panel.setFrame(frame, display: true)
@@ -416,7 +520,10 @@ final class NotchMeetingCardController {
             onShowCaptions: { [weak self] in self?.showCaptions() },
             onRecordEvent: { [weak self] in if let event = self?.model.event { self?.record(event) } },
             onJoin: { [weak self] in self?.joinEventCall() },
-            onDismiss: { [weak self] in self?.dismiss() }
+            onDismiss: { [weak self] in self?.dismiss() },
+            onDetectedTap: { MeetingDetectionPromptController.shared.startTapped() },
+            onDetectedNeverAgain: { MeetingDetectionPromptController.shared.dontShowAgainTapped() },
+            onDetectedHover: { MeetingDetectionPromptController.shared.notchCardHover($0) }
         )
         let hosting = NSHostingView(rootView: view)
         hosting.sizingOptions = []
@@ -433,6 +540,7 @@ final class NotchMeetingCardController {
         self.model.endedAt = phase == .recording ? nil : Date()
         self.model.caption = "…so let's move the launch to the 14th and I'll send the revised plan tonight."
         self.model.sourceName = "Zoom"
+        self.model.detectedName = "Zoom"
         self.wantsVisible = true
         self.syncPanel()
     }

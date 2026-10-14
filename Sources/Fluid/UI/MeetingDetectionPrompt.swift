@@ -68,6 +68,9 @@ final class MeetingDetectionPromptController: ObservableObject {
     private var isAutoDismissPaused = false
     private var pendingSuppressedRequest: MeetingAutoDetector.PromptRequest?
     private var hasLoggedCurrentSuppression = false
+    /// The prompt is on the notch card instead of the floating panel.
+    private var usesNotch = false
+    private var isPointerOverNotchCard = false
 
     private init() {}
 
@@ -127,6 +130,7 @@ final class MeetingDetectionPromptController: ObservableObject {
         }
         self.isStarting = true
         self.startErrorMessage = nil
+        self.syncNotchCard()
         self.pauseAutoDismiss()
         let episodeID = request.episodeID
         self.startTask?.cancel()
@@ -145,6 +149,7 @@ final class MeetingDetectionPromptController: ObservableObject {
                 DebugLogger.shared.log("prompt-start-failed error=\(error)", source: "MeetingAutoDetector")
                 self.startErrorMessage = Self.startErrorMessage(from: error, appDisplayName: self.appDisplayName)
                 self.isStarting = false
+                self.syncNotchCard()
                 if !self.isPointerInsidePanel() {
                     self.resumeAutoDismiss()
                 }
@@ -197,7 +202,27 @@ final class MeetingDetectionPromptController: ObservableObject {
         self.hasLoggedCurrentSuppression = false
         self.clearAutoDismiss()
         self.panel?.orderOut(nil)
+        if self.usesNotch { NotchMeetingCardController.shared.withdrawDetected() }
+        self.usesNotch = false
+        self.isPointerOverNotchCard = false
         self.request = nil
+    }
+
+    /// A message card took the notch; the detector hears it as the prompt timing out.
+    func notchCardReplaced() {
+        guard let request, self.usesNotch, !self.isStarting else { return }
+        self.hide()
+        self.onTimeout?(request.episodeID)
+    }
+
+    func notchCardHover(_ hovering: Bool) {
+        self.isPointerOverNotchCard = hovering
+        if hovering { self.pauseAutoDismiss() } else { self.resumeAutoDismiss() }
+    }
+
+    private func syncNotchCard() {
+        guard self.usesNotch else { return }
+        NotchMeetingCardController.shared.updateDetected(starting: self.isStarting, error: self.startErrorMessage)
     }
 
     private func showVisiblePrompt(_ request: MeetingAutoDetector.PromptRequest, remainingSeconds: TimeInterval) {
@@ -210,6 +235,23 @@ final class MeetingDetectionPromptController: ObservableObject {
             FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "")
         } ?? "Meeting"
         self.appDisplayName = request.serviceName.map { "\($0) · in \(appName)" } ?? appName
+
+        if request.cta != .setup,
+           NotchMeetingCardController.shared.presentDetected(icon: resolved.map { NSWorkspace.shared.icon(forFile: $0.path) } ?? self.appIcon, name: self.appDisplayName) {
+            self.usesNotch = true
+            self.panel?.orderOut(nil)
+            DebugLogger.shared.log("prompt-shown (notch) bundle=\(request.bundleIdentifier)", source: "MeetingAutoDetector")
+            AccessibilityNotification.Announcement(
+                "Record this meeting? \(self.appDisplayName). Nothing is recording yet."
+            ).post()
+            self.clearAutoDismiss()
+            self.remainingAutoDismissSeconds = remainingSeconds
+            self.isPointerOverNotchCard = false
+            self.isAutoDismissPaused = false
+            self.scheduleAutoDismiss(for: request.episodeID)
+            return
+        }
+        self.usesNotch = false
 
         let panel = self.panelOrCreate()
         self.placeAtDefaultPosition(panel)
@@ -362,6 +404,7 @@ final class MeetingDetectionPromptController: ObservableObject {
     }
 
     private func isPointerInsidePanel(_ panel: NSPanel? = nil) -> Bool {
+        if self.usesNotch { return self.isPointerOverNotchCard }
         let target = panel ?? self.panel
         guard let target else { return false }
         return target.frame.contains(NSEvent.mouseLocation)
