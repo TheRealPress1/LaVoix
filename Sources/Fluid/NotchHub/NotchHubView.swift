@@ -11,10 +11,10 @@ struct NotchHubView: View {
 
     private var isOpen: Bool { self.forceOpen || self.model.isOpen }
 
-    /// The tabs already built (hidden behind the selected one), so switching to them is instant. Filled in gradually after
-    /// the notch opens.
+    /// The tab on screen plus the one used just before it, so flipping back and forth is instant. Every other tab is
+    /// unmounted: hidden tabs kept running their timers and data sources, which could stall the whole notch. (They are
+    /// still pre-built once, off screen, by `NotchHubController.prewarmWidgets`, so a first visit is quick.)
     @State private var mounted: Set<String> = []
-    @State private var warmTask: Task<Void, Never>?
 
     var body: some View {
         let open = self.isOpen
@@ -75,22 +75,11 @@ struct NotchHubView: View {
             }
             .animation(.easeInOut(duration: 0.16), value: selectedID)
         }
-        .onAppear {
-            // Bring the other tabs in one at a time, once the opening animation has settled, so no single frame has to
-            // build them all.
-            self.warmTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 700_000_000)
-                for widget in self.model.widgets {
-                    if Task.isCancelled { return }
-                    self.mounted.insert(widget.id)
-                    try? await Task.sleep(nanoseconds: 130_000_000)
-                }
-            }
+        .onAppear { self.mounted = selectedID.map { [$0] } ?? [] }
+        .onChange(of: selectedID) { old, new in
+            self.mounted = Set([old, new].compactMap { $0 })
         }
-        .onDisappear {
-            self.warmTask?.cancel()
-            self.mounted = []
-        }
+        .onDisappear { self.mounted = [] }
     }
 
     /// Tabs sit left of the physical notch; the area behind it stays empty.
@@ -100,6 +89,7 @@ struct NotchHubView: View {
                 let selected = widget.id == self.model.selectedWidget?.id
                 Button {
                     self.model.selectedWidgetID = widget.id
+                    NotchHubController.shared.verifyTabSwitch(to: widget.id)
                 } label: {
                     Image(systemName: widget.systemImage)
                         .font(.system(size: 13, weight: .medium))

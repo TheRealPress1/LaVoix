@@ -28,6 +28,8 @@ final class NotchHubController {
     private var unreadObserver: AnyCancellable?
     private var resignObserver: NSObjectProtocol?
     private var becomeKeyObserver: NSObjectProtocol?
+    private var clickMonitor: Any?
+    private var stallTask: Task<Void, Never>?
     private(set) var isEditingText = false
 
     private let openDelay: UInt64 = 90_000_000
@@ -85,6 +87,11 @@ final class NotchHubController {
                 self.closeTask = nil
             }
         }
+        // Clicks that reach us through the *global* monitor were delivered to another app. If one lands on the open notch,
+        // the window was click-through when it shouldn't have been.
+        self.clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in
+            Task { @MainActor in self?.checkClickPassedThrough() }
+        }
         self.startMessagesIfEnabled()
         NotchMeetingCardController.shared.hubStateChanged()
         if NotchClipboardSettings.isEnabled { ClipboardStore.shared.start() }
@@ -129,6 +136,9 @@ final class NotchHubController {
         self.model.close()
         if let dragMonitor { NSEvent.removeMonitor(dragMonitor) }
         self.dragMonitor = nil
+        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+        self.clickMonitor = nil
+        self.stopStallWatch()
         self.prewarmTask?.cancel()
         ClipboardStore.shared.stop()
         CalendarStore.shared.stop()
@@ -383,6 +393,14 @@ final class NotchHubController {
         }
         if self.model.isOpen {
             if self.isEditingText { return }
+            if NotchGeometry.openRect(for: screen).contains(point) {
+                // Self-heal: whatever flipped the window to click-through, an open notch under the pointer takes clicks.
+                if self.window?.ignoresMouseEvents == true {
+                    DebugLogger.shared.warning("Open notch was click-through under the pointer; clicks re-enabled", source: "NotchHub")
+                    self.releaseTask?.cancel()
+                    self.window?.ignoresMouseEvents = false
+                }
+            }
             if NotchGeometry.openRect(for: screen).contains(point), !self.recordingOverlayIsVisible {
                 self.closeTask?.cancel()
                 self.closeTask = nil
@@ -425,8 +443,10 @@ final class NotchHubController {
             guard !Task.isCancelled, let self else { return }
             self.closeTask = nil
             if let screen = NotchGeometry.targetScreen(),
-               NotchGeometry.openRect(for: screen).contains(NSEvent.mouseLocation),
-               !self.recordingOverlayIsVisible { return }
+               NotchGeometry.openRect(for: screen).contains(NSEvent.mouseLocation) {
+                if !self.recordingOverlayIsVisible { return }
+                DebugLogger.shared.warning("Closing the notch under the pointer because the dictation overlay reports visible", source: "NotchHub")
+            }
             self.close()
         }
     }
@@ -436,16 +456,66 @@ final class NotchHubController {
         self.releaseTask?.cancel()
         self.window?.ignoresMouseEvents = false
         self.model.open()
+        self.startStallWatch()
     }
 
     private func close() {
         self.model.close()
+        self.stopStallWatch()
         // Let the closing animation finish before clicks start passing through again.
         self.releaseTask?.cancel()
         self.releaseTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 600_000_000)
             guard !Task.isCancelled, let self, !self.model.isOpen else { return }
             self.window?.ignoresMouseEvents = true
+        }
+    }
+
+    // MARK: - Diagnostics
+
+    private func checkClickPassedThrough() {
+        guard self.model.isOpen, let screen = NotchGeometry.targetScreen(),
+              NotchGeometry.openRect(for: screen).contains(NSEvent.mouseLocation) else { return }
+        DebugLogger.shared.warning("Click passed through the open notch: \(self.stateSummary)", source: "NotchHub")
+        if self.window?.ignoresMouseEvents == true {
+            self.releaseTask?.cancel()
+            self.window?.ignoresMouseEvents = false
+        }
+    }
+
+    /// While the notch is open, notes every time the main thread was too busy to run a 100 ms sleep on time. A stall
+    /// here is what makes tab clicks queue up.
+    private func startStallWatch() {
+        guard self.stallTask == nil else { return }
+        self.stallTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                let before = ContinuousClock.now
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                guard !Task.isCancelled, let self else { return }
+                let late = (ContinuousClock.now - before) - .milliseconds(100)
+                let ms = Int(late.components.seconds * 1000 + late.components.attoseconds / 1_000_000_000_000_000)
+                if ms > 150 {
+                    DebugLogger.shared.warning("Main thread stalled \(ms) ms while the notch was open (tab: \(self.model.selectedWidgetID))", source: "NotchHub")
+                }
+            }
+        }
+    }
+
+    private func stopStallWatch() {
+        self.stallTask?.cancel()
+        self.stallTask = nil
+    }
+
+    var stateSummary: String {
+        "open=\(self.model.isOpen) clickThrough=\(self.window?.ignoresMouseEvents ?? false) key=\(self.window?.isKeyWindow ?? false) editing=\(self.isEditingText) dictationOverlay=\(self.recordingOverlayIsVisible) banner=\(self.model.banner != nil) tab=\(self.model.selectedWidgetID)"
+    }
+
+    /// Called after a tab click; says so in the log if the selection did not change.
+    func verifyTabSwitch(to id: String) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard let self, self.model.selectedWidgetID != id else { return }
+            DebugLogger.shared.warning("Tab click on \(id) did not switch: \(self.stateSummary)", source: "NotchHub")
         }
     }
 
