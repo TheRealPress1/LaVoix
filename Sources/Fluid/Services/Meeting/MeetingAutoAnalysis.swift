@@ -30,6 +30,7 @@ final class MeetingAutoAnalysis: ObservableObject {
         // The readable transcript is always kept, whether or not notes are written.
         self.writeTranscriptFile(session)
         self.exportToBrain(session, summary: nil)
+        self.exportMeetingEvent(session)
         guard SettingsStore.shared.meetingAutoNotesEnabled else { return }
         guard session.transcriptSegments.contains(where: { !$0.isEcho && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { return }
         self.task?.cancel()
@@ -97,6 +98,22 @@ final class MeetingAutoAnalysis: ObservableObject {
         } catch {
             DebugLogger.shared.log("auto-notes failed: \(error.localizedDescription)", source: "MeetingAutoAnalysis")
             self.status = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Tells myOS who was in the meeting (opaque person ids only), when the recording came from a calendar event.
+    func exportMeetingEvent(_ session: MeetingSession) {
+        let settings = SettingsStore.shared
+        guard settings.meetingBrainExportEnabled,
+              let entry = MeetingAttendeeRegistry.shared.take(session.id), !entry.personIDs.isEmpty,
+              let data = ContactsInboxExporter.dataDirectory(brainOverride: settings.meetingBrainFolderOverride) else { return }
+        let payload = MeetingInboxExporter.payload(
+            meetingID: session.id, title: session.title, start: session.startedAt, end: session.endedAt,
+            personIDs: entry.personIDs, unknownAttendees: entry.unknown, noteFile: MeetingBrainExporter.fileName(for: session)
+        )
+        Task.detached(priority: .utility) {
+            do { try MeetingInboxExporter.write(payload, meetingID: session.id, start: session.startedAt, dataDirectory: data) }
+            catch { DebugLogger.shared.warning("Meeting event export failed: \(error.localizedDescription)", source: "MeetingInbox") }
         }
     }
 

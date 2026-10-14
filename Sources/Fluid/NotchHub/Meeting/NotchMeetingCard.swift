@@ -27,6 +27,8 @@ final class NotchMeetingModel: ObservableObject {
     @Published var caption = ""
     @Published var sourceName = ""
     @Published var event: CalendarStore.Event?
+    /// People myOS already knows among the invitees, for the heads-up line.
+    @Published var knownAttendees: [KnownPerson] = []
     /// The detected call: its app icon, name, and what the card says while starting or after a failed start.
     @Published var detectedIcon: NSImage?
     @Published var detectedName = ""
@@ -81,7 +83,7 @@ struct NotchMeetingCardView: View {
                     Text(self.model.event?.title ?? "Meeting").font(.system(size: 13, weight: .semibold)).lineLimit(1)
                     if let event = self.model.event {
                         TimelineView(.periodic(from: .now, by: 1)) { context in
-                            Text(Self.countdown(to: event.start, now: context.date))
+                            Text(Self.countdown(to: event.start, now: context.date) + Self.attendeeLine(self.model.knownAttendees))
                                 .font(.system(size: 11).monospacedDigit()).foregroundStyle(.white.opacity(0.55))
                         }
                     }
@@ -268,6 +270,15 @@ struct NotchMeetingCardView: View {
         if seconds > 0 { return "Starts in " + String(format: "%d:%02d", seconds / 60, seconds % 60) }
         if seconds > -30 { return "Starting now" }
         return "Started \(max(1, -seconds / 60)) min ago"
+    }
+
+    /// " · with Maya Chen (28 days ago) +1" for the people myOS knows among the invitees; empty when none.
+    static func attendeeLine(_ people: [KnownPerson]) -> String {
+        guard let first = people.first else { return "" }
+        var line = " · with " + first.name
+        if let d = first.daysSince { line += d <= 0 ? " (today)" : d == 1 ? " (yesterday)" : " (\(d)d ago)" }
+        if people.count > 1 { line += " +\(people.count - 1)" }
+        return line
     }
 
     static func clock(_ seconds: TimeInterval) -> String {
@@ -457,6 +468,14 @@ final class NotchMeetingCardController {
         }
         self.dismissTask?.cancel()
         self.model.event = event
+        self.model.knownAttendees = []
+        let emails = event.attendeeEmails
+        if !emails.isEmpty {
+            Task { [weak self] in
+                let known = await Task.detached(priority: .utility) { PeopleDatabase.known(emails: emails) }.value
+                if self?.model.event?.id == event.id { self?.model.knownAttendees = known }
+            }
+        }
         self.model.phase = .starting
         self.wantsVisible = true
         self.syncPanel()
@@ -510,7 +529,10 @@ final class NotchMeetingCardController {
                 let configuration = try await coordinator.defaultConfiguration(
                     mode: event.joinURL != nil ? .onlineCall : .inRoom, title: event.title
                 )
-                _ = try await coordinator.startRecording(configuration: configuration)
+                let session = try await coordinator.startRecording(configuration: configuration)
+                let emails = event.attendeeEmails
+                let known = await Task.detached(priority: .utility) { PeopleDatabase.known(emails: emails) }.value
+                MeetingAttendeeRegistry.shared.set(session.id, personIDs: known.map(\.id), unknown: max(0, event.attendeeCount - 1 - known.count))
             } catch {
                 self.dismissTask?.cancel()
                 self.model.phase = .failed(error.localizedDescription)

@@ -19,12 +19,50 @@ nonisolated struct PersonRecent: Identifiable, Equatable {
     let daysSince: Int
 }
 
+nonisolated struct KnownPerson: Equatable {
+    let id: String
+    let name: String
+    let daysSince: Int?
+}
+
 nonisolated enum PeopleDatabase {
     static var defaultURL: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/myOS/system.db")
     }
 
     static var isAvailable: Bool { FileManager.default.fileExists(atPath: defaultURL.path) }
+
+    /// The people myOS already knows among these email addresses (matched exactly, case-insensitively). Read-only, in
+    /// memory: the addresses are used for the lookup and then forgotten.
+    static func known(emails: [String], url: URL = defaultURL) -> [KnownPerson] {
+        let wanted = Array(Set(emails.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { $0.contains("@") }))
+        guard !wanted.isEmpty else { return [] }
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db else { sqlite3_close(db); return [] }
+        defer { sqlite3_close(db) }
+        sqlite3_busy_timeout(db, 800)
+        let marks = wanted.map { _ in "?" }.joined(separator: ",")
+        let sql = """
+        SELECT DISTINCT p.id, p.display_name, s.days_since
+        FROM identity i JOIN person p ON p.id = i.person_id AND p.merged_into IS NULL
+        LEFT JOIN person_score s ON s.person_id = p.id
+        WHERE i.kind = 'email' AND i.value_norm IN (\(marks)) ORDER BY COALESCE(s.strength, 0) DESC, p.display_name
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement else { sqlite3_finalize(statement); return [] }
+        defer { sqlite3_finalize(statement) }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        for (i, email) in wanted.enumerated() { sqlite3_bind_text(statement, Int32(i + 1), email, -1, transient) }
+        var out: [KnownPerson] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            out.append(KnownPerson(
+                id: String(cString: sqlite3_column_text(statement, 0)),
+                name: String(cString: sqlite3_column_text(statement, 1)),
+                daysSince: sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : Int(sqlite3_column_int(statement, 2))
+            ))
+        }
+        return out
+    }
 
     /// nil if the database could not be read (missing, locked, or not yet migrated to the scoring tables).
     static func read(url: URL = defaultURL, now: Date = Date(), nudgeLimit: Int = 5, recentLimit: Int = 5) -> (nudges: [PersonNudge], recent: [PersonRecent])? {

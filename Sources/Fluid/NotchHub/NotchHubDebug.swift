@@ -557,6 +557,8 @@ enum NotchHubDebug {
             CREATE TABLE person (id TEXT PRIMARY KEY, display_name TEXT, merged_into TEXT);
             CREATE TABLE person_score (person_id TEXT PRIMARY KEY, urgency REAL, circle_effective INTEGER, days_since INTEGER, reason TEXT, strength REAL);
             CREATE TABLE nudge_snooze (person_id TEXT PRIMARY KEY, until TEXT);
+            CREATE TABLE identity (kind TEXT, value_norm TEXT, person_id TEXT);
+            INSERT INTO identity VALUES ('email','ann@x.com','a'),('email','bo@y.com','b'),('email','di@z.com','d'),('phone','+14155550000','e');
             INSERT INTO person VALUES ('a','Ann Close',NULL),('b','Bo Mid',NULL),('c','Cy Snoozed',NULL),('d','Di Merged','a'),('e','Ed Fine',NULL),('f','Flo Old',NULL);
             INSERT INTO person_score VALUES ('a', 8.5, 5, 20, '20 days since you last spoke · aim for every 7 · you wrote last', 90),
                                             ('b', 3.0, 50, 70, '70 days since you last spoke · aim for every 30', 40),
@@ -578,6 +580,24 @@ enum NotchHubDebug {
             check("a snooze that has ended brings the nudge back", PeopleDatabase.read(url: url, now: Date(timeIntervalSince1970: 4_200_000_000))?.nudges.contains { $0.name == "Cy Snoozed" } == true)
             check("a missing database reports nil, not a crash", PeopleDatabase.read(url: url.appendingPathExtension("nope")) == nil)
             check("short reason reads naturally", PeopleWidgetView.shortReason(PersonNudge(id: "x", name: "x", circle: 5, daysSince: 20, reason: "20 days since you last spoke · aim for every 7 · you wrote last")) == "20 days ago · aim for every 7 days")
+            let known = PeopleDatabase.known(emails: [" Ann@X.com ", "bo@y.com", "nobody@q.com", "bo@y.com"], url: url)
+            check("invitees are matched to known people, case-insensitively, once each", known.map(\.name) == ["Ann Close", "Bo Mid"])
+            check("days since last contact come along", known.map(\.daysSince) == [20, 70])
+            check("a merged person and unknown addresses match nothing", PeopleDatabase.known(emails: ["di@z.com", "x@nowhere.com"], url: url).isEmpty)
+            check("phones are not matched as emails; bad input is ignored", PeopleDatabase.known(emails: ["+14155550000", "", "not-an-email"], url: url).isEmpty)
+            check("the heads-up line names the first person and counts the rest", NotchMeetingCardView.attendeeLine(known) == " · with Ann Close (20d ago) +1" && NotchMeetingCardView.attendeeLine([]) == "")
+            let meetingID = UUID()
+            let start = Date(timeIntervalSince1970: 1_800_000_000)
+            let payload = MeetingInboxExporter.payload(meetingID: meetingID, title: "Design sync", start: start, end: start.addingTimeInterval(1800), personIDs: ["b", "a", "a"], unknownAttendees: 2, noteFile: "meeting-x.md")
+            check("the meeting payload carries sorted unique person ids and the length", payload.person_ids == ["a", "b"] && payload.minutes == 30 && payload.unknown_attendees == 2 && payload.external_id == "meeting:\(meetingID.uuidString.lowercased())")
+            let out = ProcessInfo.processInfo.environment["LAVOIX_MEETING_CONTRACT_DIR"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-meet-\(UUID().uuidString)")
+            try? FileManager.default.removeItem(at: out)
+            let file = try? MeetingInboxExporter.write(payload, meetingID: meetingID, start: start, dataDirectory: out)
+            let body = file.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+            check("written to inbox/meetings with a stable name", file?.lastPathComponent == MeetingInboxExporter.fileName(meetingID: meetingID, start: start) && file?.deletingLastPathComponent().lastPathComponent == "meetings")
+            check("no email address can appear in the file", !body.isEmpty && !body.contains("@"))
+            check("writing again replaces the same file", ((try? MeetingInboxExporter.write(payload, meetingID: meetingID, start: start, dataDirectory: out)) ?? nil) == file)
+            if ProcessInfo.processInfo.environment["LAVOIX_MEETING_CONTRACT_DIR"] == nil { try? FileManager.default.removeItem(at: out) }
             try? FileManager.default.removeItem(at: url)
             print(failures == 0 ? "PEOPLE AUTOTEST ALL PASSED" : "PEOPLE AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)
