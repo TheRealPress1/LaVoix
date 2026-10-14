@@ -79,7 +79,7 @@ struct NotchHubView: View {
             // the plain row.
             Group {
                 if self.forceOpen || Self.previewStatic {
-                    self.tabButtons.frame(maxWidth: .infinity).frame(height: NotchGeometry.tabRowHeight)
+                    self.tabButtons.padding(.horizontal, 34).frame(maxWidth: .infinity, alignment: .leading).frame(height: NotchGeometry.tabRowHeight)
                 } else {
                     self.tabRow
                 }
@@ -112,8 +112,6 @@ struct NotchHubView: View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 self.tabButtons
-                    .frame(minWidth: NotchGeometry.openSize.width - 76)
-                    .padding(.horizontal, 6)
             }
             .mask(
                 HStack(spacing: 0) {
@@ -126,7 +124,7 @@ struct NotchHubView: View {
                 withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) }
             }
         }
-        .padding(.horizontal, 38)
+        .padding(.horizontal, 34)
         .frame(height: NotchGeometry.tabRowHeight)
     }
 
