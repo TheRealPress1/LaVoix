@@ -38,7 +38,6 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     // Cached menu items to avoid rebuilding entire menu
     private var statusMenuItem: NSMenuItem?
     private var copyLastTranscriptMenuItem: NSMenuItem?
-    private var rollbackMenuItem: NSMenuItem?
     private var microphoneMenuItem: NSMenuItem?
     private var microphoneSubmenu: NSMenu?
     private var startMeetingRecordingMenuItem: NSMenuItem?
@@ -1000,29 +999,6 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         self.microphoneMenuItem = microphoneMenuItem
         self.microphoneSubmenu = microphoneSubmenu
 
-        // Check for Updates
-        let updateItem = NSMenuItem(
-            title: "Check for Updates...",
-            action: #selector(checkForUpdates(_:)),
-            keyEquivalent: ""
-        )
-        updateItem.target = self
-        menu.addItem(updateItem)
-
-        menu.addItem(.separator())
-
-        let rollbackMenuItem = NSMenuItem(
-            title: "Rollback to Previous Version...",
-            action: #selector(rollbackToPreviousVersion(_:)),
-            keyEquivalent: ""
-        )
-        rollbackMenuItem.target = self
-        rollbackMenuItem.isEnabled = SimpleUpdater.shared.hasRollbackBackup()
-        menu.addItem(rollbackMenuItem)
-        self.rollbackMenuItem = rollbackMenuItem
-
-        menu.addItem(.separator())
-
         // Quit
         let quitItem = NSMenuItem(
             title: "Quit LaVoix",
@@ -1071,7 +1047,6 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         self.microphoneMenuItem?.isEnabled = true
 
         // Update rollback availability text
-        self.rollbackMenuItem?.isEnabled = SimpleUpdater.shared.hasRollbackBackup()
     }
 
     private func updateMeetingMenuItemsText(now: Date = Date()) {

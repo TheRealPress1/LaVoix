@@ -448,15 +448,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     // MARK: - Periodic Update Checks
 
     private func schedulePeriodicUpdateChecks() {
-        // Schedule a timer to check for updates every hour (3600 seconds)
-        // The actual check logic inside checkForUpdatesAutomatically() handles:
-        // - Whether auto-updates are enabled
-        // - Whether enough time has passed since last check
-        // - Whether the user snoozed the prompt
-        self.updateCheckTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
-            DebugLogger.shared.debug("Periodic update check timer fired", source: "AppDelegate")
-            self?.checkForUpdatesAutomatically()
-        }
+        // LaVoix is built and installed by hand; it never checks for updates.
     }
 
     // MARK: - Manual Update Check
@@ -468,16 +460,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     // MARK: - Automatic Update Check
 
     private func checkForUpdatesAutomatically() {
-        #if DEBUG
-        guard !UpdatePromptSimulation.isEnabled else { return }
-        #endif
-        guard SettingsStore.shared.shouldCheckForUpdates() else { return }
-        Task {
-            // Keep the existing launch delay; the updater rechecks current preferences.
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            guard !Task.isCancelled, SettingsStore.shared.shouldCheckForUpdates() else { return }
-            SimpleUpdater.shared.checkForUpdatesAutomatically()
-        }
+        // No updater: LaVoix never contacts a release feed.
     }
 
     @MainActor
