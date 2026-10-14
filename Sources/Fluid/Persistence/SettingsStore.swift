@@ -2096,6 +2096,19 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Write the executive notes by itself when a meeting ends (default: ON).
+    var meetingAutoNotesEnabled: Bool {
+        get {
+            let value = self.defaults.object(forKey: Keys.meetingAutoNotesEnabled)
+            if value == nil { return true }
+            return self.defaults.bool(forKey: Keys.meetingAutoNotesEnabled)
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.meetingAutoNotesEnabled)
+        }
+    }
+
     /// Tier 2 browser-tab meeting auto-detection (default: OFF — reads the frontmost tab's URL).
     var meetingAutoDetectBrowserEnabled: Bool {
         get { self.defaults.bool(forKey: Keys.meetingAutoDetectBrowserEnabled) }
@@ -5832,6 +5845,7 @@ private extension SettingsStore {
         static let meetingAudioRetentionPolicy = "MeetingAudioRetentionPolicy"
         static let meetingTranscriptionBackendID = "MeetingTranscriptionBackendID"
         static let meetingAutoDetectEnabled = "MeetingAutoDetectEnabled"
+        static let meetingAutoNotesEnabled = "MeetingAutoNotesEnabled"
         static let meetingAutoDetectBrowserEnabled = "MeetingAutoDetectBrowserEnabled"
         static let microphoneSelectionMode = "MicrophoneSelectionMode"
         // Keep the original persisted key so existing installs migrate in place.

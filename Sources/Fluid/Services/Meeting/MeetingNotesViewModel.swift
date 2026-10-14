@@ -16,7 +16,7 @@ final class MeetingNotesViewModel: ObservableObject {
     @Published private(set) var isStale = false
     @Published private(set) var notes = ""
 
-    private nonisolated struct Saved: Codable, Sendable {
+    nonisolated struct Saved: Codable, Sendable {
         let transcriptHash: String
         let modelID: String
         let text: String
@@ -152,7 +152,7 @@ final class MeetingNotesViewModel: ObservableObject {
         self.phase = .generating(message)
     }
 
-    private static func fingerprint(transcript: String, notes: String) -> String {
+    static func fingerprint(transcript: String, notes: String) -> String {
         MeetingSummaryInput.fingerprint(transcript + "\n[notes]\n" + notes)
     }
 }

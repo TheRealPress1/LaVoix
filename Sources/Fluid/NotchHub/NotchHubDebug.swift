@@ -25,6 +25,8 @@ enum NotchHubDebug {
                     model.detectedError = widgetName.hasSuffix("error") ? "Zoom is no longer available to record." : nil
                 case "meeting-processing": model.phase = .processing; model.endedAt = Date()
                 case "meeting-ended": model.phase = .ended; model.endedAt = Date()
+                case "meeting-ended-writing": model.phase = .ended; model.endedAt = Date(); model.notes = .writing("Writing notes…")
+                case "meeting-ended-ready": model.phase = .ended; model.endedAt = Date(); model.notes = .ready(UUID())
                 case "meeting-failed": model.phase = .failed("Recording was interrupted. Your audio is saved.")
                 default: break
                 }
@@ -194,6 +196,78 @@ enum NotchHubDebug {
             out(card.debugReport("hub stopped"))
             out("MEETING CARD AUTOTEST DONE")
             exit(0)
+        }
+    }
+
+    /// `LAVOIX_AUTONOTES_AUTOTEST=1` runs the after-meeting notes pipeline against a temporary meeting folder with a
+    /// stand-in for the model: it checks the saved file matches what the notes screen reads, and that it stays quiet
+    /// when auto-notes are off or the transcript is empty.
+    @MainActor static func autoNotesAutotestIfRequested() {
+        guard ProcessInfo.processInfo.environment["LAVOIX_AUTONOTES_AUTOTEST"] == "1" else { return }
+        Task { @MainActor in
+            var failures = 0
+            func check(_ name: String, _ ok: Bool) {
+                print("\(ok ? "PASS" : "FAIL") \(name)")
+                if !ok { failures += 1 }
+            }
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-autonotes-\(UUID().uuidString)")
+            let store = MeetingSessionStore(rootDirectory: root)
+            let track = UUID()
+            var session = MeetingSession(
+                configuration: MeetingCaptureConfiguration(
+                    mode: .inRoom, title: "Auto notes fixture", application: nil,
+                    microphone: MeetingMicrophoneIdentity(captureDeviceID: "m", coreAudioUID: "m", displayName: "Mic")
+                ),
+                timebase: MeetingTimebaseMetadata(startedHostTime: 1, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil)
+            )
+            let empty = session
+            session.transcriptSegments = [MeetingTranscriptSegment(
+                id: UUID(), start: MeetingMediaTime(value: 0, timescale: 1), end: MeetingMediaTime(value: 4, timescale: 1),
+                sourceTrackID: track, speakerID: nil, text: "We will ship on Thursday.", revision: 1,
+                status: .final, overlap: .none, completeness: .complete
+            )]
+            do { try await store.create(empty) } catch { print("create failed:", error) }
+            let service = MeetingAutoAnalysis.shared
+            service.store = store
+            service.generatorOverride = { _, _ in "- Ship on Thursday." }
+            @MainActor func settle() async {
+                for _ in 0..<100 {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    if case .writing = service.status { continue }
+                    return
+                }
+            }
+            SettingsStore.shared.meetingAutoNotesEnabled = true
+            service.start(session: session)
+            await settle()
+            print("status:", service.status); check("status becomes ready", service.status == .ready(session.id))
+            let dir = try? await store.existingSessionDirectory(for: session.id)
+            let file = dir?.appendingPathComponent("manual-summary-executive.json")
+            let saved = file.flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(MeetingNotesViewModel.Saved.self, from: $0) }
+            check("manual-summary-executive.json written with the notes", saved?.text == "- Ship on Thursday.")
+            let transcript = MeetingSummaryInput.transcript(for: session)
+            check("fingerprint matches the notes screen's stale check",
+                  saved?.transcriptHash == MeetingNotesViewModel.fingerprint(transcript: transcript, notes: ""))
+
+            if let file { try? FileManager.default.removeItem(at: file) }
+            SettingsStore.shared.meetingAutoNotesEnabled = false
+            service.start(session: session)
+            await settle()
+            check("off: stays idle and writes nothing", service.status == .idle && !(file.map { FileManager.default.fileExists(atPath: $0.path) } ?? true))
+            SettingsStore.shared.meetingAutoNotesEnabled = true
+
+            service.start(session: empty)
+            await settle()
+            check("empty transcript: stays idle", service.status == .idle)
+
+            service.generatorOverride = { _, _ in throw MeetingNotesError.emptyOutput }
+            service.start(session: session)
+            await settle()
+            if case .failed = service.status { check("model failure surfaces as failed", true) } else { check("model failure surfaces as failed", false) }
+
+            try? FileManager.default.removeItem(at: root)
+            print(failures == 0 ? "AUTONOTES AUTOTEST ALL PASSED" : "AUTONOTES AUTOTEST \(failures) FAILED")
+            exit(failures == 0 ? 0 : 1)
         }
     }
 
@@ -757,7 +831,7 @@ enum NotchHubDebug {
                 NowPlayingStore.Track(title: title, artist: artist, album: nil, appName: "App", bundleID: app, isPlaying: playing, duration: 200,
                                       artwork: art ? NowPlayingStore.sample().track?.artwork : nil, pid: nil)
             }
-            func settle() async { try? await Task.sleep(nanoseconds: 700_000_000) }
+            @MainActor func settle() async { try? await Task.sleep(nanoseconds: 700_000_000) }
 
             // 1. A title that flickers (the browser reporting another tab for a moment) is never logged.
             store.trackChanged(track("Real video", app: "company.thebrowser.dia"))

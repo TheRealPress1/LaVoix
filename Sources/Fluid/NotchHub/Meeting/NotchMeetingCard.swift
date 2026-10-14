@@ -32,6 +32,8 @@ final class NotchMeetingModel: ObservableObject {
     @Published var detectedName = ""
     @Published var detectedStarting = false
     @Published var detectedError: String?
+    /// Progress of the automatic notes once the meeting is over.
+    @Published var notes: MeetingAutoAnalysis.Status = .idle
 
     var duration: TimeInterval { max(0, (self.endedAt ?? Date()).timeIntervalSince(self.startedAt)) }
 }
@@ -192,21 +194,29 @@ struct NotchMeetingCardView: View {
             .padding(.top, 10)
         case .ended:
             HStack(spacing: 10) {
-                Image(systemName: "checkmark.circle.fill").font(.system(size: 16))
+                if case .writing = self.model.notes {
+                    ProgressView().controlSize(.small).tint(.white)
+                } else {
+                    Image(systemName: "checkmark.circle.fill").font(.system(size: 16))
+                }
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Meeting ended").font(.system(size: 13, weight: .semibold))
-                    Text(Self.clock(self.model.duration) + (self.model.sourceName.isEmpty ? "" : " · " + self.model.sourceName))
-                        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+                    Text(self.endedTitle).font(.system(size: 13, weight: .semibold))
+                    Text(self.endedSubtitle)
+                        .font(.system(size: 11)).foregroundStyle(self.endedSubtitleIsError ? Color.orange : .white.opacity(0.5)).lineLimit(1)
                 }
                 Spacer(minLength: 8)
-                Button(action: self.onWriteNotes) {
-                    Text("Write notes")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.black)
-                        .padding(.horizontal, 12).padding(.vertical, 5)
-                        .background(Capsule().fill(Color.white))
+                if case .writing = self.model.notes {
+                    EmptyView()
+                } else {
+                    Button(action: self.onWriteNotes) {
+                        Text(self.endedButton)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 12).padding(.vertical, 5)
+                            .background(Capsule().fill(Color.white))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
                 Button(action: self.onDismiss) {
                     Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(.white.opacity(0.5))
                 }
@@ -226,6 +236,30 @@ struct NotchMeetingCardView: View {
             }
             .padding(.top, 8)
         }
+    }
+
+    private var endedTitle: String {
+        switch self.model.notes {
+        case .writing: return "Writing notes…"
+        case .ready: return "Notes ready"
+        default: return "Meeting ended"
+        }
+    }
+
+    private var endedSubtitle: String {
+        if case let .failed(message) = self.model.notes { return message }
+        if case let .writing(progress) = self.model.notes, progress != "Writing notes…" { return progress }
+        return Self.clock(self.model.duration) + (self.model.sourceName.isEmpty ? "" : " · " + self.model.sourceName)
+    }
+
+    private var endedSubtitleIsError: Bool {
+        if case .failed = self.model.notes { return true }
+        return false
+    }
+
+    private var endedButton: String {
+        if case .ready = self.model.notes { return "Open" }
+        return "Write notes"
     }
 
     /// "Starts in 1:45", "Starting now", "Started 2 min ago".
@@ -307,6 +341,10 @@ final class NotchMeetingCardController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in self?.apply(state: state) }
             .store(in: &self.cancellables)
+        MeetingAutoAnalysis.shared.$status
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] status in self?.analysisChanged(status) }
+            .store(in: &self.cancellables)
         coordinator.$liveTranscript
             .receive(on: DispatchQueue.main)
             .sink { [weak self] snapshot in self?.updateCaption(snapshot) }
@@ -354,6 +392,7 @@ final class NotchMeetingCardController {
             }
             self.model.phase = .ended
             self.wantsVisible = true
+            if let session = self.coordinator?.latestCompletedSession { MeetingAutoAnalysis.shared.start(session: session) }
             self.scheduleDismiss(after: 60)
         case .interrupted:
             self.model.phase = .failed("Recording was interrupted. Your audio is saved.")
@@ -368,6 +407,16 @@ final class NotchMeetingCardController {
             self.model.caption = ""
         }
         self.syncPanel()
+    }
+
+    private func analysisChanged(_ status: MeetingAutoAnalysis.Status) {
+        self.model.notes = status
+        guard self.model.phase == .ended else { return }
+        switch status {
+        case .writing: self.dismissTask?.cancel()
+        case .ready, .failed: self.scheduleDismiss(after: 60)
+        case .idle: break
+        }
     }
 
     private func updateCaption(_ snapshot: MeetingLiveTranscriptSnapshot) {
