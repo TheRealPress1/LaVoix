@@ -80,7 +80,11 @@ struct NotchMeetingCardView: View {
                     .buttonStyle(.plain)
                 }
                 Button(action: self.onRecordEvent) {
-                    Image(systemName: "record.circle").font(.system(size: 15)).foregroundStyle(.white.opacity(self.model.event?.joinURL == nil ? 0.95 : 0.6))
+                    // A plain red record dot, like a camera's record light.
+                    ZStack {
+                        Circle().strokeBorder(Color.white.opacity(0.55), lineWidth: 1.5).frame(width: 20, height: 20)
+                        Circle().fill(Color(red: 1, green: 0.27, blue: 0.23)).frame(width: 11, height: 11)
+                    }
                 }
                 .buttonStyle(.plain)
                 .help("Record this meeting")

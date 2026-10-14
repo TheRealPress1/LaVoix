@@ -202,7 +202,15 @@ private struct EventRow: View {
             if self.hovering, self.event.joinURL != nil || self.event.looksLikeMeeting {
                 HStack(spacing: 6) {
                     if let url = self.event.joinURL { self.pill("Join", prominent: false) { NSWorkspace.shared.open(url) } }
-                    self.pill("Record", prominent: true) { NotchMeetingCardController.shared.record(self.event) }
+                    Button { NotchMeetingCardController.shared.record(self.event) } label: {
+                        // A plain red record dot, like a camera's record light.
+                        ZStack {
+                            Circle().strokeBorder(Color.white.opacity(0.55), lineWidth: 1.5).frame(width: 22, height: 22)
+                            Circle().fill(Color(red: 1, green: 0.27, blue: 0.23)).frame(width: 12, height: 12)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help("Record this meeting")
                 }
             } else if live {
                 Text("Now").font(.system(size: 11, weight: .semibold)).foregroundStyle(.green)
