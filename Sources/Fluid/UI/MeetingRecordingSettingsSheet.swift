@@ -454,6 +454,30 @@ struct MeetingRecordingSettingsSheet: View {
                             .accessibilityLabel("Share contacts with myOS")
                     }
                     Divider()
+                    MeetingAdaptiveSetupRow(
+                        title: "Share message activity with myOS",
+                        detail: "For one-to-one chats with real history, shares only how many messages, on which days, who sent them and how quickly you reply. Message text is never read. Needs Full Disk Access. Off by default.",
+                        trailingSwitch: true
+                    ) {
+                        Toggle("Share message activity with myOS", isOn: self.$draft.shareMessagesEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .meetingHoverFeedback()
+                            .accessibilityLabel("Share message activity with myOS")
+                    }
+                    if self.draft.shareMessagesEnabled {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Never share these conversations")
+                                .font(self.theme.typography.bodySmall)
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                            TextField("+15551234567, someone@icloud.com", text: self.$draft.messagesExcluded, axis: .vertical)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 12, design: .monospaced))
+                                .lineLimit(1...4)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    Divider()
                     MeetingNotesCommandRow(command: self.$draft.notesCommand)
                 }
             }

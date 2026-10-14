@@ -38,6 +38,8 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var autoNotesEnabled: Bool
     var brainExportEnabled: Bool
     var shareContactsEnabled: Bool
+    var shareMessagesEnabled: Bool
+    var messagesExcluded: String
     var notesCommand: String
 
     init(settings: SettingsStore = .shared) {
@@ -47,6 +49,8 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         self.autoNotesEnabled = settings.meetingAutoNotesEnabled
         self.brainExportEnabled = settings.meetingBrainExportEnabled
         self.shareContactsEnabled = settings.shareContactsWithMyOSEnabled
+        self.shareMessagesEnabled = settings.shareMessagesWithMyOSEnabled
+        self.messagesExcluded = settings.messagesExcludedHandles
         self.notesCommand = settings.meetingNotesCommand
         self.languageCode = defaults.languageCode ?? "en"
         self.mode = defaults.mode
@@ -1167,6 +1171,8 @@ struct MeetingTranscriptionView: View {
         self.setupDraft.autoNotesEnabled = SettingsStore.shared.meetingAutoNotesEnabled
         self.setupDraft.brainExportEnabled = SettingsStore.shared.meetingBrainExportEnabled
         self.setupDraft.shareContactsEnabled = SettingsStore.shared.shareContactsWithMyOSEnabled
+        self.setupDraft.shareMessagesEnabled = SettingsStore.shared.shareMessagesWithMyOSEnabled
+        self.setupDraft.messagesExcluded = SettingsStore.shared.messagesExcludedHandles
         self.setupDraft.notesCommand = SettingsStore.shared.meetingNotesCommand
         self.setupDraftBeforeEditing = self.setupDraft
         self.draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
@@ -1225,6 +1231,9 @@ struct MeetingTranscriptionView: View {
         settings.meetingAutoNotesEnabled = self.setupDraft.autoNotesEnabled
         settings.meetingBrainExportEnabled = self.setupDraft.brainExportEnabled
         settings.shareContactsWithMyOSEnabled = self.setupDraft.shareContactsEnabled
+        settings.shareMessagesWithMyOSEnabled = self.setupDraft.shareMessagesEnabled
+        settings.messagesExcludedHandles = self.setupDraft.messagesExcluded
+        if self.setupDraft.shareMessagesEnabled { MessagesInboxScheduler.shared.start() }
         if self.setupDraft.shareContactsEnabled { ContactsInboxScheduler.shared.start(); ContactsInboxScheduler.shared.schedule(after: 2) }
         settings.meetingNotesCommand = self.setupDraft.notesCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         settings.meetingAudioRetentionPolicy = self.draftMeetingAudioRetentionPolicy

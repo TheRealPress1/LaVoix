@@ -122,6 +122,30 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
         } ?? []
     }
 
+    /// Who sent each one-to-one message and when, ordered by chat then date. No text column is read: this feeds the
+    /// relationship signals shared with myOS, which must never contain message content. nil if the database was busy.
+    func activityRows() -> [MessageActivity.Row]? {
+        self.query(Self.activitySQL, bind: { _ in }) { row in
+            MessageActivity.Row(
+                chat: Self.string(row, 0), handle: Self.string(row, 1),
+                fromMe: sqlite3_column_int(row, 2) != 0, date: Self.date(sqlite3_column_int64(row, 3))
+            )
+        }
+    }
+
+    /// Metadata only. A test asserts this never mentions a text column.
+    static let activitySQL = """
+        SELECT c.guid,
+               COALESCE((SELECT h.id FROM chat_handle_join chj JOIN handle h ON h.ROWID = chj.handle_id
+                          WHERE chj.chat_id = c.ROWID LIMIT 1), ''),
+               m.is_from_me, m.date
+        FROM chat c
+        JOIN chat_message_join j ON j.chat_id = c.ROWID
+        JOIN message m ON m.ROWID = j.message_id
+        WHERE c.style = 45 AND m.item_type = 0 AND m.associated_message_type = 0
+        ORDER BY c.ROWID, m.date
+        """
+
     func maxRowID() -> Int64 {
         self.query("SELECT COALESCE(MAX(ROWID), 0) FROM message", bind: { _ in }) { sqlite3_column_int64($0, 0) }?.first ?? 0
     }

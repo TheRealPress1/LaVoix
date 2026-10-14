@@ -1,5 +1,6 @@
 import Contacts
 import CryptoKit
+import SQLite3
 import SwiftUI
 
 /// `LAVOIX_NOTCH_RENDER=<file.png>` renders the open notch to an image and exits. Used to check the design
@@ -429,6 +430,105 @@ enum NotchHubDebug {
             check("never reads Contacts without permission", CNContactStore.authorizationStatus(for: .contacts) == .authorized || ContactsInboxExporter.fetchCards() == nil)
             if env["LAVOIX_CONTACTS_CONTRACT_DIR"] == nil { try? FileManager.default.removeItem(at: root) }
             print(failures == 0 ? "CONTACTS EXPORT AUTOTEST ALL PASSED" : "CONTACTS EXPORT AUTOTEST \(failures) FAILED")
+            exit(failures == 0 ? 0 : 1)
+        }
+    }
+
+    /// `LAVOIX_MESSAGES_EXPORT_AUTOTEST=1` builds a fake Messages database (Apple's table layout, with secret text planted in
+    /// it), runs the real reader and aggregator over it, and checks the exported file. `LAVOIX_MESSAGES_CONTRACT_DIR=<dir>`
+    /// leaves the file there for myOS's importer.
+    @MainActor static func messagesExportAutotestIfRequested() {
+        let env = ProcessInfo.processInfo.environment
+        guard env["LAVOIX_MESSAGES_EXPORT_AUTOTEST"] == "1" else { return }
+        Task { @MainActor in
+            var failures = 0
+            func check(_ name: String, _ ok: Bool) {
+                print("\(ok ? "PASS" : "FAIL") \(name)")
+                if !ok { failures += 1 }
+            }
+            let base = FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-msgs-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+            let dbURL = base.appendingPathComponent("chat.db")
+            var db: OpaquePointer?
+            sqlite3_open(dbURL.path, &db)
+            func exec(_ sql: String) { sqlite3_exec(db, sql, nil, nil, nil) }
+            exec("""
+            CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, style INTEGER, chat_identifier TEXT, display_name TEXT);
+            CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+            CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+            CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, attributedBody BLOB, date INTEGER, is_from_me INTEGER,
+              item_type INTEGER DEFAULT 0, associated_message_type INTEGER DEFAULT 0, cache_has_attachments INTEGER DEFAULT 0, is_read INTEGER DEFAULT 1);
+            CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER, message_date INTEGER);
+            INSERT INTO handle VALUES (1, '+14155551234'), (2, 'friend@icloud.com'), (3, '+14155559999'), (4, '+14155550000'), (5, '+33612345678');
+            INSERT INTO chat VALUES (1, 'iMessage;-;+14155551234', 45, '+14155551234', NULL),
+                                    (2, 'chat-group-1', 43, 'chat1', 'The group'),
+                                    (3, 'iMessage;-;friend@icloud.com', 45, 'friend@icloud.com', NULL),
+                                    (4, 'iMessage;-;+14155559999', 45, '+14155559999', NULL),
+                                    (5, 'iMessage;-;+14155550000', 45, '+14155550000', NULL);
+            INSERT INTO chat_handle_join VALUES (1,1),(2,1),(2,2),(3,2),(4,3),(5,4);
+            """)
+            let now = Date()
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(identifier: "UTC")!
+            let startOfToday = calendar.startOfDay(for: now)
+            var rowID = 0
+            func ns(_ date: Date) -> Int64 { Int64(date.timeIntervalSinceReferenceDate * 1_000_000_000) }
+            func message(chat: Int, fromMe: Bool, at date: Date, type: Int = 0, item: Int = 0) {
+                rowID += 1
+                exec("INSERT INTO message (ROWID, text, date, is_from_me, item_type, associated_message_type) VALUES (\(rowID), 'SECRET-TEXT-\(rowID)', \(ns(date)), \(fromMe ? 1 : 0), \(item), \(type));")
+                exec("INSERT INTO chat_message_join VALUES (\(chat), \(rowID), \(ns(date)));")
+            }
+            // Chat 1: a real conversation. 15 exchanges over 14 days; they write, you reply 60 s, 120 s, ... later.
+            var expectedLatencies: [Int] = []
+            for i in 0..<15 {
+                let theirs = startOfToday.addingTimeInterval(-Double(15 - i) * 86400 + 3600)
+                message(chat: 1, fromMe: false, at: theirs)
+                message(chat: 1, fromMe: false, at: theirs.addingTimeInterval(30)) // second unanswered message: latency counts from the first
+                let latency = 60 * (i + 1)
+                expectedLatencies.append(latency)
+                message(chat: 1, fromMe: true, at: theirs.addingTimeInterval(Double(latency)))
+            }
+            message(chat: 1, fromMe: false, at: startOfToday.addingTimeInterval(60))   // today: counted in totals, not in days
+            message(chat: 1, fromMe: false, at: startOfToday.addingTimeInterval(-86400 * 3), type: 2000)  // a tapback: ignored
+            message(chat: 1, fromMe: true, at: startOfToday.addingTimeInterval(-86400 * 3), item: 1)       // a group-action row: ignored
+            // Chat 2 is a group, chat 3 is a short email conversation, chat 4 is excluded, chat 5 is another 1:1.
+            for i in 0..<40 { message(chat: 2, fromMe: i % 3 == 0, at: startOfToday.addingTimeInterval(-Double(i) * 3600)) }
+            for i in 0..<3 { message(chat: 3, fromMe: i == 1, at: startOfToday.addingTimeInterval(-Double(i + 1) * 86400)) }
+            for i in 0..<30 { message(chat: 4, fromMe: i % 2 == 0, at: startOfToday.addingTimeInterval(-Double(i) * 86400 * 0.5 - 7200)) }
+            for i in 0..<30 { message(chat: 5, fromMe: i % 2 == 0, at: startOfToday.addingTimeInterval(-Double(i) * 86400 * 0.5 - 9000)) }
+            sqlite3_close(db)
+
+            check("the reader's SQL never mentions a text column", !MessagesDatabase.activitySQL.lowercased().contains("text") && !MessagesDatabase.activitySQL.contains("attributedBody") && !MessagesDatabase.activitySQL.contains("m.text"))
+            let reader = MessagesDatabase(url: dbURL)
+            let rows = reader.activityRows()
+            check("reads rows from a database laid out like Apple's", (rows?.count ?? 0) > 0)
+            check("groups, tapbacks and system rows are not read", rows?.allSatisfy { $0.chat != "chat-group-1" } == true)
+            let excluded: Set<String> = [MessageActivity.normalizedForExclusion("+1 (415) 555-9999")]
+            let conversations = MessageActivity.aggregate(rows: rows ?? [], excluded: excluded, now: now, calendar: calendar)
+            check("one record per kept 1:1 chat, excluded chat dropped", conversations.map(\.external_id) == ["imessage:iMessage;-;+14155551234", "imessage:iMessage;-;+14155550000", "imessage:iMessage;-;friend@icloud.com"].sorted())
+            let real = conversations.first { $0.hint_value == "+14155551234" }
+            check("totals count real messages only (15x2 theirs + 15 mine + 1 today)", real?.total == 46 && real?.from_me == 15)
+            check("median reply latency is measured from their first unanswered message", real?.median_reply_seconds == expectedLatencies.sorted()[expectedLatencies.count / 2])
+            check("a conversation with real history qualifies", real?.qualifies == true)
+            check("a short email conversation does not qualify", conversations.first { $0.hint_value == "friend@icloud.com" }?.qualifies == false && conversations.first { $0.hint_value == "friend@icloud.com" }?.hint_kind == "email")
+            check("another phone chat with enough history qualifies, typed phone", conversations.first { $0.hint_value == "+14155550000" }?.hint_kind == "phone")
+            let todayString: String = { let f = DateFormatter(); f.calendar = calendar; f.timeZone = calendar.timeZone; f.dateFormat = "yyyy-MM-dd"; return f.string(from: now) }()
+            check("today is left out of the daily counts", real?.days.contains { $0.day == todayString } == false)
+            check("daily counts add up for closed days", real.map { $0.days.reduce(0) { $0 + $1.sent + $1.received } } == 45)
+            check("handles that are neither email nor a real number are skipped", MessageActivity.hintKind(for: "12345") == nil && MessageActivity.hintKind(for: "a@b.co") == "email")
+
+            let defaults = UserDefaults(suiteName: "lavoix.messages.autotest.\(UUID().uuidString)")!
+            let out = env["LAVOIX_MESSAGES_CONTRACT_DIR"].map { URL(fileURLWithPath: $0) } ?? base.appendingPathComponent("myos")
+            try? FileManager.default.removeItem(at: out)
+            let written = (try? MessageActivity.write(conversations: conversations, dataDirectory: out, defaults: defaults, now: now)) ?? nil
+            let body = written.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+            check("writes inbox/messages/messages-<UTC>.json", written?.deletingLastPathComponent().lastPathComponent == "messages")
+            check("the file contains no message text at all", !body.isEmpty && !body.contains("SECRET-TEXT"))
+            check("the file carries schema 1 and source imessage", body.contains("\"schema\":1") && body.contains("\"source\":\"imessage\""))
+            check("an unchanged snapshot is not written again", ((try? MessageActivity.write(conversations: conversations, dataDirectory: out, defaults: defaults, now: now.addingTimeInterval(5))) ?? nil) == nil)
+            check("no temp files left", ((try? FileManager.default.contentsOfDirectory(atPath: written?.deletingLastPathComponent().path ?? "")) ?? []).allSatisfy { !$0.hasSuffix(".tmp") })
+            if env["LAVOIX_MESSAGES_CONTRACT_DIR"] == nil { try? FileManager.default.removeItem(at: base) } else { try? FileManager.default.removeItem(at: dbURL) }
+            print(failures == 0 ? "MESSAGES EXPORT AUTOTEST ALL PASSED" : "MESSAGES EXPORT AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)
         }
     }

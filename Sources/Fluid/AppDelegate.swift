@@ -52,6 +52,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         LocalCleanupController.shared.warmUpIfEnabled()
         NotchHubController.shared.applyEnabledSetting()
         if SettingsStore.shared.shareContactsWithMyOSEnabled { ContactsInboxScheduler.shared.start() }
+        if SettingsStore.shared.shareMessagesWithMyOSEnabled { MessagesInboxScheduler.shared.start() }
         AccessibilityMessagingTimeout.configure()
         #if DEBUG
         self.updateUISimulationObserver = UpdatePromptSimulation.register(self)

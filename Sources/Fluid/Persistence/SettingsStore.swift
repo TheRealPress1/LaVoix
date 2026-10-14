@@ -2132,6 +2132,24 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Share who-messaged-whom-and-when (never message text) with myOS for relationship signals (default: OFF).
+    var shareMessagesWithMyOSEnabled: Bool {
+        get { self.defaults.bool(forKey: Keys.shareMessagesWithMyOSEnabled) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.shareMessagesWithMyOSEnabled)
+        }
+    }
+
+    /// Phone numbers or emails whose conversations are never shared with myOS (one per line or comma-separated).
+    var messagesExcludedHandles: String {
+        get { self.defaults.string(forKey: Keys.messagesExcludedHandles) ?? "" }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.messagesExcludedHandles)
+        }
+    }
+
     /// Overrides the myOS Brain folder LaVoix writes to; empty means the folder myOS itself records.
     var meetingBrainFolderOverride: String {
         get { self.defaults.string(forKey: Keys.meetingBrainFolderOverride) ?? "" }
@@ -5889,6 +5907,8 @@ private extension SettingsStore {
         static let meetingAutoDetectEnabled = "MeetingAutoDetectEnabled"
         static let meetingBrainExportEnabled = "MeetingBrainExportEnabled"
         static let shareContactsWithMyOSEnabled = "ShareContactsWithMyOSEnabled"
+        static let shareMessagesWithMyOSEnabled = "ShareMessagesWithMyOSEnabled"
+        static let messagesExcludedHandles = "MessagesExcludedHandles"
         static let meetingBrainFolderOverride = "MeetingBrainFolderOverride"
         static let meetingNotesCommand = "MeetingNotesCommand"
         static let meetingAutoNotesEnabled = "MeetingAutoNotesEnabled"
