@@ -55,6 +55,12 @@ struct NotchHubView: View {
         return VStack(spacing: 0) {
             self.header
                 .frame(height: max(self.model.closedSize.height, 28))
+            // ImageRenderer can't draw a ScrollView, so previews get the plain row.
+            if self.forceOpen || Self.previewStatic {
+                self.tabButtons.frame(maxWidth: .infinity).frame(height: NotchGeometry.tabRowHeight)
+            } else {
+                self.tabRow
+            }
             // Widgets stay mounted once shown (and the rest are warmed up just after opening), so switching tabs is a
             // quick crossfade instead of rebuilding a view and restarting its data source every time.
             ZStack(alignment: .top) {
@@ -82,9 +88,45 @@ struct NotchHubView: View {
         .onDisappear { self.mounted = [] }
     }
 
-    /// Tabs sit left of the physical notch; the area behind it stays empty.
+    /// The band behind the camera carries the current tab's name on the left; the tab icons sit in their own row below it,
+    /// so they are never covered however many there are.
     private var header: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 0) {
+            Text(self.model.selectedWidget?.title ?? "")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.5))
+                .lineLimit(1)
+                .frame(maxWidth: (NotchGeometry.openSize.width - self.model.closedSize.width) / 2 - 46, alignment: .leading)
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 38)
+        .padding(.trailing, 38)
+    }
+
+    private var tabRow: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                self.tabButtons
+                    .frame(minWidth: NotchGeometry.openSize.width - 76)
+                    .padding(.horizontal, 6)
+            }
+            .mask(
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing).frame(width: 10)
+                    Color.black
+                    LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing).frame(width: 10)
+                }
+            )
+            .onChange(of: self.model.selectedWidgetID) { _, id in
+                withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) }
+            }
+        }
+        .padding(.horizontal, 38)
+        .frame(height: NotchGeometry.tabRowHeight)
+    }
+
+    private var tabButtons: some View {
+        HStack(spacing: 4) {
             ForEach(self.model.widgets) { widget in
                 let selected = widget.id == self.model.selectedWidget?.id
                 Button {
@@ -94,7 +136,7 @@ struct NotchHubView: View {
                     Image(systemName: widget.systemImage)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(selected ? Color.white : Color.white.opacity(0.45))
-                        .frame(width: 30, height: 22)
+                        .frame(width: 30, height: 24)
                         .background(Capsule().fill(selected ? Color.white.opacity(0.14) : .clear))
                         .overlay(alignment: .topTrailing) {
                             if let count = self.model.badges[widget.id], count > 0 {
@@ -104,10 +146,8 @@ struct NotchHubView: View {
                 }
                 .buttonStyle(.plain)
                 .help(widget.title)
+                .id(widget.id)
             }
-            Spacer()
         }
-        .padding(.leading, 38)
-        .padding(.trailing, 38)
     }
 }

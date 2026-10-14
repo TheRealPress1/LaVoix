@@ -119,6 +119,13 @@ enum NotchHubDebug {
                 ])
                 model.selectedWidgetID = "messages"
                 model.setBadge("messages", 3)
+            } else if widgetName == "tabs-many" {
+                let symbols = ["gauge.with.dots.needle.33percent", "music.note", "calendar", "doc.on.clipboard", "tray.fill", "arrow.down.circle", "message.fill", "mic.fill", "photo", "folder", "globe", "bolt.fill", "star.fill", "timer", "note.text", "lock.fill", "person.2.fill", "chart.bar.fill"]
+                model = NotchHubModel(widgets: symbols.enumerated().map { index, symbol in
+                    NotchWidget(id: "w\(index)", title: "Tab \(index + 1)", systemImage: symbol) { AnyView(EmptyView()) }
+                })
+                model.selectedWidgetID = "w6"
+                model.setBadge("w6", 2)
             } else {
                 model = NotchHubModel()
             }
