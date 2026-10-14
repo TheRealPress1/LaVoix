@@ -190,6 +190,7 @@ final class MessagesInboxScheduler {
 
     func start() {
         guard self.loop == nil else { return }
+        DebugLogger.shared.info("Messages sharing scheduler started", source: "MessagesInbox")
         self.loop = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 45 * 1_000_000_000)
             while !Task.isCancelled {
@@ -201,19 +202,34 @@ final class MessagesInboxScheduler {
 
     func exportNow() {
         let settings = SettingsStore.shared
-        guard settings.shareMessagesWithMyOSEnabled,
-              let data = ContactsInboxExporter.dataDirectory(brainOverride: settings.meetingBrainFolderOverride) else { return }
+        guard settings.shareMessagesWithMyOSEnabled else { return }
+        guard let data = ContactsInboxExporter.dataDirectory(brainOverride: settings.meetingBrainFolderOverride) else {
+            DebugLogger.shared.warning("Messages export skipped: myOS data folder not found", source: "MessagesInbox")
+            return
+        }
         let excluded = Set(settings.messagesExcludedHandles
             .split(whereSeparator: { $0 == "\n" || $0 == "," })
             .map { MessageActivity.normalizedForExclusion(String($0)) }
             .filter { !$0.isEmpty })
         Task.detached(priority: .utility) {
             let database = MessagesDatabase()
-            guard database.checkAccess() == .granted, let rows = database.activityRows() else { return }
+            let access = database.checkAccess()
+            guard access == .granted else {
+                DebugLogger.shared.warning("Messages export skipped: no access to the Messages database (\(access))", source: "MessagesInbox")
+                return
+            }
+            let started = Date()
+            guard let rows = database.activityRows() else {
+                DebugLogger.shared.warning("Messages export skipped: the Messages database could not be read right now", source: "MessagesInbox")
+                return
+            }
             let conversations = MessageActivity.aggregate(rows: rows, excluded: excluded, now: Date(), calendar: .current)
+            DebugLogger.shared.info("Read \(rows.count) message records into \(conversations.count) conversations in \(Int(Date().timeIntervalSince(started) * 1000)) ms", source: "MessagesInbox")
             do {
                 if let file = try MessageActivity.write(conversations: conversations, dataDirectory: data) {
                     DebugLogger.shared.info("Shared \(conversations.count) conversations' activity with myOS (\(file.lastPathComponent))", source: "MessagesInbox")
+                } else {
+                    DebugLogger.shared.info("Messages activity unchanged since the last snapshot", source: "MessagesInbox")
                 }
             } catch {
                 DebugLogger.shared.warning("Messages export failed: \(error.localizedDescription)", source: "MessagesInbox")
