@@ -28,7 +28,7 @@ nonisolated enum MeetingInboxExporter {
             external_id: "meeting:\(meetingID.uuidString.lowercased())", occurred_at: iso.string(from: start),
             ended_at: end.map(iso.string(from:)), title: title, minutes: minutes,
             person_ids: Array(Set(personIDs)).sorted(), unknown_attendees: max(0, unknownAttendees), note_file: noteFile,
-            calendar_external_id: calendarEventID.map { "cal:" + $0 }
+            calendar_external_id: calendarEventID.map { CalendarLinks.externalID(for: $0) }
         )
     }
 

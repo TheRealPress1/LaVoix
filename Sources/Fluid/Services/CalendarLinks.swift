@@ -55,6 +55,12 @@ nonisolated enum CalendarLinks {
 
     // MARK: - Pure logic
 
+    /// The id myOS sees for an event: a hash, because calendar ids can contain an `@` (Google's look like `uid@google.com`)
+    /// and nothing that looks like an address should be written. Stable, so the same event is always the same id.
+    static func externalID(for eventID: String) -> String {
+        "cal:" + SHA256.hash(data: Data(eventID.utf8)).prefix(12).map { String(format: "%02x", $0) }.joined()
+    }
+
     /// The event a recording most plausibly belongs to: it overlaps at least half of the recording, or starts within
     /// 15 minutes of it; the largest overlap wins.
     static func bestOverlap(_ candidates: [Candidate], start: Date, end: Date) -> Candidate? {
@@ -74,7 +80,7 @@ nonisolated enum CalendarLinks {
             let known = Array(Set(c.emails.compactMap { people[$0]?.id })).sorted()
             guard !known.isEmpty else { return nil }
             return Item(
-                external_id: "cal:" + c.id, title: c.title, start: iso.string(from: c.start), end: iso.string(from: c.end),
+                external_id: externalID(for: c.id), title: c.title, start: iso.string(from: c.start), end: iso.string(from: c.end),
                 person_ids: known, unknown_attendees: max(0, c.emails.count - known.count)
             )
         }.sorted { ($0.start, $0.external_id) < ($1.start, $1.external_id) }
