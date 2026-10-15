@@ -21,6 +21,7 @@ struct FluidApp: App {
         EngineSocketAutotest.runIfRequested()
         WritingRecoveryAutotest.runIfRequested()
         MeetingCaptureTargetAutotest.runIfRequested()
+        MeetingTranscriptAttachTool.runIfRequested()
         NotchHubDebug.renderIfRequested()
         NotchHubDebug.autotestIfRequested()
         NotchHubDebug.nowPlayingProbeIfRequested()
