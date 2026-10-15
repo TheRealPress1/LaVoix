@@ -18,6 +18,7 @@ struct FluidApp: App {
     init() {
         LocalCleanupSelfTest.runIfRequested()
         EvalRunner.runIfRequested()
+        EngineSocketAutotest.runIfRequested()
         NotchHubDebug.renderIfRequested()
         NotchHubDebug.autotestIfRequested()
         NotchHubDebug.nowPlayingProbeIfRequested()
