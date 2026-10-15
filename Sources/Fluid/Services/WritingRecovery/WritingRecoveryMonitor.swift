@@ -38,6 +38,9 @@ nonisolated enum WritingFilter {
     ]
     static let excludedBundlePrefixes = ["com.jetbrains."]
 
+    static let chromiumBundlePrefixes = ["com.google.Chrome", "com.brave.Browser", "com.microsoft.edgemac", "org.chromium.", "company.thebrowser.", "com.vivaldi.", "com.operasoftware."]
+    static func isChromiumBrowser(_ bundleID: String) -> Bool { self.chromiumBundlePrefixes.contains { bundleID.hasPrefix($0) } }
+
     static let allowedRoles: Set<String> = ["AXTextArea", "AXTextField", "AXComboBox"]
 
     static func isExcluded(bundleID: String, extra: [String] = WritingRecoverySettings.excludedBundles) -> Bool {
@@ -79,6 +82,7 @@ nonisolated final class WritingRecoveryMonitor: @unchecked Sendable {
     private var pending: WritingSnapshot?
     private var pendingSaved = true
     private var lastPurge = Date.distantPast
+    private var lastState = ""
 
     var store: WritingRecoveryStore = .shared
     /// Only read fields within this many seconds of a key press (tests turn it off).
@@ -91,7 +95,17 @@ nonisolated final class WritingRecoveryMonitor: @unchecked Sendable {
     /// Starts or stops to match the setting and the Accessibility permission. Safe to call repeatedly.
     func apply() {
         self.queue.async {
-            let shouldRun = WritingRecoverySettings.isEnabled && AXIsProcessTrusted()
+            let enabled = WritingRecoverySettings.isEnabled
+            let trusted = AXIsProcessTrusted()
+            let shouldRun = enabled && trusted
+            if enabled, !trusted {
+                // Permission may be granted later in System Settings: look again in a while, without a restart.
+                self.queue.asyncAfter(deadline: .now() + 30) { [weak self] in self?.apply() }
+            }
+            if self.lastState != "\(enabled)-\(trusted)" {
+                self.lastState = "\(enabled)-\(trusted)"
+                DebugLogger.shared.info("Writing recovery: enabled=\(enabled) accessibility=\(trusted)", source: "WritingRecovery")
+            }
             if shouldRun, self.timer == nil {
                 let t = DispatchSource.makeTimerSource(queue: self.queue)
                 t.schedule(deadline: .now() + 1, repeating: self.interval)
@@ -114,10 +128,13 @@ nonisolated final class WritingRecoveryMonitor: @unchecked Sendable {
             self.lastPurge = Date()
             self.store.purge(olderThanDays: WritingRecoverySettings.retentionDays)
         }
-        if let window = self.typingWindow, CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown) > window {
+        // Diagnostic: `defaults write com.lavoix.app LaVoixWritingRecoveryAlwaysRead -bool true` skips the typing gate (testing only).
+        let alwaysRead = UserDefaults.standard.bool(forKey: "LaVoixWritingRecoveryAlwaysRead")
+        if !alwaysRead, let window = self.typingWindow, CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown) > window {
             return
         }
-        guard let app = NSWorkspace.shared.frontmostApplication, let bundle = app.bundleIdentifier else { self.process(nil); return }
+        guard let app = NSWorkspace.shared.frontmostApplication, let bundle = app.bundleIdentifier else { self.diagnose("no frontmost app"); self.process(nil); return }
+        self.diagnose("tick frontmost=\(bundle)")
         if !self.allowOwnApp, app.processIdentifier == getpid() { self.process(nil); return }
         self.process(self.snapshot(pid: app.processIdentifier, bundleID: bundle, appName: app.localizedName ?? bundle, now: Date()))
     }
@@ -131,9 +148,38 @@ nonisolated final class WritingRecoveryMonitor: @unchecked Sendable {
             // Chromium and Electron apps only build their accessibility tree for web content when asked.
             self.primedPIDs.insert(pid)
             AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            if WritingFilter.isChromiumBrowser(bundleID) {
+                // Chromium browsers build the accessibility tree for page content only for an assistive technology.
+                // AXEnhancedUserInterface can disturb window managers in other apps, so it is set for browsers only.
+                AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+            }
         }
-        guard let focusedRef = Self.copy(app, kAXFocusedUIElementAttribute), CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else { return nil }
+        if UserDefaults.standard.bool(forKey: "LaVoixWritingRecoveryAlwaysRead"), let w = Self.copy(app, kAXFocusedWindowAttribute), CFGetTypeID(w) == AXUIElementGetTypeID() {
+            // Diagnostic: how many text areas does this app expose in its front window, focused or not?
+            var queue: [(AXUIElement, Int)] = [(w as! AXUIElement, 0)]
+            var seen = 0, areas = 0, longest = 0
+            while !queue.isEmpty, seen < 4000 {
+                let (el, depth) = queue.removeFirst()
+                seen += 1
+                if (Self.copy(el, kAXRoleAttribute) as? String) == "AXTextArea" {
+                    areas += 1
+                    longest = max(longest, (Self.copy(el, kAXValueAttribute) as? String)?.count ?? 0)
+                }
+                if depth < 25, let kids = Self.copy(el, kAXChildrenAttribute) as? [AXUIElement] { queue.append(contentsOf: kids.map { ($0, depth + 1) }) }
+            }
+            self.diagnose("\(bundleID): tree scan nodes=\(seen) textAreas=\(areas) longestValue=\(longest)")
+        }
+        guard let focusedRef = Self.copy(app, kAXFocusedUIElementAttribute), CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else {
+            self.diagnose("\(bundleID): no focused element")
+            return nil
+        }
         let element = focusedRef as! AXUIElement
+        if UserDefaults.standard.bool(forKey: "LaVoixWritingRecoveryAlwaysRead") {
+            let role = Self.copy(element, kAXRoleAttribute) as? String ?? "nil"
+            let sub = Self.copy(element, kAXSubroleAttribute) as? String ?? "nil"
+            let len = (Self.copy(element, kAXValueAttribute) as? String)?.count ?? -1
+            self.diagnose("\(bundleID): role=\(role) subrole=\(sub) valueLength=\(len)")
+        }
         return self.snapshot(of: element, pid: pid, bundleID: bundleID, appName: appName, appElement: app, now: now)
     }
 
@@ -182,6 +228,11 @@ nonisolated final class WritingRecoveryMonitor: @unchecked Sendable {
 
     /// Test hook: run on the monitor's queue.
     func sync<T>(_ body: () -> T) -> T { self.queue.sync(execute: body) }
+
+    private func diagnose(_ message: String) {
+        guard UserDefaults.standard.bool(forKey: "LaVoixWritingRecoveryAlwaysRead") else { return }
+        DebugLogger.shared.info(message, source: "WritingRecovery")
+    }
 
     private static func copy(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
         var value: CFTypeRef?
