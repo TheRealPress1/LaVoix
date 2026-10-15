@@ -37,6 +37,18 @@ final class NotchMeetingModel: ObservableObject {
     /// Progress of the automatic notes once the meeting is over.
     @Published var notes: MeetingAutoAnalysis.Status = .idle
 
+    /// What the closed recording strip shows: the meeting's name, and its logo (Google Meet's own, or the call app's icon).
+    @Published var recordingTitle = ""
+    @Published var recordingIcon: NSImage?
+    @Published var recordingIsMeet = false
+    /// The full recording card (captions, Stop) is open. Closed by default so the notch stays quiet.
+    @Published var expanded = false
+    /// Width of the hardware notch, so the strip leaves it clear.
+    @Published var notchWidth: CGFloat = 190
+
+    /// The closed one-row strip at the notch.
+    var isPill: Bool { self.phase == .recording && !self.expanded }
+
     var duration: TimeInterval { max(0, (self.endedAt ?? Date()).timeIntervalSince(self.startedAt)) }
 }
 
@@ -54,10 +66,62 @@ struct NotchMeetingCardView: View {
     var onDetectedTap: () -> Void = {}
     var onDetectedNeverAgain: () -> Void = {}
     var onDetectedHover: (Bool) -> Void = { _ in }
+    var onToggleExpanded: () -> Void = {}
+    var onCardHover: (Bool) -> Void = { _ in }
 
     var body: some View {
+        if self.model.isPill { self.pill } else { self.card }
+    }
+
+    /// Closed recording strip: [logo  meeting name] [notch] [red dot].
+    private var pill: some View {
+        let size = NotchGeometry.meetingPillSize(notch: CGSize(width: self.model.notchWidth, height: self.notchHeight))
+        let wing = NotchGeometry.meetingPillWing
+        return ZStack(alignment: .top) {
+            NotchHubShape(topCornerRadius: 6, bottomCornerRadius: 14)
+                .fill(Color.black)
+                .frame(width: size.width, height: size.height)
+                .shadow(color: .black.opacity(0.4), radius: 8, y: 3)
+                .overlay {
+                    HStack(spacing: 0) {
+                        HStack(spacing: 7) {
+                            self.recordingLogo.frame(width: 17, height: 17)
+                            Text(self.model.recordingTitle.isEmpty ? "Recording" : self.model.recordingTitle)
+                                .font(.system(size: 12, weight: .semibold)).lineLimit(1).truncationMode(.tail)
+                        }
+                        .padding(.leading, 14)
+                        .frame(width: wing, alignment: .leading)
+                        Spacer(minLength: self.model.notchWidth)
+                        RecordingDot()
+                            .padding(.trailing, 16)
+                            .frame(width: wing, alignment: .trailing)
+                    }
+                    .frame(width: size.width, height: size.height)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: self.onToggleExpanded)
+                }
+        }
+        .frame(width: size.width + NotchGeometry.meetingCardPadding * 2, height: size.height + NotchGeometry.meetingCardPadding, alignment: .top)
+        .foregroundStyle(.white)
+        .help("Recording. Click to open")
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Recording \(self.model.recordingTitle)")
+    }
+
+    @ViewBuilder
+    private var recordingLogo: some View {
+        if self.model.recordingIsMeet {
+            GoogleMeetLogo()
+        } else if let icon = self.model.recordingIcon {
+            Image(nsImage: icon).resizable().aspectRatio(contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        } else {
+            Image(systemName: "video.fill").font(.system(size: 12)).foregroundStyle(.white.opacity(0.7))
+        }
+    }
+
+    private var card: some View {
         let size = NotchGeometry.meetingCardSize(notchHeight: self.notchHeight, compact: self.model.phase.isCompact)
-        ZStack(alignment: .top) {
+        return ZStack(alignment: .top) {
             NotchHubShape(topCornerRadius: 10, bottomCornerRadius: 28)
                 .fill(Color.black)
                 .frame(width: size.width, height: size.height)
@@ -71,6 +135,7 @@ struct NotchMeetingCardView: View {
         }
         .frame(width: size.width + NotchGeometry.meetingCardPadding * 2, height: size.height + NotchGeometry.meetingCardPadding, alignment: .top)
         .foregroundStyle(.white)
+        .onHover { self.onCardHover($0) }
     }
 
     @ViewBuilder
@@ -165,6 +230,12 @@ struct NotchMeetingCardView: View {
                             .foregroundStyle(.white.opacity(0.6))
                     }
                     Spacer(minLength: 8)
+                    Button(action: self.onToggleExpanded) {
+                        Image(systemName: "chevron.up").font(.system(size: 11, weight: .bold)).foregroundStyle(.white.opacity(0.55))
+                            .frame(width: 22, height: 22).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Close")
                     Button(action: self.onStop) {
                         Text("Stop")
                             .font(.system(size: 12, weight: .semibold))
@@ -303,6 +374,35 @@ private struct RecordingDot: View {
     }
 }
 
+/// A small stand-in for the Google Meet camera logo (green, blue, yellow and red blocks), drawn so no image file is needed.
+struct GoogleMeetLogo: View {
+    var body: some View {
+        Canvas { context, size in
+            let u = min(size.width, size.height) / 16
+            func rect(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ color: Color, radius: CGFloat = 1.2) {
+                context.fill(Path(roundedRect: CGRect(x: x * u, y: y * u, width: w * u, height: h * u), cornerRadius: radius * u), with: .color(color))
+            }
+            let green = Color(red: 0.0, green: 0.53, blue: 0.29)
+            let blue = Color(red: 0.0, green: 0.4, blue: 0.85)
+            let yellow = Color(red: 1.0, green: 0.73, blue: 0.0)
+            let red = Color(red: 0.92, green: 0.26, blue: 0.21)
+            // camera body in four blocks
+            rect(1, 3, 7, 5, red, radius: 1.4)
+            rect(1, 8, 7, 5, blue, radius: 1.4)
+            rect(8, 3, 3.5, 5, yellow, radius: 0.6)
+            rect(8, 8, 3.5, 5, green, radius: 0.6)
+            // lens
+            var lens = Path()
+            lens.move(to: CGPoint(x: 11.5 * u, y: 6.2 * u))
+            lens.addLine(to: CGPoint(x: 15.2 * u, y: 3.6 * u))
+            lens.addLine(to: CGPoint(x: 15.2 * u, y: 12.4 * u))
+            lens.addLine(to: CGPoint(x: 11.5 * u, y: 9.8 * u))
+            lens.closeSubpath()
+            context.fill(lens, with: .color(green))
+        }
+    }
+}
+
 /// A small non-activating panel under the notch, kept separate from the hub window so it only covers its own
 /// area and never blocks clicks elsewhere. Hidden while the hub itself is open.
 @MainActor
@@ -387,6 +487,11 @@ final class NotchMeetingCardController {
         self.dismissTask?.cancel()
         switch state {
         case .recording, .recordingDegraded:
+            if self.model.phase != .recording {
+                // A new recording starts closed; the strip's name and logo are worked out once, here.
+                self.model.expanded = false
+                self.resolveRecordingIdentity(cameFromDetectedCard: self.model.phase == .detected)
+            }
             if let session = self.coordinator?.activeSession { self.model.startedAt = session.startedAt }
             self.model.endedAt = nil
             self.model.sourceName = self.coordinator?.sourceDisplayName ?? ""
@@ -418,6 +523,59 @@ final class NotchMeetingCardController {
             self.model.caption = ""
         }
         self.syncPanel()
+    }
+
+    /// The meeting's name and logo for the closed strip: Google Meet gets its own logo; other calls use their app's icon.
+    private func resolveRecordingIdentity(cameFromDetectedCard: Bool) {
+        let session = self.coordinator?.activeSession
+        let title = session?.title.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let detected = cameFromDetectedCard ? self.model.detectedName : ""
+        let fromEvent = self.model.event.flatMap { $0.title == title ? $0 : nil }
+        let platform = session?.platform?.displayName ?? ""
+        let meet = platform.localizedCaseInsensitiveContains("meet")
+            || detected.localizedCaseInsensitiveContains("Google Meet")
+            || title.localizedCaseInsensitiveContains("Google Meet")
+            || fromEvent?.joinURL?.host == "meet.google.com"
+        self.model.recordingIsMeet = meet
+        self.model.recordingTitle = title.isEmpty ? (detected.isEmpty ? self.coordinator?.sourceDisplayName ?? "Recording" : detected) : title
+        if meet {
+            self.model.recordingIcon = nil
+        } else if cameFromDetectedCard, let icon = self.model.detectedIcon {
+            self.model.recordingIcon = icon
+        } else if let bundle = session?.capturedApplication?.bundleIdentifier,
+                  let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) {
+            self.model.recordingIcon = NSWorkspace.shared.icon(forFile: url.path)
+        } else {
+            self.model.recordingIcon = nil
+        }
+    }
+
+    // MARK: - Open / close the closed strip
+
+    private var collapseTask: Task<Void, Never>?
+
+    func toggleExpanded() {
+        self.collapseTask?.cancel()
+        self.model.expanded.toggle()
+        self.syncPanel()
+        if self.model.expanded { self.scheduleCollapse(after: 12) }
+    }
+
+    /// The open card closes itself shortly after the pointer leaves it.
+    func cardHover(_ hovering: Bool) {
+        guard self.model.phase == .recording, self.model.expanded else { return }
+        self.collapseTask?.cancel()
+        if !hovering { self.scheduleCollapse(after: 2.5) }
+    }
+
+    private func scheduleCollapse(after seconds: Double) {
+        self.collapseTask?.cancel()
+        self.collapseTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.model.phase == .recording, self.model.expanded else { return }
+            self.model.expanded = false
+            self.syncPanel()
+        }
     }
 
     private func analysisChanged(_ status: MeetingAutoAnalysis.Status) {
@@ -573,7 +731,8 @@ final class NotchMeetingCardController {
             self.panel?.orderOut(nil)
             return
         }
-        let frame = NotchGeometry.meetingCardFrame(for: screen, compact: self.model.phase.isCompact)
+        self.model.notchWidth = NotchGeometry.closedSize(for: screen).width
+        let frame = NotchGeometry.meetingCardFrame(for: screen, compact: self.model.phase.isCompact, pill: self.model.isPill)
         let panel = self.panel ?? self.makePanel(frame: frame, notchHeight: NotchGeometry.closedSize(for: screen).height)
         self.panel = panel
         panel.setFrame(frame, display: true)
@@ -594,7 +753,9 @@ final class NotchMeetingCardController {
             onDismiss: { [weak self] in self?.dismiss() },
             onDetectedTap: { MeetingDetectionPromptController.shared.startTapped() },
             onDetectedNeverAgain: { MeetingDetectionPromptController.shared.dontShowAgainTapped() },
-            onDetectedHover: { MeetingDetectionPromptController.shared.notchCardHover($0) }
+            onDetectedHover: { MeetingDetectionPromptController.shared.notchCardHover($0) },
+            onToggleExpanded: { [weak self] in self?.toggleExpanded() },
+            onCardHover: { [weak self] in self?.cardHover($0) }
         )
         let hosting = NSHostingView(rootView: view)
         hosting.sizingOptions = []
@@ -612,6 +773,9 @@ final class NotchMeetingCardController {
         self.model.caption = "…so let's move the launch to the 14th and I'll send the revised plan tonight."
         self.model.sourceName = "Zoom"
         self.model.detectedName = "Zoom"
+        self.model.recordingTitle = "Design sync"
+        self.model.recordingIsMeet = true
+        self.model.expanded = false
         self.wantsVisible = true
         self.syncPanel()
     }

@@ -20,7 +20,14 @@ enum NotchHubDebug {
                 model.sourceName = "Zoom"
                 model.caption = "…so let's move the launch to the 14th and I'll send the revised plan tonight."
                 switch widgetName {
-                case "meeting-listening": model.caption = ""
+                case "meeting-listening": model.caption = ""; model.expanded = true
+                case "meeting-expanded": model.expanded = true
+                case "meeting-pill", "meeting-pill-meet", "meeting-pill-zoom", "meeting-pill-long":
+                    model.phase = .recording
+                    model.expanded = false
+                    model.recordingIsMeet = widgetName != "meeting-pill-zoom"
+                    model.recordingIcon = widgetName == "meeting-pill-zoom" ? NSImage(systemSymbolName: "video.fill", accessibilityDescription: nil) : nil
+                    model.recordingTitle = widgetName == "meeting-pill-long" ? "Quarterly planning and roadmap review with the whole product team" : "Investor update"
                 case "meeting-starting": model.phase = .starting
                 case "meeting-detected", "meeting-detected-starting", "meeting-detected-error":
                     model.phase = .detected

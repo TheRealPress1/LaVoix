@@ -52,8 +52,17 @@ enum NotchGeometry {
         CGSize(width: compact ? 360 : 400, height: notchHeight + (compact ? 44 : 66))
     }
 
-    @MainActor static func meetingCardFrame(for screen: NSScreen, compact: Bool = false) -> NSRect {
-        let size = self.meetingCardSize(notchHeight: self.closedSize(for: screen).height, compact: compact)
+    /// While recording the card sits closed: a strip at the notch's own height that reaches out to either side of it
+    /// (logo and meeting name on the left, the live dot on the right). Hover or click opens the full card.
+    static let meetingPillWing: CGFloat = 200
+
+    static func meetingPillSize(notch: CGSize) -> CGSize {
+        CGSize(width: notch.width + self.meetingPillWing * 2, height: notch.height)
+    }
+
+    @MainActor static func meetingCardFrame(for screen: NSScreen, compact: Bool = false, pill: Bool = false) -> NSRect {
+        let notch = self.closedSize(for: screen)
+        let size = pill ? self.meetingPillSize(notch: notch) : self.meetingCardSize(notchHeight: notch.height, compact: compact)
         let width = size.width + self.meetingCardPadding * 2
         let height = size.height + self.meetingCardPadding
         return NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height)
