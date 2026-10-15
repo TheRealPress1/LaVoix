@@ -211,6 +211,7 @@ final class MessagesInboxScheduler {
             .split(whereSeparator: { $0 == "\n" || $0 == "," })
             .map { MessageActivity.normalizedForExclusion(String($0)) }
             .filter { !$0.isEmpty })
+        let keepText = settings.keepMessageTextForMyOSEnabled
         Task.detached(priority: .utility) {
             let database = MessagesDatabase()
             let access = database.checkAccess()
@@ -225,6 +226,18 @@ final class MessagesInboxScheduler {
             }
             let conversations = MessageActivity.aggregate(rows: rows, excluded: excluded, now: Date(), calendar: .current)
             DebugLogger.shared.info("Read \(rows.count) message records into \(conversations.count) conversations in \(Int(Date().timeIntervalSince(started) * 1000)) ms", source: "MessagesInbox")
+            // Message text stays on this Mac, in a private database outside the synced myOS folder.
+            if keepText {
+                let qualified = Set(conversations.filter(\.qualifies).map { String($0.external_id.dropFirst("imessage:".count)) })
+                let t0 = Date()
+                if let r = PrivateMessageStore.sync(reader: database, qualified: qualified, excluded: excluded) {
+                    DebugLogger.shared.info("Private message store: +\(r.added) messages, \(r.total) kept (\(Int(Date().timeIntervalSince(t0) * 1000)) ms)", source: "MessagesInbox")
+                } else {
+                    DebugLogger.shared.warning("Private message store could not be updated", source: "MessagesInbox")
+                }
+            } else {
+                PrivateMessageStore.purge()
+            }
             do {
                 if let file = try MessageActivity.write(conversations: conversations, dataDirectory: data) {
                     DebugLogger.shared.info("Shared \(conversations.count) conversations' activity with myOS (\(file.lastPathComponent))", source: "MessagesInbox")

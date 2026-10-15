@@ -133,6 +133,68 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
         }
     }
 
+    struct ContentRow {
+        let rowid: Int64
+        let chat: String
+        let handle: String
+        let fromMe: Bool
+        let date: Date
+        let text: String
+    }
+
+    private static let contentSelect = """
+        SELECT m.ROWID, c.guid,
+               COALESCE((SELECT h.id FROM chat_handle_join chj JOIN handle h ON h.ROWID = chj.handle_id WHERE chj.chat_id = c.ROWID LIMIT 1), ''),
+               m.is_from_me, m.date, m.text, m.attributedBody, COALESCE(m.cache_has_attachments, 0)
+        FROM chat c JOIN chat_message_join j ON j.chat_id = c.ROWID JOIN message m ON m.ROWID = j.message_id
+        WHERE c.style = 45 AND m.item_type = 0 AND m.associated_message_type = 0
+        """
+
+    private func contentRow(_ row: OpaquePointer) -> (row: ContentRow, text: () -> String) {
+        let rowid = sqlite3_column_int64(row, 0)
+        let text = Self.optionalString(row, 5)
+        let body = Self.blob(row, 6)
+        let attachment = sqlite3_column_int(row, 7) != 0
+        let r = ContentRow(rowid: rowid, chat: Self.string(row, 1), handle: Self.string(row, 2), fromMe: sqlite3_column_int(row, 3) != 0,
+                           date: Self.date(sqlite3_column_int64(row, 4)), text: "")
+        return (r, { Self.messageText(text: text, body: body, hasAttachment: attachment) })
+    }
+
+    /// New one-to-one messages after `rowid`, in order, keeping only chats in `keep`. Text is decoded only for kept chats.
+    /// `scanned` is the highest ROWID looked at, so progress is saved even when a batch is all skipped.
+    func contentRows(after rowid: Int64, limit: Int, keep: Set<String>) -> (rows: [ContentRow], scanned: Int64)? {
+        var scanned = rowid
+        let rows = self.query(Self.contentSelect + " AND m.ROWID > ?1 ORDER BY m.ROWID LIMIT ?2", bind: {
+            sqlite3_bind_int64($0, 1, rowid); sqlite3_bind_int($0, 2, Int32(limit))
+        }) { stmt -> ContentRow? in
+            let (r, text) = self.contentRow(stmt)
+            scanned = max(scanned, r.rowid)
+            guard keep.contains(r.chat), !r.handle.isEmpty else { return nil }
+            let t = text().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty else { return nil }
+            return ContentRow(rowid: r.rowid, chat: r.chat, handle: r.handle, fromMe: r.fromMe, date: r.date, text: String(t.prefix(4000)))
+        }
+        return rows.map { ($0.compactMap { $0 }, scanned) }
+    }
+
+    /// Older messages of chats that only now qualify (their ROWIDs are behind the sync cursor).
+    func contentRows(chats: [String], upTo rowid: Int64) -> [ContentRow]? {
+        guard !chats.isEmpty else { return [] }
+        let marks = chats.map { _ in "?" }.joined(separator: ",")
+        let rows = self.query(Self.contentSelect + " AND m.ROWID <= ?1 AND c.guid IN (\(marks)) ORDER BY m.ROWID", bind: { stmt in
+            sqlite3_bind_int64(stmt, 1, rowid)
+            let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            for (i, g) in chats.enumerated() { sqlite3_bind_text(stmt, Int32(i + 2), g, -1, transient) }
+        }) { stmt -> ContentRow? in
+            let (r, text) = self.contentRow(stmt)
+            guard !r.handle.isEmpty else { return nil }
+            let t = text().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty else { return nil }
+            return ContentRow(rowid: r.rowid, chat: r.chat, handle: r.handle, fromMe: r.fromMe, date: r.date, text: String(t.prefix(4000)))
+        }
+        return rows?.compactMap { $0 }
+    }
+
     /// Metadata only. A test asserts this never mentions a text column.
     static let activitySQL = """
         SELECT c.guid,

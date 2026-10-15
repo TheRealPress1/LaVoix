@@ -535,6 +535,48 @@ enum NotchHubDebug {
             check("the file carries schema 1 and source imessage", body.contains("\"schema\":1") && body.contains("\"source\":\"imessage\""))
             check("an unchanged snapshot is not written again", ((try? MessageActivity.write(conversations: conversations, dataDirectory: out, defaults: defaults, now: now.addingTimeInterval(5))) ?? nil) == nil)
             check("no temp files left", ((try? FileManager.default.contentsOfDirectory(atPath: written?.deletingLastPathComponent().path ?? "")) ?? []).allSatisfy { !$0.hasSuffix(".tmp") })
+            // The private text store.
+            let storeURL = base.appendingPathComponent("private/messages.db")
+            let everyone = MessageActivity.aggregate(rows: rows ?? [], excluded: [], now: now, calendar: calendar)
+            let qualifiedAll = Set(everyone.filter(\.qualifies).map { String($0.external_id.dropFirst("imessage:".count)) })
+            func scalar(_ sql: String) -> Int {
+                var h: OpaquePointer?
+                defer { sqlite3_close(h) }
+                guard sqlite3_open_v2(storeURL.path, &h, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { return -1 }
+                var st: OpaquePointer?
+                defer { sqlite3_finalize(st) }
+                guard sqlite3_prepare_v2(h, sql, -1, &st, nil) == SQLITE_OK, sqlite3_step(st) == SQLITE_ROW else { return -1 }
+                return Int(sqlite3_column_int(st, 0))
+            }
+            let first = PrivateMessageStore.sync(reader: reader, qualified: qualifiedAll, excluded: excluded, url: storeURL)
+            check("text is kept for qualifying chats (46 + 30 messages), excluded chat left out", first == PrivateMessageStore.Result(added: 76, total: 76))
+            check("a chat that does not qualify, and an excluded one, have no text stored", scalar("SELECT COUNT(*) FROM message WHERE handle IN ('friend@icloud.com', '+14155559999')") == 0)
+            check("tapbacks and system rows are not stored", scalar("SELECT COUNT(*) FROM message WHERE chat = 'iMessage;-;+14155551234'") == 46)
+            check("the text is stored and searchable", scalar("SELECT COUNT(*) FROM message_fts WHERE message_fts MATCH 'secret'") == 76 && scalar("SELECT COUNT(*) FROM message WHERE text LIKE 'SECRET-TEXT-%'") == 76)
+            let attributes = try? FileManager.default.attributesOfItem(atPath: storeURL.path)
+            let dirAttributes = try? FileManager.default.attributesOfItem(atPath: storeURL.deletingLastPathComponent().path)
+            check("the store is private to you (file 0600, folder 0700)", (attributes?[.posixPermissions] as? Int) == 0o600 && (dirAttributes?[.posixPermissions] as? Int) == 0o700)
+            if let contract = env["LAVOIX_MSGTEXT_CONTRACT_DIR"] {
+                try? FileManager.default.removeItem(atPath: contract)
+                try? FileManager.default.createDirectory(atPath: contract, withIntermediateDirectories: true)
+                try? FileManager.default.copyItem(at: storeURL, to: URL(fileURLWithPath: contract).appendingPathComponent("messages.db"))
+            }
+            // Incremental: one new message is the only thing added.
+            var live: OpaquePointer?
+            sqlite3_open(dbURL.path, &live)
+            sqlite3_exec(live, "INSERT INTO message (ROWID, text, date, is_from_me, item_type, associated_message_type) VALUES (\(rowID + 1), 'FRESH-ONE', \(ns(now)), 0, 0, 0); INSERT INTO chat_message_join VALUES (1, \(rowID + 1), \(ns(now)));", nil, nil, nil)
+            sqlite3_close(live)
+            check("a later sync adds only the new message", PrivateMessageStore.sync(reader: reader, qualified: qualifiedAll, excluded: excluded, url: storeURL) == PrivateMessageStore.Result(added: 1, total: 77))
+            check("syncing again adds nothing", PrivateMessageStore.sync(reader: reader, qualified: qualifiedAll, excluded: excluded, url: storeURL)?.added == 0)
+            // A chat that starts to qualify has its older messages back-filled.
+            let shortChat = "iMessage;-;friend@icloud.com"
+            check("a newly qualifying chat is back-filled", PrivateMessageStore.sync(reader: reader, qualified: qualifiedAll.union([shortChat]), excluded: excluded, url: storeURL) == PrivateMessageStore.Result(added: 3, total: 80))
+            // Excluding someone later deletes what was kept.
+            let later = excluded.union([MessageActivity.normalizedForExclusion("+14155550000")])
+            _ = PrivateMessageStore.sync(reader: reader, qualified: qualifiedAll.union([shortChat]), excluded: later, url: storeURL)
+            check("excluding a conversation later deletes its stored text and index", scalar("SELECT COUNT(*) FROM message WHERE handle = '+14155550000'") == 0 && scalar("SELECT COUNT(*) FROM message_fts") == scalar("SELECT COUNT(*) FROM message"))
+            PrivateMessageStore.purge(url: storeURL)
+            check("turning it off deletes the store and its journal files", !FileManager.default.fileExists(atPath: storeURL.path) && !FileManager.default.fileExists(atPath: storeURL.path + "-wal"))
             if env["LAVOIX_MESSAGES_CONTRACT_DIR"] == nil { try? FileManager.default.removeItem(at: base) } else { try? FileManager.default.removeItem(at: dbURL) }
             print(failures == 0 ? "MESSAGES EXPORT AUTOTEST ALL PASSED" : "MESSAGES EXPORT AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)

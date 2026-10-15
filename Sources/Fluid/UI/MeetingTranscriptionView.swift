@@ -39,6 +39,7 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var brainExportEnabled: Bool
     var shareContactsEnabled: Bool
     var shareMessagesEnabled: Bool
+    var keepMessageTextEnabled: Bool
     var shareCalendarEnabled: Bool
     var messagesExcluded: String
     var notesCommand: String
@@ -51,6 +52,7 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         self.brainExportEnabled = settings.meetingBrainExportEnabled
         self.shareContactsEnabled = settings.shareContactsWithMyOSEnabled
         self.shareMessagesEnabled = settings.shareMessagesWithMyOSEnabled
+        self.keepMessageTextEnabled = settings.keepMessageTextForMyOSEnabled
         self.shareCalendarEnabled = settings.shareCalendarWithMyOSEnabled
         self.messagesExcluded = settings.messagesExcludedHandles
         self.notesCommand = settings.meetingNotesCommand
@@ -1174,6 +1176,7 @@ struct MeetingTranscriptionView: View {
         self.setupDraft.brainExportEnabled = SettingsStore.shared.meetingBrainExportEnabled
         self.setupDraft.shareContactsEnabled = SettingsStore.shared.shareContactsWithMyOSEnabled
         self.setupDraft.shareMessagesEnabled = SettingsStore.shared.shareMessagesWithMyOSEnabled
+        self.setupDraft.keepMessageTextEnabled = SettingsStore.shared.keepMessageTextForMyOSEnabled
         self.setupDraft.shareCalendarEnabled = SettingsStore.shared.shareCalendarWithMyOSEnabled
         self.setupDraft.messagesExcluded = SettingsStore.shared.messagesExcludedHandles
         self.setupDraft.notesCommand = SettingsStore.shared.meetingNotesCommand
@@ -1235,6 +1238,8 @@ struct MeetingTranscriptionView: View {
         settings.meetingBrainExportEnabled = self.setupDraft.brainExportEnabled
         settings.shareContactsWithMyOSEnabled = self.setupDraft.shareContactsEnabled
         settings.shareMessagesWithMyOSEnabled = self.setupDraft.shareMessagesEnabled
+        settings.keepMessageTextForMyOSEnabled = self.setupDraft.keepMessageTextEnabled
+        if !self.setupDraft.keepMessageTextEnabled { PrivateMessageStore.purge() }
         settings.shareCalendarWithMyOSEnabled = self.setupDraft.shareCalendarEnabled
         if self.setupDraft.shareCalendarEnabled { CalendarLinksScheduler.shared.start() }
         settings.messagesExcludedHandles = self.setupDraft.messagesExcluded

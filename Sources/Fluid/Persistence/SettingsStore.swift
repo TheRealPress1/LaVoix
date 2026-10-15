@@ -2150,6 +2150,16 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Keep the TEXT of qualifying one-to-one chats in a private database on this Mac (never the iCloud-synced folder) so
+    /// myOS can search it and show it on a person's page (default: OFF). Turning it off deletes the database.
+    var keepMessageTextForMyOSEnabled: Bool {
+        get { self.defaults.bool(forKey: Keys.keepMessageTextForMyOSEnabled) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.keepMessageTextForMyOSEnabled)
+        }
+    }
+
     /// Phone numbers or emails whose conversations are never shared with myOS (one per line or comma-separated).
     var messagesExcludedHandles: String {
         get { self.defaults.string(forKey: Keys.messagesExcludedHandles) ?? "" }
@@ -5917,6 +5927,7 @@ private extension SettingsStore {
         static let meetingBrainExportEnabled = "MeetingBrainExportEnabled"
         static let shareContactsWithMyOSEnabled = "ShareContactsWithMyOSEnabled"
         static let shareCalendarWithMyOSEnabled = "ShareCalendarWithMyOSEnabled"
+        static let keepMessageTextForMyOSEnabled = "KeepMessageTextForMyOSEnabled"
         static let shareMessagesWithMyOSEnabled = "ShareMessagesWithMyOSEnabled"
         static let messagesExcludedHandles = "MessagesExcludedHandles"
         static let meetingBrainFolderOverride = "MeetingBrainFolderOverride"

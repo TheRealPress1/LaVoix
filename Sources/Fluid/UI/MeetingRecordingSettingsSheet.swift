@@ -478,6 +478,14 @@ struct MeetingRecordingSettingsSheet: View {
                             .accessibilityLabel("Share message activity with myOS")
                     }
                     if self.draft.shareMessagesEnabled {
+                        Toggle(isOn: self.$draft.keepMessageTextEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Also keep the text of those chats").font(self.theme.typography.bodySmall)
+                                Text("Stored only on this Mac in a private database that iCloud does not sync, so myOS can search it and show it on a person's page. Turning this off deletes it. Chats you exclude below are never kept.")
+                                    .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+                            }
+                        }
+                        .toggleStyle(.switch)
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Never share these conversations")
                                 .font(self.theme.typography.bodySmall)
