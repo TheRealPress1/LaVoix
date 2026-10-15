@@ -179,7 +179,7 @@ enum EvalCorpus {
         var forbidden: [String] = []
         switch variant {
         case "stated-plainly":
-            thread = [("Me", "hey, are you around this week?"), ("Them", "yes! I'm at \(org) all week, then I fly home to \(city)"), ("Me", "nice, home is \(city) now?"), ("Them", "yes, been here three years")]
+            thread = [("Me", "hey, are you around this week?"), ("Them", "yes! I work at \(org), and I fly home to \(city) on Friday"), ("Me", "nice, home is \(city) now?"), ("Them", "yes, been here three years")]
             expected = [EvalFact(kind: "employer", value: org), EvalFact(kind: "city", value: city)]
         case "superseded-city":
             thread = [("Them", "we're moving to \(oldCity) next month!"), ("Me", "congrats!!"), ("Them", "update: the \(oldCity) thing fell through, we're staying in \(city)"), ("Me", "ah ok, glad you're staying")]
@@ -199,7 +199,7 @@ enum EvalCorpus {
             expected = [EvalFact(kind: "employer", value: org)]
             forbidden = [oldOrg]
         default: // partner-mention
-            thread = [("Them", "\(partner) and I are driving up Saturday"), ("Me", "bring \(partner) to dinner"), ("Them", "will do, \(partner)'s been wanting to meet you"), ("Me", "perfect")]
+            thread = [("Them", "my partner \(partner) and I are driving up Saturday"), ("Me", "bring \(partner) to dinner"), ("Them", "will do, \(partner)'s been wanting to meet you"), ("Me", "perfect")]
             expected = [EvalFact(kind: "partner", value: partner)]
         }
         let input = self.render(thread: thread)

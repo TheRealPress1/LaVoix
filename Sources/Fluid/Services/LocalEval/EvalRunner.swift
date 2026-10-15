@@ -5,6 +5,7 @@ import Foundation
 ///   LAVOIX_EVAL_N          cases per task (default 8, which covers every variant once)
 ///   LAVOIX_EVAL_SEED       corpus seed (default 1)
 ///   LAVOIX_EVAL_OUT        write the full results as JSON to this path
+///   LAVOIX_EVAL_DUMP       comma list of case ids to print (input + expected) instead of running
 ///   LAVOIX_EVAL_VERBOSE=1  print every failing case, not just the first few per task
 /// The oracle backend must score 100% (it checks the scorers); the empty backend shows the floor.
 enum EvalRunner {
@@ -23,6 +24,10 @@ enum EvalRunner {
             let verbose = env["LAVOIX_EVAL_VERBOSE"] == "1"
             let cases = EvalCorpus.cases(seed: seed, perTask: n)
             out("corpus: \(cases.count) synthetic cases, seed \(seed)")
+            if let dump = env["LAVOIX_EVAL_DUMP"] {
+                for c in cases where dump.split(separator: ",").contains(Substring(c.id)) { out("\n--- \(c.id) [\(c.variant)]\n\(c.input)\nEXPECTED: \(c.expected)") }
+                exit(0)
+            }
 
             var backends: [EvalBackend] = []
             for spec in (env["LAVOIX_EVAL_BACKENDS"] ?? "oracle,empty").split(separator: ",").map(String.init) {
