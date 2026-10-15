@@ -166,7 +166,8 @@ final class PeopleStore: ObservableObject {
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
     }
 
-    static func sample() -> PeopleStore {
+    /// `full` gives as many rows as real data does, to check that the tab shows only the ones that fit.
+    static func sample(full: Bool = false) -> PeopleStore {
         let store = PeopleStore()
         store.nudges = [
             PersonNudge(id: "1", name: "Maya Chen", circle: 15, daysSince: 28, reason: "28 days since you last spoke · aim for every 14 · they wrote last"),
@@ -178,6 +179,12 @@ final class PeopleStore: ObservableObject {
             PersonRecent(id: "5", name: "Aryan Shah", daysSince: 1),
             PersonRecent(id: "6", name: "Maman", daysSince: 2),
         ]
+        if full {
+            store.nudges += [PersonNudge(id: "7", name: "Marc Mathieu", circle: 50, daysSince: 70, reason: "70 days since you last spoke · aim for every 30"),
+                             PersonNudge(id: "8", name: "Shav Garg", circle: 50, daysSince: 66, reason: "66 days since you last spoke · aim for every 30"),
+                             PersonNudge(id: "9", name: "Jojo Seuge", circle: 15, daysSince: 19, reason: "19 days since you last spoke · aim for every 14")]
+            store.recent += [PersonRecent(id: "10", name: "Joshua Bell", daysSince: 0), PersonRecent(id: "11", name: "Stino Xanthos", daysSince: 0)]
+        }
         store.state = .ready
         return store
     }

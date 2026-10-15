@@ -2253,7 +2253,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 try await self.processMicrophoneChunk(
                     chunk,
                     track: track,
-                    requiresEchoProtection: session.mode == .onlineCall,
+                    requiresEchoProtection: Self.microphoneNeedsEchoProtection(mode: session.mode, remoteSpeechHeard: !remoteSpeech.isEmpty),
                     eras: eras,
                     era0AnchorRelative: era0AnchorRelative,
                     diarizer: diarizer,
@@ -2278,7 +2278,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             }
         }
 
-        let admittedTurns = session.mode == .onlineCall
+        let admittedTurns = Self.microphoneNeedsEchoProtection(mode: session.mode, remoteSpeechHeard: !remoteSpeech.isEmpty)
             ? stagedTurns.filter {
                 Self.microphoneIntervalIsAdmitted(
                     start: $0.rawStart ?? $0.start,
@@ -2543,6 +2543,13 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 overlap: .ambiguous
             ))
         }
+    }
+
+    /// Online calls only trust microphone text from echo-protected capture, so the other side's voice coming out of the
+    /// speakers is not transcribed twice. If the call's own audio never held a voice (its capture was dead, or nobody
+    /// else spoke), there is nothing to echo, and withholding the microphone would throw away the only transcript there is.
+    nonisolated static func microphoneNeedsEchoProtection(mode: MeetingCaptureMode, remoteSpeechHeard: Bool) -> Bool {
+        mode == .onlineCall && remoteSpeechHeard
     }
 
     /// The only place in the mic batch path allowed to read `track.captureMethod` directly.

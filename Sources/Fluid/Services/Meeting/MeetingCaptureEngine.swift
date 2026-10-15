@@ -2509,7 +2509,7 @@ nonisolated enum MeetingCaptureError: LocalizedError {
         case .wrongActiveSession:
             return "A different meeting recording is active."
         case .applicationNotSelected:
-            return "Choose the application that contains the online meeting."
+            return "Couldn't tell which app the call is in. Open the call in a browser or meeting app, or start it from the meeting prompt."
         case let .applicationUnavailable(name):
             return "\(name) is no longer available to record."
         case .noCaptureDisplay:
@@ -2558,11 +2558,14 @@ nonisolated enum MeetingCaptureSourceCatalog {
             return match
         }
 
-        let preferredBundleIdentifiers = [preferredBundleIdentifier].compactMap { $0 }
+        // Never a nameless system process: the last resort used to be `applications.first`, which recorded silence from
+        // an app with no name when none of the usual call apps matched (a Meet call in Brave, for one).
+        let usable = applications.filter { !$0.bundleIdentifier.isEmpty && !$0.displayName.isEmpty }
+        let candidates = [preferredBundleIdentifier].compactMap { $0 }
             + Self.preferredFallbackBundleIdentifiers
-        if let application = preferredBundleIdentifiers.lazy.compactMap({ bundleIdentifier in
-            applications.first(where: { $0.bundleIdentifier == bundleIdentifier })
-        }).first ?? applications.first {
+            + MeetingAppRegistry.browserBundleIdentifiers.sorted()
+            + MeetingAppRegistry.nativeBundleIdentifiers.sorted()
+        if let application = candidates.lazy.compactMap({ id in usable.first(where: { $0.bundleIdentifier == id }) }).first {
             return application
         }
         throw MeetingCaptureError.applicationNotSelected

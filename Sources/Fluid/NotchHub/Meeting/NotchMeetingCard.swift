@@ -685,7 +685,8 @@ final class NotchMeetingCardController {
         Task {
             do {
                 let configuration = try await coordinator.defaultConfiguration(
-                    mode: event.joinURL != nil ? .onlineCall : .inRoom, title: event.title
+                    mode: event.joinURL != nil ? .onlineCall : .inRoom, title: event.title,
+                    preferredBundleIdentifier: Self.likelyCallApp(for: event.joinURL), preferredWindowID: nil
                 )
                 let session = try await coordinator.startRecording(configuration: configuration)
                 let emails = event.attendeeEmails
@@ -699,6 +700,21 @@ final class NotchMeetingCardController {
                 self.scheduleDismiss(after: 25)
             }
         }
+    }
+
+    /// Which app a calendar meeting's call is probably in. Zoom and Teams links have their own apps; a web call (Google
+    /// Meet and the rest) is in the browser you are using, so the frontmost browser wins, then any running browser.
+    static func likelyCallApp(for joinURL: URL?) -> String? {
+        let host = joinURL?.host?.lowercased() ?? ""
+        if host.hasSuffix("zoom.us") { return "us.zoom.xos" }
+        if host.contains("teams.microsoft.com") || host.contains("teams.live.com") { return "com.microsoft.teams2" }
+        if let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier, MeetingAppRegistry.isBrowserApp(bundleIdentifier: front) {
+            return front
+        }
+        return NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .compactMap(\.bundleIdentifier)
+            .first { MeetingAppRegistry.isBrowserApp(bundleIdentifier: $0) }
     }
 
     func joinEventCall() {

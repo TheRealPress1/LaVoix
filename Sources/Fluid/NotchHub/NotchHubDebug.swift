@@ -132,7 +132,7 @@ enum NotchHubDebug {
                 model.selectedWidgetID = "messages"
                 model.setBadge("messages", 3)
             } else if widgetName.hasPrefix("people") {
-                let store = widgetName == "people-empty" ? PeopleStore() : PeopleStore.sample()
+                let store = widgetName == "people-empty" ? PeopleStore() : PeopleStore.sample(full: widgetName == "people-full")
                 if widgetName == "people-empty" { store.refresh() }
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
