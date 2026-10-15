@@ -5,6 +5,7 @@ import Foundation
 /// (the same place as the message store), NOT a TCP port: any process on the Mac can reach a port, only this user can reach
 /// this file. One request per connection, one JSON line each way:
 ///   {"op":"status"}                                                  -> {"ok":true,"model":"...","downloaded":true,"loaded":false}
+///   {"op":"warm"}                                                    -> {"ok":true}   (starts loading the model; returns at once)
 ///   {"op":"generate","system":"...","user":"...","max_tokens":400}   -> {"ok":true,"text":"...","ms":1234}
 /// Errors come back as {"ok":false,"error":"..."}. The prompts can contain message text, so nothing in here logs them.
 nonisolated enum EngineSocket {
@@ -23,14 +24,17 @@ nonisolated enum EngineSocket {
 
     /// What generating means; injected so the autotest never needs a model.
     typealias Generator = @Sendable (_ system: String, _ user: String, _ maxTokens: Int) async throws -> String
-    typealias StatusProvider = @Sendable () -> (model: String, downloaded: Bool, loaded: Bool)
+    typealias StatusProvider = @Sendable () async -> (model: String, downloaded: Bool, loaded: Bool)
+    /// Starts loading the model without waiting for it (nil in the autotest).
+    typealias Warmer = @Sendable () -> Void
 
     private static let lock = NSLock()
-    private nonisolated(unsafe) static var listenFD: Int32 = -1
+    /// One listener per socket path (the autotest serves a temp path while the app serves the real one).
+    private nonisolated(unsafe) static var listeners: [String: Int32] = [:]
 
     static func startIfEnabled() {
-        guard self.isEnabled else { return }
-        _ = self.start(at: self.defaultURL, generator: self.liveGenerator, status: self.liveStatus)
+        guard self.isEnabled, ProcessInfo.processInfo.environment["LAVOIX_ENGINE_SOCKET_AUTOTEST"] != "1" else { return }
+        _ = self.start(at: self.defaultURL, generator: self.liveGenerator, status: self.liveStatus, warm: self.liveWarmer)
     }
 
     static let liveGenerator: Generator = { system, user, maxTokens in
@@ -43,7 +47,13 @@ nonisolated enum EngineSocket {
 
     static let liveStatus: StatusProvider = {
         let id = LocalCleanupSettings.modelID
-        return (id, LocalCleanupProvider.isDownloaded(modelID: id), false)
+        return (id, LocalCleanupProvider.isDownloaded(modelID: id), await LocalCleanupEngine.shared.isLoaded)
+    }
+
+    static let liveWarmer: Warmer = {
+        let id = LocalCleanupSettings.modelID
+        guard LocalCleanupProvider.isDownloaded(modelID: id) else { return }
+        Task.detached(priority: .utility) { try? await LocalCleanupEngine.shared.prepare(modelID: id) }
     }
 
     enum EngineError: LocalizedError {
@@ -53,9 +63,9 @@ nonisolated enum EngineSocket {
 
     /// Binds the socket and serves it on background queues. Returns false if it could not (path too long, folder not writable).
     @discardableResult
-    static func start(at url: URL, generator: @escaping Generator, status: @escaping StatusProvider) -> Bool {
+    static func start(at url: URL, generator: @escaping Generator, status: @escaping StatusProvider, warm: @escaping Warmer = {}) -> Bool {
         self.lock.lock(); defer { self.lock.unlock() }
-        if self.listenFD >= 0 { return true }
+        if self.listeners[url.path] != nil { return true }
         let dir = url.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
@@ -77,13 +87,13 @@ nonisolated enum EngineSocket {
         guard bound == 0 else { close(fd); return false }
         chmod(url.path, 0o600)
         guard listen(fd, 8) == 0 else { close(fd); unlink(url.path); return false }
-        self.listenFD = fd
+        self.listeners[url.path] = fd
 
         DispatchQueue.global(qos: .utility).async {
             while true {
                 let client = accept(fd, nil, nil)
                 if client < 0 { if errno == EINTR { continue }; break } // closed by stop()
-                self.serve(client: client, generator: generator, status: status)
+                self.serve(client: client, generator: generator, status: status, warm: warm)
             }
         }
         return true
@@ -91,11 +101,11 @@ nonisolated enum EngineSocket {
 
     static func stop(removing url: URL = EngineSocket.defaultURL) {
         self.lock.lock(); defer { self.lock.unlock() }
-        if self.listenFD >= 0 { close(self.listenFD); self.listenFD = -1 }
+        if let fd = self.listeners.removeValue(forKey: url.path) { close(fd) }
         unlink(url.path)
     }
 
-    private static func serve(client: Int32, generator: @escaping Generator, status: @escaping StatusProvider) {
+    private static func serve(client: Int32, generator: @escaping Generator, status: @escaping StatusProvider, warm: @escaping Warmer) {
         var one: Int32 = 1
         setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
         var tv = timeval(tv_sec: 10, tv_usec: 0) // a client that goes quiet cannot hold a thread
@@ -106,7 +116,7 @@ nonisolated enum EngineSocket {
         DispatchQueue.global(qos: .utility).async {
             let request = self.readLine(client)
             Task.detached {
-                let reply = await self.respond(to: request, generator: generator, status: status)
+                let reply = await self.respond(to: request, generator: generator, status: status, warm: warm)
                 DispatchQueue.global(qos: .utility).async {
                     self.writeAll(client, reply + Data("\n".utf8))
                     close(client)
@@ -116,7 +126,7 @@ nonisolated enum EngineSocket {
     }
 
     /// Pure request -> response, so the protocol can be tested without sockets or a model.
-    static func respond(to line: Data?, generator: Generator, status: StatusProvider) async -> Data {
+    static func respond(to line: Data?, generator: Generator, status: StatusProvider, warm: Warmer = {}) async -> Data {
         func json(_ object: [String: Any]) -> Data {
             (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data(#"{"ok":false,"error":"encode"}"#.utf8)
         }
@@ -128,8 +138,11 @@ nonisolated enum EngineSocket {
         }
         switch op {
         case "status":
-            let s = status()
+            let s = await status()
             return json(["ok": true, "model": s.model, "downloaded": s.downloaded, "loaded": s.loaded])
+        case "warm":
+            warm()
+            return json(["ok": true])
         case "generate":
             guard let user = object["user"] as? String, !user.isEmpty else { return fail("missing user") }
             let system = object["system"] as? String ?? ""
@@ -172,6 +185,13 @@ nonisolated enum EngineSocket {
 
 // MARK: - Autotest
 
+private final class WarmFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var flag = false
+    func set() { self.lock.lock(); self.flag = true; self.lock.unlock() }
+    var value: Bool { self.lock.lock(); defer { self.lock.unlock() }; return self.flag }
+}
+
 /// `LAVOIX_ENGINE_SOCKET_AUTOTEST=1` serves a fake generator on a temp socket and talks to it as a client.
 nonisolated enum EngineSocketAutotest {
     static func runIfRequested() {
@@ -183,13 +203,15 @@ nonisolated enum EngineSocketAutotest {
             let base = URL(fileURLWithPath: "/tmp/lve-\(UUID().uuidString.prefix(8))")
             let url = base.appendingPathComponent("private/engine.sock")
             let secret = "SECRET-PLANTED-TEXT"
+            let warmed = WarmFlag()
             let started = EngineSocket.start(
                 at: url,
                 generator: { system, user, maxTokens in
                     if user.contains("explode") { throw NSError(domain: "t", code: 1) }
                     return "echo(\(system.count),\(user.count),\(maxTokens)):" + user.uppercased()
                 },
-                status: { ("test-model", true, false) }
+                status: { ("test-model", true, false) },
+                warm: { warmed.set() }
             )
             check("server starts", started)
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -208,6 +230,7 @@ nonisolated enum EngineSocketAutotest {
             let clamped = ask(#"{"op":"generate","user":"x","max_tokens":999999}"#)
             check("max_tokens is clamped to 800", (clamped?["text"] as? String)?.hasPrefix("echo(0,1,800)") == true)
             check("generator failure is reported, not a crash", ask(#"{"op":"generate","user":"explode"}"#)?["ok"] as? Bool == false)
+            check("warm returns at once and triggers the warmer", ask(#"{"op":"warm"}"#)?["ok"] as? Bool == true && warmed.value)
             check("garbage is rejected", ask("not json")?["ok"] as? Bool == false)
             check("unknown op is rejected", ask(#"{"op":"rm -rf"}"#)?["ok"] as? Bool == false)
             check("missing user is rejected", ask(#"{"op":"generate"}"#)?["ok"] as? Bool == false)
