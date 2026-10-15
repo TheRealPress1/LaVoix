@@ -1466,6 +1466,7 @@ struct ContentView: View {
             Section {
                 self.sidebarNavigationLink(.welcome, title: "Dashboard", systemImage: "house.fill")
                 self.sidebarNavigationLink(.history, title: "History", systemImage: "clock.arrow.circlepath")
+                self.sidebarNavigationLink(.writing, title: "Recent Writing", systemImage: "text.cursor")
                 self.sidebarNavigationLink(.stats, title: "Stats", systemImage: "chart.bar.fill")
             } header: {
                 self.sidebarSectionHeader("Activity")
@@ -1876,6 +1877,8 @@ struct ContentView: View {
             return AnyView(self.rewriteModeView)
         case .history:
             return AnyView(TranscriptionHistoryView())
+        case .writing:
+            return AnyView(WritingRecoveryView())
         }
     }
 

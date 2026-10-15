@@ -113,6 +113,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         OnboardingAISetupController.live.resumePendingDownload()
         LocalAPIServer.shared.start()
         EngineSocket.startIfEnabled()
+        WritingRecoveryMonitor.shared.apply()
 
         // Record first-open synchronously before async analytics bootstrap so
         // onboarding initialization is deterministic on brand-new installs.
@@ -178,6 +179,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         self.closeZeppelinForTermination()
         LocalAPIServer.shared.stop()
         EngineSocket.stop()
+        WritingRecoveryMonitor.shared.flushSync()
         // Clean up the update check timer
         self.updateCheckTimer?.invalidate()
         self.updateCheckTimer = nil
