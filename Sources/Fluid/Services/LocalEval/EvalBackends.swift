@@ -37,14 +37,14 @@ struct EmptyEvalBackend: EvalBackend {
 // MARK: - Text backends (JSON out of free text)
 
 enum EvalJSON {
-    private struct Mentions: Decodable { var ids: [String]? }
+    private struct Mentions: Decodable {
+        struct Match: Decodable { var id: String; var quote: String? }
+        var ids: [String]?
+        var matches: [Match]?
+    }
     private struct Facts: Decodable { var facts: [EvalFact]? }
     private struct Commitments: Decodable { var items: [EvalCommitment]? }
     private struct QA: Decodable { var answer: String?; var answerable: Bool? }
-
-    static func prompt(_ c: EvalCase) -> String {
-        c.system + "\n\nReply with ONLY a JSON object of exactly this shape, no other text: " + c.jsonShape
-    }
 
     static func extractObject(_ raw: String) -> Data? {
         var text = raw
@@ -55,13 +55,24 @@ enum EvalJSON {
         return String(text[start ... end]).data(using: .utf8)
     }
 
-    static func decode(_ task: EvalTask, from raw: String) throws -> EvalAnswer {
+    /// `input` (the case text) lets mention matches be checked against the transcript.
+    static func decode(_ task: EvalTask, from raw: String, input: String? = nil) throws -> EvalAnswer {
         guard let data = extractObject(raw) else { throw EvalError.unparseable(String(raw.prefix(80))) }
         let d = JSONDecoder()
         do {
             switch task {
-            case .mentions: return .mentions(ids: try d.decode(Mentions.self, from: data).ids ?? [])
-            case .facts: return .facts(try d.decode(Facts.self, from: data).facts ?? [])
+            case .mentions:
+                let m = try d.decode(Mentions.self, from: data)
+                if let matches = m.matches {
+                    guard let input else { return .mentions(ids: matches.map(\.id)) }
+                    let verified = EvalMentionVerifier.verify(matches: matches.map { ($0.id, $0.quote ?? "") }, input: input)
+                    return .mentions(ids: verified)
+                }
+                return .mentions(ids: m.ids ?? [])
+            case .facts:
+                // Small models sometimes emit placeholders instead of omitting the fact.
+                let empty: Set<String> = ["", "unknown", "n/a", "none", "null", "not mentioned", "not stated"]
+                return .facts((try d.decode(Facts.self, from: data).facts ?? []).filter { !empty.contains($0.value.trimmingCharacters(in: .whitespaces).lowercased()) })
             case .commitments: return .commitments(try d.decode(Commitments.self, from: data).items ?? [])
             case .qa:
                 let q = try d.decode(QA.self, from: data)
@@ -94,10 +105,14 @@ struct MLXEvalBackend: EvalBackend {
     }
 
     func answer(_ c: EvalCase) async throws -> EvalAnswer {
+        let (system, user) = EvalPrompts.render(c)
         let raw = try await LocalCleanupEngine.shared.generate(
-            system: EvalJSON.prompt(c), user: c.input, modelID: modelID, maxTokens: 500, temperature: 0, cachesPrefix: false
+            system: system, user: user, modelID: modelID, maxTokens: 500, temperature: 0, cachesPrefix: false
         )
-        return try EvalJSON.decode(c.task, from: raw)
+        if ProcessInfo.processInfo.environment["LAVOIX_EVAL_RAW"] == "1" {
+            FileHandle.standardOutput.write(Data("RAW \(c.id) [\(c.variant)]: \(raw.replacingOccurrences(of: "\n", with: " "))\n".utf8))
+        }
+        return try EvalJSON.decode(c.task, from: raw, input: c.input)
     }
 }
 
@@ -110,9 +125,10 @@ struct CommandEvalBackend: EvalBackend {
     func unavailableReason() async -> String? { nil }
 
     func answer(_ c: EvalCase) async throws -> EvalAnswer {
-        let prompt = EvalJSON.prompt(c) + "\n\n" + c.input
+        let (system, user) = EvalPrompts.render(c)
+        let prompt = system + "\n\n" + user
         let raw = try await Self.run(command: command, stdin: prompt)
-        return try EvalJSON.decode(c.task, from: raw)
+        return try EvalJSON.decode(c.task, from: raw, input: c.input)
     }
 
     static func run(command: String, stdin: String, timeout: TimeInterval = 180) async throws -> String {

@@ -5,6 +5,8 @@ import Foundation
 ///   LAVOIX_EVAL_N          cases per task (default 8, which covers every variant once)
 ///   LAVOIX_EVAL_SEED       corpus seed (default 1)
 ///   LAVOIX_EVAL_OUT        write the full results as JSON to this path
+///   LAVOIX_EVAL_PROMPT     base (default) or tuned: prompt variant for the text backends (mlx, cmd)
+///   LAVOIX_EVAL_TASKS      comma list to restrict to (mentions,facts,commitments,qa)
 ///   LAVOIX_EVAL_DUMP       comma list of case ids to print (input + expected) instead of running
 ///   LAVOIX_EVAL_VERBOSE=1  print every failing case, not just the first few per task
 /// The oracle backend must score 100% (it checks the scorers); the empty backend shows the floor.
@@ -22,7 +24,8 @@ enum EvalRunner {
             let n = Int(env["LAVOIX_EVAL_N"] ?? "") ?? 8
             let seed = UInt64(env["LAVOIX_EVAL_SEED"] ?? "") ?? 1
             let verbose = env["LAVOIX_EVAL_VERBOSE"] == "1"
-            let cases = EvalCorpus.cases(seed: seed, perTask: n)
+            let only = env["LAVOIX_EVAL_TASKS"]?.split(separator: ",").map(String.init)
+            let cases = EvalCorpus.cases(seed: seed, perTask: n).filter { only == nil || only!.contains($0.task.rawValue) }
             out("corpus: \(cases.count) synthetic cases, seed \(seed)")
             if let dump = env["LAVOIX_EVAL_DUMP"] {
                 for c in cases where dump.split(separator: ",").contains(Substring(c.id)) { out("\n--- \(c.id) [\(c.variant)]\n\(c.input)\nEXPECTED: \(c.expected)") }
