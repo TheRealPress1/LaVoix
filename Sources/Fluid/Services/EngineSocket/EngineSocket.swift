@@ -13,6 +13,9 @@ import Foundation
 ///   {"op":"meetings.list"}                                -> {"ok":true,"meetings":[...]}
 ///   {"op":"meetings.get","id"}                            -> {"ok":true,"meeting":{...}}
 ///   {"op":"meetings.live"}                                -> {"ok":true,"live":{"active":true,"id","title","started_at","elapsed_seconds","rows":[{"speaker":"you|them","text","partial"}]}}
+///   {"op":"meetings.start","title","online"}             -> {"ok":true,"meeting":{"id","title"}}   (online: the call in the app you are using; otherwise a conversation in the room)
+///   {"op":"meetings.stop"}                                -> {"ok":true}
+///   {"op":"meetings.rename","id","title"}  /  {"op":"meetings.rename_speaker","id","speaker","name"}  /  {"op":"meetings.delete","id"}  -> {"ok":true}
 ///   {"op":"meetings.notes_save","id","text"}              -> {"ok":true}
 ///   {"op":"meetings.notes_generate","id","kind","auto"}   -> {"event":"progress","message"} ... {"event":"done","text"}
 ///   {"op":"writing.list","search","limit"}               -> {"ok":true,"entries":[{id,bundle_id,app_name,window_title,first_at,last_at,latest,peak,version_count}]}
@@ -201,12 +204,29 @@ nonisolated enum EngineSocket {
                 }
                 _ = emit(["event": "done", "ms": Int(Date().timeIntervalSince(start) * 1000)])
             } catch { _ = emit(["event": "error", "error": message(error)]) }
-        case "meetings.list", "meetings.get", "meetings.notes_save", "meetings.notes_generate", "meetings.live":
+        case "meetings.list", "meetings.get", "meetings.notes_save", "meetings.notes_generate", "meetings.live", "meetings.start", "meetings.stop", "meetings.rename", "meetings.rename_speaker", "meetings.delete":
             guard let meetings = services.meetings else { return fail("meetings are not available") }
             do {
                 switch op {
                 case "meetings.live":
                     _ = emit(["ok": true, "live": await meetings.live()])
+                case "meetings.start":
+                    _ = emit(["ok": true, "meeting": try await meetings.start(title: object["title"] as? String ?? "", online: object["online"] as? Bool ?? false)])
+                case "meetings.stop":
+                    try await meetings.stop()
+                    _ = emit(["ok": true])
+                case "meetings.rename":
+                    guard let id = uuid(), let title = object["title"] as? String else { return fail("missing id or title") }
+                    try await meetings.rename(id: id, title: title)
+                    _ = emit(["ok": true])
+                case "meetings.rename_speaker":
+                    guard let id = uuid(), let speaker = (object["speaker"] as? String).flatMap(UUID.init(uuidString:)), let name = object["name"] as? String else { return fail("missing id, speaker or name") }
+                    try await meetings.renameSpeaker(id: id, speakerID: speaker, name: name)
+                    _ = emit(["ok": true])
+                case "meetings.delete":
+                    guard let id = uuid() else { return fail("missing or bad id") }
+                    try await meetings.delete(id: id)
+                    _ = emit(["ok": true])
                 case "meetings.list":
                     _ = emit(["ok": true, "meetings": try await meetings.list()])
                 case "meetings.get":
@@ -322,6 +342,17 @@ private struct FakeMeetings: EngineMeetingsProviding {
         guard id == self.knownID else { throw EngineMeetingsError.notFound }
         if text == "my notes" { self.notesSaved.set() }
     }
+    func start(title: String, online: Bool) async throws -> [String: Any] {
+        if title == "busy" { throw EngineMeetingsError.recordingBusy }
+        return ["id": self.knownID.uuidString, "title": title + (online ? " (online)" : " (room)")]
+    }
+    func stop() async throws { throw EngineMeetingsError.notRecording }
+    func renameSpeaker(id: UUID, speakerID: UUID, name: String) async throws {
+        guard id == self.knownID else { throw EngineMeetingsError.notFound }
+        if name.trimmingCharacters(in: .whitespaces).isEmpty { throw EngineMeetingsError.badName }
+    }
+    func rename(id: UUID, title: String) async throws { guard id == self.knownID else { throw EngineMeetingsError.notFound } }
+    func delete(id: UUID) async throws { guard id == self.knownID else { throw EngineMeetingsError.notFound } }
     func generateNotes(id: UUID, kind: String, auto: Bool, emit: @escaping @Sendable ([String: Any]) -> Bool) async throws {
         guard id == self.knownID else { throw EngineMeetingsError.notFound }
         if auto { _ = emit(["event": "skipped", "reason": "not needed"]); return }
@@ -467,6 +498,21 @@ nonisolated enum EngineSocketAutotest {
             check("notes generation reports progress then the result", gennotes.filter { $0["event"] as? String == "progress" }.count == 2 && gennotes.last?["event"] as? String == "done" && gennotes.last?["text"] as? String == "notes for executive")
             check("auto notes can say they were not needed", lines(#"{"op":"meetings.notes_generate","id":"\#(id)","auto":true}"#).last?["event"] as? String == "skipped")
             check("notes generation for a missing meeting ends with an error event", lines(#"{"op":"meetings.notes_generate","id":"\#(UUID().uuidString)"}"#).last?["event"] as? String == "error")
+
+            // meeting controls
+            let started = ask(#"{"op":"meetings.start","title":"Sync","online":true}"#)?["meeting"] as? [String: Any]
+            check("meetings.start returns the new meeting", started?["id"] as? String == id && started?["title"] as? String == "Sync (online)")
+            check("meetings.start for the room", (ask(#"{"op":"meetings.start","title":"Chat"}"#)?["meeting"] as? [String: Any])?["title"] as? String == "Chat (room)")
+            check("meetings.start while busy is refused with a reason", ask(#"{"op":"meetings.start","title":"busy"}"#)?["error"] as? String == EngineMeetingsError.recordingBusy.errorDescription)
+            check("meetings.stop with nothing recording is refused", ask(#"{"op":"meetings.stop"}"#)?["ok"] as? Bool == false)
+            check("meetings.rename works for a known meeting", ask(#"{"op":"meetings.rename","id":"\#(id)","title":"New"}"#)?["ok"] as? Bool == true)
+            check("meetings.rename for an unknown meeting is refused", ask(#"{"op":"meetings.rename","id":"\#(UUID().uuidString)","title":"New"}"#)?["ok"] as? Bool == false)
+            let sp = UUID().uuidString
+            check("meetings.rename_speaker works", ask(#"{"op":"meetings.rename_speaker","id":"\#(id)","speaker":"\#(sp)","name":"Dana"}"#)?["ok"] as? Bool == true)
+            check("meetings.rename_speaker refuses an empty name", ask(#"{"op":"meetings.rename_speaker","id":"\#(id)","speaker":"\#(sp)","name":"  "}"#)?["ok"] as? Bool == false)
+            check("meetings.rename_speaker refuses a bad speaker id", ask(#"{"op":"meetings.rename_speaker","id":"\#(id)","speaker":"x","name":"Dana"}"#)?["ok"] as? Bool == false)
+            check("meetings.delete works for a known meeting", ask(#"{"op":"meetings.delete","id":"\#(id)"}"#)?["ok"] as? Bool == true)
+            check("meetings.delete rejects a bad id", ask(#"{"op":"meetings.delete","id":"nope"}"#)?["ok"] as? Bool == false)
 
             // recent writing
             let wl = ask(#"{"op":"writing.list","search":"x","limit":5}"#)

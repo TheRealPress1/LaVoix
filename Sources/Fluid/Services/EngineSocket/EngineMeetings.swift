@@ -13,12 +13,23 @@ nonisolated protocol EngineMeetingsProviding: Sendable {
     /// when the listener has gone away, which stops the work. `auto` applies the same rules as opening a meeting in the
     /// app (recent, finished, no notes yet, tried once).
     func generateNotes(id: UUID, kind: String, auto: Bool, emit: @escaping @Sendable ([String: Any]) -> Bool) async throws
+    /// Starts recording now (an online call in the app you are using, or a conversation in the room). Returns the new meeting.
+    func start(title: String, online: Bool) async throws -> [String: Any]
+    /// Stops the recording in progress; transcription and notes follow by themselves.
+    func stop() async throws
+    func renameSpeaker(id: UUID, speakerID: UUID, name: String) async throws
+    func rename(id: UUID, title: String) async throws
+    func delete(id: UUID) async throws
 }
 
 nonisolated enum EngineMeetingsError: LocalizedError {
-    case notFound, noTranscript, modelMissing, busy
+    case notFound, noTranscript, modelMissing, busy, recordingBusy, notRecording, badName, unavailable(String)
     var errorDescription: String? {
         switch self {
+        case .recordingBusy: "A recording or its processing is already in progress."
+        case .notRecording: "Nothing is being recorded."
+        case .badName: "Give it a name of one to eighty characters."
+        case let .unavailable(m): m
         case .notFound: "That meeting no longer exists."
         case .noTranscript: "This meeting has no transcript text to write notes from."
         case .modelMissing: "Download the on-device model (or set a notes command) to get notes."
@@ -175,7 +186,7 @@ nonisolated struct LiveEngineMeetings: EngineMeetingsProviding {
             "id": s.id.uuidString, "title": s.title, "started_at": Self.iso(s.startedAt), "ended_at": s.endedAt.map(Self.iso) ?? NSNull(),
             "duration_seconds": Int(max(0, s.duration)), "state": s.state.rawValue, "source": s.capturedApplication?.displayName ?? "",
             "mode": s.mode.rawValue, "words": Self.words(s),
-            "speakers": s.activeSpeakers.map { ["name": $0.displayName, "is_me": $0.isLocalUser] as [String: Any] },
+            "speakers": s.activeSpeakers.map { ["id": $0.id.uuidString, "name": $0.displayName, "is_me": $0.isLocalUser] as [String: Any] },
             "segments": segments, "summaries": summaries, "notes": notes, "attendees": attendees, "note_file": MeetingBrainExporter.fileName(for: s),
             "kinds": MeetingSummaryKind.allCases.map { ["id": $0.rawValue, "title": $0.title] },
             "audio_saved": directory.map { FileManager.default.fileExists(atPath: $0.appendingPathComponent("tracks").path) } ?? false,
@@ -184,6 +195,39 @@ nonisolated struct LiveEngineMeetings: EngineMeetingsProviding {
 
     func live() async -> [String: Any] {
         await MainActor.run { NotchMeetingCardController.shared.engineLiveState() }
+    }
+
+    private static func cleanName(_ raw: String) throws -> String {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= 80 else { throw EngineMeetingsError.badName }
+        return name
+    }
+
+    func start(title: String, online: Bool) async throws -> [String: Any] {
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let session = try await NotchMeetingCardController.shared.engineStart(title: String(name.prefix(80)), online: online)
+        return ["id": session.id.uuidString, "title": session.title]
+    }
+
+    func stop() async throws {
+        try await NotchMeetingCardController.shared.engineStop()
+    }
+
+    func renameSpeaker(id: UUID, speakerID: UUID, name: String) async throws {
+        let clean = try Self.cleanName(name)
+        guard let coordinator = await NotchMeetingCardController.shared.engineCoordinator else { throw EngineMeetingsError.unavailable("The meeting engine is not ready yet.") }
+        do { _ = try await coordinator.renameSpeaker(sessionID: id, speakerID: speakerID, to: clean) } catch { throw EngineMeetingsError.unavailable(error.localizedDescription) }
+    }
+
+    func rename(id: UUID, title: String) async throws {
+        let clean = try Self.cleanName(title)
+        guard let coordinator = await NotchMeetingCardController.shared.engineCoordinator else { throw EngineMeetingsError.unavailable("The meeting engine is not ready yet.") }
+        do { _ = try await coordinator.renameSession(sessionID: id, to: clean) } catch { throw EngineMeetingsError.unavailable(error.localizedDescription) }
+    }
+
+    func delete(id: UUID) async throws {
+        guard let coordinator = await NotchMeetingCardController.shared.engineCoordinator else { throw EngineMeetingsError.unavailable("The meeting engine is not ready yet.") }
+        do { try await coordinator.deleteSession(id: id) } catch { throw EngineMeetingsError.unavailable(error.localizedDescription) }
     }
 
     func saveNotes(id: UUID, text: String) async throws {

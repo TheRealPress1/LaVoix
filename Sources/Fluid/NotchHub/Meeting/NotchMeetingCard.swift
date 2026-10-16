@@ -723,6 +723,32 @@ final class NotchMeetingCardController {
     }
 
     /// What myOS shows while a meeting is recording: the running time and the latest live captions. Read-only.
+    var engineCoordinator: MeetingSessionCoordinator? { self.coordinator }
+
+    /// Starts a recording on behalf of myOS. The recording strip and the rest of the flow follow from the coordinator's state,
+    /// exactly as when the notch card starts one. Refused while another recording or its processing is under way.
+    func engineStart(title: String, online: Bool) async throws -> MeetingSession {
+        guard let coordinator else { throw EngineMeetingsError.unavailable("The meeting engine is not ready yet.") }
+        switch coordinator.state {
+        case .idle, .completed, .interrupted, .failed: break
+        default: throw EngineMeetingsError.recordingBusy
+        }
+        let configuration = try await coordinator.defaultConfiguration(
+            mode: online ? .onlineCall : .inRoom, title: title.isEmpty ? "Recording" : title,
+            preferredBundleIdentifier: online ? Self.likelyCallApp(for: nil) : nil, preferredWindowID: nil
+        )
+        return try await coordinator.startRecording(configuration: configuration)
+    }
+
+    func engineStop() async throws {
+        guard let coordinator else { throw EngineMeetingsError.unavailable("The meeting engine is not ready yet.") }
+        switch coordinator.state {
+        case .recording, .recordingDegraded: break
+        default: throw EngineMeetingsError.notRecording
+        }
+        _ = try await coordinator.stopAndTranscribe()
+    }
+
     func engineLiveState() -> [String: Any] {
         guard let coordinator, let session = coordinator.activeSession else { return ["active": false] }
         let phase: String
