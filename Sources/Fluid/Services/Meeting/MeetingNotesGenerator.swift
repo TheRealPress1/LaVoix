@@ -185,12 +185,14 @@ nonisolated enum MeetingNotesGenerator {
 
         try Task.checkCancellation()
         progress?("Writing notes…")
+        let finalSystem = MeetingNotesPrompt.system(
+            kind: kind,
+            hasUserNotes: !userNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        )
+        let finalUser = MeetingNotesPrompt.user(transcript: source, userNotes: userNotes)
         let output = try await LocalCleanupEngine.shared.generate(
-            system: MeetingNotesPrompt.system(
-                kind: kind,
-                hasUserNotes: !userNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ),
-            user: MeetingNotesPrompt.user(transcript: source, userNotes: userNotes),
+            system: finalSystem,
+            user: finalUser,
             modelID: modelID,
             maxTokens: kind == .detailed ? 2000 : 1000,
             temperature: 0.2,
@@ -199,6 +201,7 @@ nonisolated enum MeetingNotesGenerator {
         let cleaned = MeetingNotesDateGuard.apply(to: output, source: body + "\n" + userNotes)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { throw MeetingNotesError.emptyOutput }
+        TrainingData.recordPrompt(system: finalSystem, user: finalUser, model: modelID, output: cleaned)
         return cleaned
     }
 

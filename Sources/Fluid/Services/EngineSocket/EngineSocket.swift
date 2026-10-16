@@ -16,6 +16,8 @@ import Foundation
 ///   {"op":"meetings.start","title","online"}             -> {"ok":true,"meeting":{"id","title"}}   (online: the call in the app you are using; otherwise a conversation in the room)
 ///   {"op":"meetings.stop"}                                -> {"ok":true}
 ///   {"op":"meetings.rename","id","title"}  /  {"op":"meetings.rename_speaker","id","speaker","name"}  /  {"op":"meetings.delete","id"}  -> {"ok":true}
+///   {"op":"meetings.notes_feedback","id","kind","rating":"good|bad|edited","text"?}  -> {"ok":true}   (your verdict on the notes; "edited" carries your corrected version)
+///   {"op":"training.status"} -> {"ok":true,"training":{good,bad,edited,usable,unrated_inputs,folder}}  /  {"op":"training.export"} -> {"ok":true,"export":{train,valid,folder}}  /  {"op":"training.clear"}
 ///   {"op":"meetings.notes_save","id","text"}              -> {"ok":true}
 ///   {"op":"meetings.notes_generate","id","kind","auto"}   -> {"event":"progress","message"} ... {"event":"done","text"}
 ///   {"op":"writing.list","search","limit"}               -> {"ok":true,"entries":[{id,bundle_id,app_name,window_title,first_at,last_at,latest,peak,version_count}]}
@@ -217,7 +219,7 @@ nonisolated enum EngineSocket {
                 }
                 _ = emit(["event": "done", "ms": Int(Date().timeIntervalSince(start) * 1000)])
             } catch { _ = emit(["event": "error", "error": message(error)]) }
-        case "meetings.list", "meetings.get", "meetings.notes_save", "meetings.notes_generate", "meetings.live", "meetings.start", "meetings.stop", "meetings.rename", "meetings.rename_speaker", "meetings.delete":
+        case "meetings.list", "meetings.get", "meetings.notes_save", "meetings.notes_generate", "meetings.live", "meetings.start", "meetings.stop", "meetings.rename", "meetings.rename_speaker", "meetings.delete", "meetings.notes_feedback":
             guard let meetings = services.meetings else { return fail("meetings are not available") }
             do {
                 switch op {
@@ -235,6 +237,10 @@ nonisolated enum EngineSocket {
                 case "meetings.rename_speaker":
                     guard let id = uuid(), let speaker = (object["speaker"] as? String).flatMap(UUID.init(uuidString:)), let name = object["name"] as? String else { return fail("missing id, speaker or name") }
                     try await meetings.renameSpeaker(id: id, speakerID: speaker, name: name)
+                    _ = emit(["ok": true])
+                case "meetings.notes_feedback":
+                    guard let id = uuid(), let kind = object["kind"] as? String, let rating = object["rating"] as? String else { return fail("missing id, kind or rating") }
+                    try await meetings.rateNotes(id: id, kind: kind, rating: rating, text: object["text"] as? String)
                     _ = emit(["ok": true])
                 case "meetings.delete":
                     guard let id = uuid() else { return fail("missing or bad id") }
@@ -292,6 +298,13 @@ nonisolated enum EngineSocket {
                 if op == "history.star" { await history.toggleStar(id: id) } else { await history.delete(id: id) }
                 _ = emit(["ok": true])
             }
+        case "training.status":
+            _ = emit(["ok": true, "training": TrainingData.status()])
+        case "training.export":
+            do { _ = emit(["ok": true, "export": try TrainingData.export()]) } catch { fail("could not write the training files") }
+        case "training.clear":
+            TrainingData.clear()
+            _ = emit(["ok": true])
         case "settings.list", "settings.set":
             guard let settings = services.settings else { return fail("settings are not available") }
             if op == "settings.list" {
@@ -421,6 +434,10 @@ private struct FakeMeetings: EngineMeetingsProviding {
     }
     func rename(id: UUID, title: String) async throws { guard id == self.knownID else { throw EngineMeetingsError.notFound } }
     func delete(id: UUID) async throws { guard id == self.knownID else { throw EngineMeetingsError.notFound } }
+    func rateNotes(id: UUID, kind: String, rating: String, text: String?) async throws {
+        guard id == self.knownID else { throw EngineMeetingsError.notFound }
+        guard TrainingData.Rating(rawValue: rating) != nil else { throw TrainingData.Failure.badRating }
+    }
     func generateNotes(id: UUID, kind: String, auto: Bool, emit: @escaping @Sendable ([String: Any]) -> Bool) async throws {
         guard id == self.knownID else { throw EngineMeetingsError.notFound }
         if auto { _ = emit(["event": "skipped", "reason": "not needed"]); return }
@@ -654,6 +671,39 @@ nonisolated enum EngineSocketAutotest {
             check("notes generation reports progress then the result", gennotes.filter { $0["event"] as? String == "progress" }.count == 2 && gennotes.last?["event"] as? String == "done" && gennotes.last?["text"] as? String == "notes for executive")
             check("auto notes can say they were not needed", lines(#"{"op":"meetings.notes_generate","id":"\#(id)","auto":true}"#).last?["event"] as? String == "skipped")
             check("notes generation for a missing meeting ends with an error event", lines(#"{"op":"meetings.notes_generate","id":"\#(UUID().uuidString)"}"#).last?["event"] as? String == "error")
+
+            // training data (real code, in a temp folder)
+            let trainingRoot = base.appendingPathComponent("training")
+            TrainingData.rootOverride = trainingRoot
+            let meetingA = UUID(), meetingB = UUID(), meetingC = UUID()
+            TrainingData.recordPrompt(system: "SYS", user: "USER A", model: "m", output: "Notes A")
+            TrainingData.recordPrompt(system: "SYS", user: "USER B", model: "m", output: "Notes B")
+            TrainingData.recordPrompt(system: "SYS", user: "USER C", model: "m", output: "Notes C")
+            check("training: a set of notes can be rated once its input was recorded", TrainingData.canRate(meeting: meetingA, kind: "executive", notes: "Notes A") && !TrainingData.canRate(meeting: meetingA, kind: "executive", notes: "Other notes"))
+            check("training: rating notes with no recorded input is refused", (try? TrainingData.rate(meeting: meetingA, kind: "executive", rating: .good, notes: "Other notes", corrected: nil)) == nil)
+            check("training: a good rating is saved", (try? TrainingData.rate(meeting: meetingA, kind: "executive", rating: .good, notes: "Notes A", corrected: nil)) != nil && TrainingData.rating(meeting: meetingA, kind: "executive") == "good")
+            check("training: an edit needs corrected text", (try? TrainingData.rate(meeting: meetingB, kind: "executive", rating: .edited, notes: "Notes B", corrected: "  ")) == nil)
+            check("training: an edit keeps the corrected text", (try? TrainingData.rate(meeting: meetingB, kind: "executive", rating: .edited, notes: "Notes B", corrected: "Fixed B")) != nil && TrainingData.rating(meeting: meetingB, kind: "executive") == "edited")
+            check("training: a rating can be changed later, even after the notes were replaced by the corrected text", (try? TrainingData.rate(meeting: meetingB, kind: "executive", rating: .good, notes: "Fixed B", corrected: nil)) != nil && TrainingData.rating(meeting: meetingB, kind: "executive") == "good")
+            _ = try? TrainingData.rate(meeting: meetingB, kind: "executive", rating: .edited, notes: "Fixed B", corrected: "Fixed B")
+            check("training: bad notes are rated but kept out of the export", (try? TrainingData.rate(meeting: meetingC, kind: "executive", rating: .bad, notes: "Notes C", corrected: nil)) != nil)
+            let tstat = (ask(#"{"op":"training.status"}"#)?["training"] as? [String: Any])
+            check("training.status counts by rating and carries no text", tstat?["good"] as? Int == 1 && tstat?["bad"] as? Int == 1 && tstat?["edited"] as? Int == 1 && tstat?["usable"] as? Int == 2 && !(String(data: (try? JSONSerialization.data(withJSONObject: tstat ?? [:])) ?? Data(), encoding: .utf8) ?? "").contains("Notes"))
+            let exp = (ask(#"{"op":"training.export"}"#)?["export"] as? [String: Any])
+            check("training.export writes the usable examples and leaves bad ones out", (exp?["train"] as? Int ?? 0) + (exp?["valid"] as? Int ?? 0) == 2)
+            let trainText = (try? String(contentsOf: TrainingData.exportDir.appendingPathComponent("train.jsonl"), encoding: .utf8)) ?? ""
+            let validText = (try? String(contentsOf: TrainingData.exportDir.appendingPathComponent("valid.jsonl"), encoding: .utf8)) ?? ""
+            let exported = (trainText + validText).split(separator: "\n").compactMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any] }
+            check("training.export is chat-format JSON lines (system, user, assistant)", exported.count == 2 && exported.allSatisfy { ($0["messages"] as? [[String: String]])?.map { $0["role"] ?? "" } == ["system", "user", "assistant"] })
+            check("training.export teaches your correction for edited notes and the model's own words for good ones", (trainText + validText).contains("Fixed B") && (trainText + validText).contains("Notes A") && !(trainText + validText).contains("Notes C"))
+            check("training.export keeps a validation set when there are two or more examples", (exp?["valid"] as? Int ?? 0) >= 1)
+            let perms = (try? FileManager.default.attributesOfItem(atPath: TrainingData.exportDir.appendingPathComponent("train.jsonl").path))?[.posixPermissions] as? NSNumber
+            let rootPerms = (try? FileManager.default.attributesOfItem(atPath: trainingRoot.path))?[.posixPermissions] as? NSNumber
+            check("training files are owner-only", perms?.intValue == 0o600 && rootPerms?.intValue == 0o700)
+            check("meetings.notes_feedback refuses a bad rating", ask(#"{"op":"meetings.notes_feedback","id":"\#(id)","kind":"executive","rating":"meh"}"#)?["ok"] as? Bool == false)
+            check("meetings.notes_feedback works for a known meeting", ask(#"{"op":"meetings.notes_feedback","id":"\#(id)","kind":"executive","rating":"good"}"#)?["ok"] as? Bool == true)
+            check("training.clear removes everything", ask(#"{"op":"training.clear"}"#)?["ok"] as? Bool == true && !FileManager.default.fileExists(atPath: trainingRoot.path) && (ask(#"{"op":"training.status"}"#)?["training"] as? [String: Any])?["usable"] as? Int == 0)
+            TrainingData.rootOverride = nil
 
             // meeting controls
             let started = ask(#"{"op":"meetings.start","title":"Sync","online":true}"#)?["meeting"] as? [String: Any]

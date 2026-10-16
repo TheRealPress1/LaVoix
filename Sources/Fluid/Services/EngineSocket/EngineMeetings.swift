@@ -20,6 +20,8 @@ nonisolated protocol EngineMeetingsProviding: Sendable {
     func renameSpeaker(id: UUID, speakerID: UUID, name: String) async throws
     func rename(id: UUID, title: String) async throws
     func delete(id: UUID) async throws
+    /// Your verdict on a set of notes: "good", "bad", or "edited" with your corrected `text` (which also replaces the notes).
+    func rateNotes(id: UUID, kind: String, rating: String, text: String?) async throws
 }
 
 nonisolated enum EngineMeetingsError: LocalizedError {
@@ -179,7 +181,9 @@ nonisolated struct LiveEngineMeetings: EngineMeetingsProviding {
             for kind in MeetingSummaryKind.allCases {
                 let file = directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")
                 guard let data = try? Data(contentsOf: file), let saved = try? JSONDecoder().decode(MeetingNotesViewModel.Saved.self, from: data) else { continue }
-                summaries[kind.rawValue] = ["text": saved.text, "model": saved.modelID, "stale": saved.transcriptHash != current]
+                summaries[kind.rawValue] = ["text": saved.text, "model": saved.modelID, "stale": saved.transcriptHash != current,
+                                            "rating": TrainingData.rating(meeting: id, kind: kind.rawValue) ?? NSNull(),
+                                            "can_rate": TrainingData.canRate(meeting: id, kind: kind.rawValue, notes: saved.text)] as [String: Any]
             }
         }
         return [
@@ -228,6 +232,19 @@ nonisolated struct LiveEngineMeetings: EngineMeetingsProviding {
     func delete(id: UUID) async throws {
         guard let coordinator = await NotchMeetingCardController.shared.engineCoordinator else { throw EngineMeetingsError.unavailable("The meeting engine is not ready yet.") }
         do { try await coordinator.deleteSession(id: id) } catch { throw EngineMeetingsError.unavailable(error.localizedDescription) }
+    }
+
+    func rateNotes(id: UUID, kind: String, rating rawRating: String, text: String?) async throws {
+        guard let rating = TrainingData.Rating(rawValue: rawRating) else { throw TrainingData.Failure.badRating }
+        guard MeetingSummaryKind(rawValue: kind) != nil, let directory = try await self.store.existingSessionDirectory(for: id) else { throw EngineMeetingsError.notFound }
+        let file = directory.appendingPathComponent("manual-summary-\(kind).json")
+        guard let data = try? Data(contentsOf: file), var saved = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let notes = saved["text"] as? String else { throw EngineMeetingsError.notFound }
+        try TrainingData.rate(meeting: id, kind: kind, rating: rating, notes: notes, corrected: text)
+        if rating == .edited, let text {
+            // The notes you see are now your version.
+            saved["text"] = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            try JSONSerialization.data(withJSONObject: saved).write(to: file, options: .atomic)
+        }
     }
 
     func saveNotes(id: UUID, text: String) async throws {
