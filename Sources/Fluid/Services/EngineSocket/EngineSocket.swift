@@ -15,6 +15,11 @@ import Foundation
 ///   {"op":"meetings.live"}                                -> {"ok":true,"live":{"active":true,"id","title","started_at","elapsed_seconds","rows":[{"speaker":"you|them","text","partial"}]}}
 ///   {"op":"meetings.notes_save","id","text"}              -> {"ok":true}
 ///   {"op":"meetings.notes_generate","id","kind","auto"}   -> {"event":"progress","message"} ... {"event":"done","text"}
+///   {"op":"writing.list","search","limit"}               -> {"ok":true,"entries":[{id,bundle_id,app_name,window_title,first_at,last_at,latest,peak,version_count}]}
+///   {"op":"writing.versions","entry"}                     -> {"ok":true,"versions":[{id,at,text}]}
+///   {"op":"writing.delete","entry"} / {"op":"writing.delete_all","bundle_id"?}  -> {"ok":true}
+///   {"op":"writing.settings"}                             -> {"ok":true,"settings":{enabled,days,excluded,accessibility,count}}
+///   {"op":"writing.settings_set","enabled"?,"days"?,"excluded"?}  -> {"ok":true,"settings":{...}}
 /// Failures come back as {"ok":false,"error":"..."} (streams: {"event":"error","error":"..."}).
 nonisolated enum EngineSocket {
     static let maxRequestBytes = 1_000_000
@@ -42,6 +47,7 @@ nonisolated enum EngineSocket {
         var status: StatusProvider
         var warm: Warmer = {}
         var meetings: (any EngineMeetingsProviding)?
+        var writing: (any EngineWritingProviding)?
     }
 
     private static let lock = NSLock()
@@ -79,7 +85,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting())
     }
 
     enum EngineError: LocalizedError {
@@ -212,6 +218,28 @@ nonisolated enum EngineSocket {
             } catch {
                 _ = op == "meetings.notes_generate" ? emit(["event": "error", "error": message(error)]) : emit(["ok": false, "error": message(error)])
             }
+        case "writing.list", "writing.versions", "writing.delete", "writing.delete_all", "writing.settings", "writing.settings_set":
+            guard let writing = services.writing else { return fail("recent writing is not available") }
+            let entry = (object["entry"] as? NSNumber)?.int64Value
+            switch op {
+            case "writing.list":
+                _ = emit(["ok": true, "entries": await writing.list(search: object["search"] as? String ?? "", limit: object["limit"] as? Int ?? 200)])
+            case "writing.versions":
+                guard let entry else { return fail("missing entry") }
+                _ = emit(["ok": true, "versions": await writing.versions(entryID: entry)])
+            case "writing.delete":
+                guard let entry else { return fail("missing entry") }
+                await writing.delete(entryID: entry)
+                _ = emit(["ok": true])
+            case "writing.delete_all":
+                await writing.deleteAll(bundleID: object["bundle_id"] as? String)
+                _ = emit(["ok": true])
+            case "writing.settings":
+                _ = emit(["ok": true, "settings": await writing.settings()])
+            default:
+                await writing.updateSettings(object)
+                _ = emit(["ok": true, "settings": await writing.settings()])
+            }
         default:
             fail("unknown op")
         }
@@ -276,6 +304,34 @@ private struct FakeMeetings: EngineMeetingsProviding {
     }
 }
 
+/// Recent Writing with made-up content. Records what was asked so the autotest can check it.
+private final class FakeWriting: EngineWritingProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var deleted: [Int64] = []
+    private var clearedBundle: String??
+    private var enabled = true
+    private var days = 14
+    private var excluded: [String] = []
+    var deletedIDs: [Int64] { self.lock.lock(); defer { self.lock.unlock() }; return self.deleted }
+    var didClearAll: Bool { self.lock.lock(); defer { self.lock.unlock() }; return self.clearedBundle != nil }
+    func list(search: String, limit: Int) async -> [[String: Any]] {
+        search == "nothing" ? [] : [["id": 7, "app_name": "Notes", "latest": "draft text", "peak": "draft text longer", "version_count": 2, "limit": limit]]
+    }
+    func versions(entryID: Int64) async -> [[String: Any]] { [["id": 1, "at": 1.0, "text": "v1"]] }
+    func delete(entryID: Int64) async { self.lock.lock(); self.deleted.append(entryID); self.lock.unlock() }
+    func deleteAll(bundleID: String?) async { self.lock.lock(); self.clearedBundle = .some(bundleID); self.lock.unlock() }
+    func settings() async -> [String: Any] {
+        self.lock.lock(); defer { self.lock.unlock() }
+        return ["enabled": self.enabled, "days": self.days, "excluded": self.excluded, "accessibility": true, "count": 1]
+    }
+    func updateSettings(_ changes: [String: Any]) async {
+        self.lock.lock(); defer { self.lock.unlock() }
+        if let e = changes["enabled"] as? Bool { self.enabled = e }
+        if let d = changes["days"] as? Int, [7, 14, 30].contains(d) { self.days = d }
+        if let x = changes["excluded"] as? [String] { self.excluded = x }
+    }
+}
+
 /// `LAVOIX_ENGINE_SOCKET_AUTOTEST=1` serves fakes on a temp socket and talks to it as a client.
 nonisolated enum EngineSocketAutotest {
     static func runIfRequested() {
@@ -289,6 +345,7 @@ nonisolated enum EngineSocketAutotest {
             let secret = "SECRET-PLANTED-TEXT"
             let warmed = AutotestFlag()
             let notesSaved = AutotestFlag()
+            let fakeWriting = FakeWriting()
             let services = EngineSocket.Services(
                 generator: { system, user, maxTokens in
                     if user.contains("explode") { throw NSError(domain: "t", code: 1) }
@@ -305,7 +362,8 @@ nonisolated enum EngineSocketAutotest {
                 },
                 status: { ("test-model", true, false) },
                 warm: { warmed.set() },
-                meetings: FakeMeetings(notesSaved: notesSaved)
+                meetings: FakeMeetings(notesSaved: notesSaved),
+                writing: fakeWriting
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -350,6 +408,20 @@ nonisolated enum EngineSocketAutotest {
             check("notes generation reports progress then the result", gennotes.filter { $0["event"] as? String == "progress" }.count == 2 && gennotes.last?["event"] as? String == "done" && gennotes.last?["text"] as? String == "notes for executive")
             check("auto notes can say they were not needed", lines(#"{"op":"meetings.notes_generate","id":"\#(id)","auto":true}"#).last?["event"] as? String == "skipped")
             check("notes generation for a missing meeting ends with an error event", lines(#"{"op":"meetings.notes_generate","id":"\#(UUID().uuidString)"}"#).last?["event"] as? String == "error")
+
+            // recent writing
+            let wl = ask(#"{"op":"writing.list","search":"x","limit":5}"#)
+            check("writing.list returns entries", (wl?["entries"] as? [[String: Any]])?.first?["app_name"] as? String == "Notes" && (wl?["entries"] as? [[String: Any]])?.first?["limit"] as? Int == 5)
+            check("writing.list with no match is empty", (ask(#"{"op":"writing.list","search":"nothing"}"#)?["entries"] as? [Any])?.isEmpty == true)
+            check("writing.versions returns versions", (ask(#"{"op":"writing.versions","entry":7}"#)?["versions"] as? [[String: Any]])?.first?["text"] as? String == "v1")
+            check("writing.versions needs an entry", ask(#"{"op":"writing.versions"}"#)?["ok"] as? Bool == false)
+            check("writing.delete deletes that entry", ask(#"{"op":"writing.delete","entry":7}"#)?["ok"] as? Bool == true && fakeWriting.deletedIDs == [7])
+            check("writing.delete needs an entry", ask(#"{"op":"writing.delete"}"#)?["ok"] as? Bool == false)
+            check("writing.delete_all clears", ask(#"{"op":"writing.delete_all"}"#)?["ok"] as? Bool == true && fakeWriting.didClearAll)
+            let ws = ask(#"{"op":"writing.settings_set","enabled":false,"days":30,"excluded":["com.x.y"]}"#)?["settings"] as? [String: Any]
+            check("writing.settings_set applies and returns the settings", ws?["enabled"] as? Bool == false && ws?["days"] as? Int == 30 && ws?["excluded"] as? [String] == ["com.x.y"])
+            check("writing.settings_set ignores a retention that is not offered", (ask(#"{"op":"writing.settings_set","days":3}"#)?["settings"] as? [String: Any])?["days"] as? Int == 30)
+            check("writing.settings reads them back", (ask(#"{"op":"writing.settings"}"#)?["settings"] as? [String: Any])?["enabled"] as? Bool == false)
 
             // robustness
             check("garbage is rejected", ask("not json")?["ok"] as? Bool == false)
