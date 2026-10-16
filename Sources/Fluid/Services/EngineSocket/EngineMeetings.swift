@@ -32,6 +32,9 @@ nonisolated struct MeetingAttendee: Codable, Equatable {
     var email: String
     /// Small contact photo (base64), when the address book has one for this email.
     var photo: String?
+    /// Set for people found in the event description (no email there): their LinkedIn page and role.
+    var linkedin: String? = nil
+    var role: String? = nil
 }
 
 nonisolated enum MeetingAttendees {
@@ -54,6 +57,24 @@ nonisolated enum MeetingAttendees {
         return contact?.thumbnailImageData?.base64EncodedString()
     }
 
+    /// People some tools list in the event description instead of inviting them, like
+    /// "Jane Doe (GTM Recruiter, LinkedIn)". Needs a name and a role in brackets and a LinkedIn mention, so ordinary
+    /// text in a description is not mistaken for a person. Returns name, role and (when linked) the LinkedIn address.
+    static func peopleFromDescription(_ text: String) -> [(name: String, role: String, linkedin: String?)] {
+        let namePart = #"([\p{Lu}][\p{L}'’.\-]+(?:\s+[\p{Lu}][\p{L}'’.\-]+){1,3})"#
+        let pattern = namePart + #"\s*\(([^()<>]*?)(?:,\s*)?(?:<a[^>]*href="([^"]*linkedin\.com/in/[^"?]*)[^"]*"[^>]*>[^<]*</a>|(https?://[^\s)<"]*linkedin\.com/in/[^\s)<"?]*)|LinkedIn)\s*\)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
+        let ns = text as NSString
+        var out: [(String, String, String?)] = []
+        for m in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            let name = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
+            let role = ns.substring(with: m.range(at: 2)).trimmingCharacters(in: CharacterSet(charactersIn: " ,"))
+            let link = [3, 4].compactMap { m.range(at: $0).location != NSNotFound ? ns.substring(with: m.range(at: $0)) : nil }.first
+            if !out.contains(where: { $0.0 == name }) { out.append((name, role, link)) }
+        }
+        return out
+    }
+
     private static let lock = NSLock()
     private nonisolated(unsafe) static var inFlight = Set<UUID>()
 
@@ -66,13 +87,16 @@ nonisolated enum MeetingAttendees {
         guard fresh, let end = session.endedAt else { return }
         Task.detached(priority: .utility) {
             defer { self.lock.lock(); self.inFlight.remove(session.id); self.lock.unlock() }
-            guard let candidates = CalendarLinks.fetch(start: session.startedAt - 3600, end: end + 3600),
+            guard let candidates = CalendarLinks.fetchAll(start: session.startedAt - 3600, end: end + 3600),
                   let match = CalendarLinks.bestOverlap(candidates, start: session.startedAt, end: end) else {
                 try? JSONEncoder().encode([MeetingAttendee]()).write(to: self.file(in: directory)) // looked, found nothing
                 return
             }
-            let attendees = match.emails.map {
+            var attendees = match.emails.map {
                 MeetingAttendee(name: match.names[$0].flatMap { $0.contains("@") ? nil : $0 } ?? self.nameFromEmail($0), email: $0, photo: self.photo(forEmail: $0))
+            }
+            if attendees.isEmpty, let notes = match.notes {
+                attendees = self.peopleFromDescription(notes).map { MeetingAttendee(name: $0.name, email: "", photo: nil, linkedin: $0.linkedin, role: $0.role.isEmpty ? nil : $0.role) }
             }
             try? JSONEncoder().encode(attendees).write(to: self.file(in: directory), options: .atomic)
             guard attendees.count == 1, var current = try? await store.load(id: session.id) else { return }
@@ -124,7 +148,7 @@ nonisolated struct LiveEngineMeetings: EngineMeetingsProviding {
         var attendees: [[String: Any]] = []
         if let directory, s.state == .completed {
             if let known = MeetingAttendees.load(from: directory) {
-                attendees = known.map { ["name": $0.name, "email": $0.email, "photo": $0.photo ?? NSNull()] as [String: Any] }
+                attendees = known.map { ["name": $0.name, "email": $0.email, "photo": $0.photo ?? NSNull(), "linkedin": $0.linkedin ?? NSNull(), "role": $0.role ?? NSNull()] as [String: Any] }
             } else {
                 MeetingAttendees.resolveInBackground(session: s, directory: directory, store: self.store)
             }

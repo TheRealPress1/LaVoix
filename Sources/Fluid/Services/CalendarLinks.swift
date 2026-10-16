@@ -14,6 +14,8 @@ nonisolated enum CalendarLinks {
         let attendeeCount: Int
         /// email -> the name the calendar shows for that invitee (in memory; may be the email itself)
         var names: [String: String] = [:]
+        /// The event's description, for tools (recruiting, scheduling) that list the other person there instead of inviting them.
+        var notes: String? = nil
     }
 
     struct Item: Codable, Equatable {
@@ -50,6 +52,23 @@ nonisolated enum CalendarLinks {
             title: (event.title?.isEmpty == false ? event.title : nil) ?? "Untitled",
             start: event.startDate, end: event.endDate, emails: emails, attendeeCount: attendees.count, names: names
         )
+    }
+
+    /// Every timed, non-cancelled event in the range, even one with no other invitees (`candidate(from:)` drops those).
+    /// nil when Calendar access has not been granted (this never asks).
+    static func fetchAll(start: Date, end: Date) -> [Candidate]? {
+        guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { return nil }
+        let store = EKEventStore()
+        return store.events(matching: store.predicateForEvents(withStart: start, end: end, calendars: nil)).compactMap { event in
+            guard !event.isAllDay, event.status != .canceled else { return nil }
+            var c = Self.candidate(from: event) ?? Candidate(
+                id: "\(event.eventIdentifier ?? event.title ?? "event")|\(event.startDate.timeIntervalSince1970)",
+                title: (event.title?.isEmpty == false ? event.title : nil) ?? "Untitled",
+                start: event.startDate, end: event.endDate, emails: [], attendeeCount: event.attendees?.count ?? 0
+            )
+            c.notes = event.notes
+            return c
+        }
     }
 
     /// nil when Calendar access has not been granted (this never asks).

@@ -29,6 +29,11 @@ enum MeetingCaptureTargetAutotest {
         check("an online call with a remote voice still requires echo protection", MeetingProcessingPipeline.microphoneNeedsEchoProtection(mode: .onlineCall, remoteSpeechHeard: true))
         check("an online call where no remote voice was ever heard admits the microphone", !MeetingProcessingPipeline.microphoneNeedsEchoProtection(mode: .onlineCall, remoteSpeechHeard: false))
         check("an in-room meeting never needed it", !MeetingProcessingPipeline.microphoneNeedsEchoProtection(mode: .inRoom, remoteSpeechHeard: true))
+        let html = #"<ul><li><p>10:00 AM - Culture Interview </p><ul><li><p>Jane Testperson (GTM Recruiter, <a target="_blank" href="https://www.linkedin.com/in/janetest" rel="noopener ">LinkedIn</a>)</p></li></ul></li></ul>"#
+        let found = MeetingAttendees.peopleFromDescription(html)
+        check("a person listed in an event description is found with role and LinkedIn", found.count == 1 && found[0].name == "Jane Testperson" && found[0].role == "GTM Recruiter" && found[0].linkedin == "https://www.linkedin.com/in/janetest")
+        check("plain text with a LinkedIn address works too", MeetingAttendees.peopleFromDescription("Bob Example (Engineer, https://www.linkedin.com/in/bobex)").first?.linkedin == "https://www.linkedin.com/in/bobex")
+        check("ordinary description text is not mistaken for a person", MeetingAttendees.peopleFromDescription("Join the call (see the link). Meeting ID: 123 (desktop) Passcode (dial-in)").isEmpty)
         print(failures == 0 ? "CAPTURE TARGET AUTOTEST ALL PASSED" : "CAPTURE TARGET AUTOTEST \(failures) FAILED")
         exit(failures == 0 ? 0 : 1)
     }
