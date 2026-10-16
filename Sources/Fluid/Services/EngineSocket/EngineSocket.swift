@@ -31,6 +31,9 @@ import Foundation
 ///   {"op":"dictionary.save","id"?,"triggers":[...],"replacement"} -> {"ok":true,"entry":{...}}   (no id adds; a clash or empty field is refused)
 ///   {"op":"dictionary.delete","id"}                       -> {"ok":true}
 ///   {"op":"stats.get"}                                    -> {"ok":true,"stats":{total_words,total_transcriptions,current_streak,best_streak,time_saved,top_apps,hourly,activity,milestones,...}}   (numbers only)
+///   {"op":"prompts.list"}                                 -> {"ok":true,"prompts":{profiles:[{id,name,mode,prompt,include_context}],dictate:{selected,default_prompt,default_is_custom},edit:{...}}}
+///   {"op":"prompts.save","id"?,"name","prompt","mode":"dictate|edit","include_context"} -> {"ok":true,"profile":{...}}
+///   {"op":"prompts.delete","id"} / {"op":"prompts.select","mode","selection":"default|off|profile:<id>"} / {"op":"prompts.set_default","mode","text"}  -> {"ok":true}
 /// Failures come back as {"ok":false,"error":"..."} (streams: {"event":"error","error":"..."}).
 nonisolated enum EngineSocket {
     static let maxRequestBytes = 1_000_000
@@ -63,6 +66,7 @@ nonisolated enum EngineSocket {
         var settings: (any EngineSettingsProviding)?
         var dictionary: (any EngineDictionaryProviding)?
         var stats: (any EngineStatsProviding)?
+        var prompts: (any EnginePromptsProviding)?
     }
 
     private static let lock = NSLock()
@@ -100,7 +104,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts())
     }
 
     enum EngineError: LocalizedError {
@@ -309,6 +313,29 @@ nonisolated enum EngineSocket {
         case "stats.get":
             guard let stats = services.stats else { return fail("stats are not available") }
             do { _ = emit(["ok": true, "stats": try await stats.snapshot()]) } catch { fail("could not work out the stats") }
+        case "prompts.list", "prompts.save", "prompts.delete", "prompts.select", "prompts.set_default":
+            guard let prompts = services.prompts else { return fail("styles are not available") }
+            do {
+                switch op {
+                case "prompts.list":
+                    _ = emit(["ok": true, "prompts": await prompts.list()])
+                case "prompts.save":
+                    guard let name = object["name"] as? String, let prompt = object["prompt"] as? String, let mode = object["mode"] as? String else { return fail("missing name, prompt or mode") }
+                    _ = emit(["ok": true, "profile": try await prompts.save(id: object["id"] as? String, name: name, prompt: prompt, mode: mode, includeContext: object["include_context"] as? Bool ?? false)])
+                case "prompts.delete":
+                    guard let id = object["id"] as? String else { return fail("missing id") }
+                    try await prompts.delete(id: id)
+                    _ = emit(["ok": true])
+                case "prompts.select":
+                    guard let mode = object["mode"] as? String, let selection = object["selection"] as? String else { return fail("missing mode or selection") }
+                    try await prompts.select(mode: mode, selection: selection)
+                    _ = emit(["ok": true])
+                default:
+                    guard let mode = object["mode"] as? String, let text = object["text"] as? String else { return fail("missing mode or text") }
+                    try await prompts.setDefault(mode: mode, text: text)
+                    _ = emit(["ok": true])
+                }
+            } catch { fail(message(error)) }
         default:
             fail("unknown op")
         }
@@ -478,6 +505,41 @@ private struct FakeStats: EngineStatsProviding {
     }
 }
 
+/// Styles in memory, using the real checks.
+private final class FakePrompts: EnginePromptsProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var profiles: [[String: Any]] = []
+    private var selected: [String: String] = ["dictate": "default", "edit": "default"]
+    func list() async -> [String: Any] { self.lock.lock(); defer { self.lock.unlock() }; return ["profiles": self.profiles, "dictate": ["selected": self.selected["dictate"]!], "edit": ["selected": self.selected["edit"]!]] }
+    func save(id: String?, name: String, prompt: String, mode: String, includeContext: Bool) async throws -> [String: Any] {
+        let n = try PromptRules.cleanName(name), p = try PromptRules.cleanPrompt(prompt)
+        _ = try PromptRules.mode(mode)
+        self.lock.lock(); defer { self.lock.unlock() }
+        if let id {
+            guard let i = self.profiles.firstIndex(where: { $0["id"] as? String == id }) else { throw EnginePromptsError.notFound }
+            self.profiles[i] = ["id": id, "name": n, "prompt": p, "mode": mode, "include_context": includeContext]
+            return self.profiles[i]
+        }
+        let new: [String: Any] = ["id": "P\(self.profiles.count + 1)", "name": n, "prompt": p, "mode": mode, "include_context": includeContext]
+        self.profiles.append(new)
+        return new
+    }
+    func delete(id: String) async throws {
+        self.lock.lock(); defer { self.lock.unlock() }
+        guard let doomed = self.profiles.first(where: { $0["id"] as? String == id }) else { throw EnginePromptsError.notFound }
+        self.profiles.removeAll { $0["id"] as? String == id }
+        if let mode = doomed["mode"] as? String, self.selected[mode] == "profile:\(id)" { self.selected[mode] = "default" }
+    }
+    func select(mode: String, selection: String) async throws {
+        _ = try PromptRules.mode(mode)
+        let (kind, id) = try PromptRules.parse(selection: selection)
+        self.lock.lock(); defer { self.lock.unlock() }
+        if kind == "profile", !self.profiles.contains(where: { $0["id"] as? String == id && $0["mode"] as? String == mode }) { throw EnginePromptsError.badSelection }
+        self.selected[mode] = selection
+    }
+    func setDefault(mode: String, text: String) async throws { _ = try PromptRules.mode(mode); _ = try PromptRules.cleanPrompt(text) }
+}
+
 /// `LAVOIX_ENGINE_SOCKET_AUTOTEST=1` serves fakes on a temp socket and talks to it as a client.
 nonisolated enum EngineSocketAutotest {
     static func runIfRequested() {
@@ -514,7 +576,8 @@ nonisolated enum EngineSocketAutotest {
                 history: fakeHistory,
                 settings: FakeSettings(),
                 dictionary: FakeDictionary(),
-                stats: FakeStats()
+                stats: FakeStats(),
+                prompts: FakePrompts()
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -648,6 +711,23 @@ nonisolated enum EngineSocketAutotest {
             check("stats.get has 24 hours and 180 days of activity", (st?["hourly"] as? [Int])?.count == 24 && (st?["activity"] as? [[String: Any]])?.count == 180)
             check("stats.get's streak counts today but not the gap", st?["current_streak"] as? Int == 1 && st?["best_streak"] as? Int == 1)
             check("stats.get carries no dictation text", !(String(data: (try? JSONSerialization.data(withJSONObject: st ?? [:])) ?? Data(), encoding: .utf8) ?? "").contains("three"))
+
+            // cleanup styles
+            let pr = ask(#"{"op":"prompts.save","name":"  Formal  ","prompt":"Make it formal.","mode":"dictate","include_context":true}"#)?["profile"] as? [String: Any]
+            let prid = pr?["id"] as? String ?? ""
+            check("prompts.save adds a style with a trimmed name", pr?["name"] as? String == "Formal" && !prid.isEmpty)
+            check("prompts.save refuses an empty name", ask(#"{"op":"prompts.save","name":" ","prompt":"x","mode":"dictate"}"#)?["error"] as? String == EnginePromptsError.badName.errorDescription)
+            check("prompts.save refuses a mode that does not exist", ask(#"{"op":"prompts.save","name":"A","prompt":"x","mode":"rewrite"}"#)?["error"] as? String == EnginePromptsError.badMode.errorDescription)
+            check("prompts.save refuses a huge prompt", ask(#"{"op":"prompts.save","name":"A","prompt":"\#(String(repeating: "a", count: 8001))","mode":"edit"}"#)?["ok"] as? Bool == false)
+            check("prompts.save edits an existing style", (ask(#"{"op":"prompts.save","id":"\#(prid)","name":"Formal 2","prompt":"y","mode":"dictate"}"#)?["profile"] as? [String: Any])?["name"] as? String == "Formal 2")
+            check("prompts.save refuses an unknown id", ask(#"{"op":"prompts.save","id":"nope","name":"A","prompt":"x","mode":"dictate"}"#)?["ok"] as? Bool == false)
+            check("prompts.select picks a style", ask(#"{"op":"prompts.select","mode":"dictate","selection":"profile:\#(prid)"}"#)?["ok"] as? Bool == true && ((ask(#"{"op":"prompts.list"}"#)?["prompts"] as? [String: Any])?["dictate"] as? [String: Any])?["selected"] as? String == "profile:\(prid)")
+            check("prompts.select refuses a style from the other mode", ask(#"{"op":"prompts.select","mode":"edit","selection":"profile:\#(prid)"}"#)?["ok"] as? Bool == false)
+            check("prompts.select refuses nonsense", ask(#"{"op":"prompts.select","mode":"dictate","selection":"whatever"}"#)?["ok"] as? Bool == false)
+            check("prompts.select off is allowed", ask(#"{"op":"prompts.select","mode":"edit","selection":"off"}"#)?["ok"] as? Bool == true)
+            check("prompts.delete resets the selection to default", ask(#"{"op":"prompts.delete","id":"\#(prid)"}"#)?["ok"] as? Bool == true && ((ask(#"{"op":"prompts.list"}"#)?["prompts"] as? [String: Any])?["dictate"] as? [String: Any])?["selected"] as? String == "default")
+            check("prompts.delete of a missing style is refused", ask(#"{"op":"prompts.delete","id":"\#(prid)"}"#)?["ok"] as? Bool == false)
+            check("prompts.set_default works and refuses a bad mode", ask(#"{"op":"prompts.set_default","mode":"edit","text":"Be brief."}"#)?["ok"] as? Bool == true && ask(#"{"op":"prompts.set_default","mode":"x","text":"a"}"#)?["ok"] as? Bool == false)
 
             // robustness
             check("garbage is rejected", ask("not json")?["ok"] as? Bool == false)
