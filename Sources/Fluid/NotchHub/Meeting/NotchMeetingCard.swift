@@ -722,6 +722,25 @@ final class NotchMeetingCardController {
         self.dismiss()
     }
 
+    /// What myOS shows while a meeting is recording: the running time and the latest live captions. Read-only.
+    func engineLiveState() -> [String: Any] {
+        guard let coordinator, let session = coordinator.activeSession else { return ["active": false] }
+        let phase: String
+        switch coordinator.state {
+        case .recording, .recordingDegraded: phase = "recording"
+        case .stopping, .processing: phase = "processing"
+        default: return ["active": false]
+        }
+        let rows = MeetingLiveBubbleComposer.rows(for: coordinator.liveTranscript).suffix(40).map {
+            ["speaker": $0.speaker == .you ? "you" : "them", "text": $0.text, "partial": $0.isPartial] as [String: Any]
+        }
+        return [
+            "active": phase == "recording", "phase": phase, "id": session.id.uuidString, "title": session.title,
+            "started_at": ISO8601DateFormatter().string(from: session.startedAt),
+            "elapsed_seconds": Int(max(0, Date().timeIntervalSince(session.startedAt))), "rows": rows,
+        ]
+    }
+
     func showCaptions() {
         MeetingRecordingPillController.shared.expand()
     }

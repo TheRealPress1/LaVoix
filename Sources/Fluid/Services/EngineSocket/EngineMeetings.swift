@@ -7,6 +7,8 @@ nonisolated protocol EngineMeetingsProviding: Sendable {
     func list() async throws -> [[String: Any]]
     func get(id: UUID) async throws -> [String: Any]?
     func saveNotes(id: UUID, text: String) async throws
+    /// The recording in progress, if any: running time and the latest live captions.
+    func live() async -> [String: Any]
     /// Writes the notes for a meeting, reporting `progress`/`skipped`/`done`/`error` events as it goes. `emit` returns false
     /// when the listener has gone away, which stops the work. `auto` applies the same rules as opening a meeting in the
     /// app (recent, finished, no notes yet, tried once).
@@ -178,6 +180,10 @@ nonisolated struct LiveEngineMeetings: EngineMeetingsProviding {
             "kinds": MeetingSummaryKind.allCases.map { ["id": $0.rawValue, "title": $0.title] },
             "audio_saved": directory.map { FileManager.default.fileExists(atPath: $0.appendingPathComponent("tracks").path) } ?? false,
         ]
+    }
+
+    func live() async -> [String: Any] {
+        await MainActor.run { NotchMeetingCardController.shared.engineLiveState() }
     }
 
     func saveNotes(id: UUID, text: String) async throws {

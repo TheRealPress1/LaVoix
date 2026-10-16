@@ -12,6 +12,7 @@ import Foundation
 ///   {"op":"generate_stream","system","user","max_tokens"} -> {"event":"token","text":"..."} ... {"event":"done","ms":1234}
 ///   {"op":"meetings.list"}                                -> {"ok":true,"meetings":[...]}
 ///   {"op":"meetings.get","id"}                            -> {"ok":true,"meeting":{...}}
+///   {"op":"meetings.live"}                                -> {"ok":true,"live":{"active":true,"id","title","started_at","elapsed_seconds","rows":[{"speaker":"you|them","text","partial"}]}}
 ///   {"op":"meetings.notes_save","id","text"}              -> {"ok":true}
 ///   {"op":"meetings.notes_generate","id","kind","auto"}   -> {"event":"progress","message"} ... {"event":"done","text"}
 /// Failures come back as {"ok":false,"error":"..."} (streams: {"event":"error","error":"..."}).
@@ -188,10 +189,12 @@ nonisolated enum EngineSocket {
                 }
                 _ = emit(["event": "done", "ms": Int(Date().timeIntervalSince(start) * 1000)])
             } catch { _ = emit(["event": "error", "error": message(error)]) }
-        case "meetings.list", "meetings.get", "meetings.notes_save", "meetings.notes_generate":
+        case "meetings.list", "meetings.get", "meetings.notes_save", "meetings.notes_generate", "meetings.live":
             guard let meetings = services.meetings else { return fail("meetings are not available") }
             do {
                 switch op {
+                case "meetings.live":
+                    _ = emit(["ok": true, "live": await meetings.live()])
                 case "meetings.list":
                     _ = emit(["ok": true, "meetings": try await meetings.list()])
                 case "meetings.get":
@@ -256,6 +259,9 @@ private struct FakeMeetings: EngineMeetingsProviding {
     func list() async throws -> [[String: Any]] { [["id": self.knownID.uuidString, "title": "Design sync", "words": 120]] }
     func get(id: UUID) async throws -> [String: Any]? {
         id == self.knownID ? ["id": id.uuidString, "title": "Design sync", "segments": [["start": 0.0, "speaker": "Me", "text": "hello"]]] : nil
+    }
+    func live() async -> [String: Any] {
+        ["active": true, "id": self.knownID.uuidString, "title": "Design sync", "elapsed_seconds": 95, "rows": [["speaker": "you", "text": "hello", "partial": false], ["speaker": "them", "text": "hi the", "partial": true]]]
     }
     func saveNotes(id: UUID, text: String) async throws {
         guard id == self.knownID else { throw EngineMeetingsError.notFound }
@@ -333,6 +339,8 @@ nonisolated enum EngineSocketAutotest {
             let id = "11111111-2222-3333-4444-555555555555"
             let list = ask(#"{"op":"meetings.list"}"#)
             check("meetings.list returns the meetings", (list?["meetings"] as? [[String: Any]])?.first?["title"] as? String == "Design sync")
+            let live = (ask(#"{"op":"meetings.live"}"#)?["live"] as? [String: Any])
+            check("meetings.live reports the recording with its latest captions", live?["active"] as? Bool == true && (live?["rows"] as? [[String: Any]])?.count == 2 && (live?["rows"] as? [[String: Any]])?.last?["partial"] as? Bool == true)
             let got = ask(#"{"op":"meetings.get","id":"\#(id)"}"#)
             check("meetings.get returns one meeting with its segments", ((got?["meeting"] as? [String: Any])?["segments"] as? [Any])?.count == 1)
             check("meetings.get on an unknown id says so", ask(#"{"op":"meetings.get","id":"\#(UUID().uuidString)"}"#)?["ok"] as? Bool == false)
