@@ -108,8 +108,7 @@ final class MeetingAutoAnalysis: ObservableObject {
     /// Tells myOS who was in the meeting (opaque person ids only), when the recording came from a calendar event.
     func exportMeetingEvent(_ session: MeetingSession) {
         let settings = SettingsStore.shared
-        guard settings.meetingBrainExportEnabled,
-              let data = ContactsInboxExporter.dataDirectory(brainOverride: settings.meetingBrainFolderOverride) else { return }
+        guard let data = ContactsInboxExporter.dataDirectory(brainOverride: settings.meetingBrainFolderOverride) else { return }
         let remembered = MeetingAttendeeRegistry.shared.take(session.id)
         Task.detached(priority: .utility) {
             var ids = remembered?.personIDs ?? []

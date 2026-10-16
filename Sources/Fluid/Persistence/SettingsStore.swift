@@ -2109,13 +2109,10 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Copy each finished meeting into myOS's Brain as a Markdown note (default: ON; does nothing if myOS isn't set up).
+    /// Copy each finished meeting into myOS's Brain as a Markdown note (default: OFF; meetings and their summaries stay in
+    /// Meetings, and the Brain is for the user's own notes. A new key, so the old default-on value no longer applies).
     var meetingBrainExportEnabled: Bool {
-        get {
-            let value = self.defaults.object(forKey: Keys.meetingBrainExportEnabled)
-            if value == nil { return true }
-            return self.defaults.bool(forKey: Keys.meetingBrainExportEnabled)
-        }
+        get { self.defaults.bool(forKey: Keys.meetingBrainExportEnabled) }
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.meetingBrainExportEnabled)
@@ -5924,7 +5921,7 @@ private extension SettingsStore {
         static let meetingAudioRetentionPolicy = "MeetingAudioRetentionPolicy"
         static let meetingTranscriptionBackendID = "MeetingTranscriptionBackendID"
         static let meetingAutoDetectEnabled = "MeetingAutoDetectEnabled"
-        static let meetingBrainExportEnabled = "MeetingBrainExportEnabled"
+        static let meetingBrainExportEnabled = "MeetingBrainExportEnabledV2"
         static let shareContactsWithMyOSEnabled = "ShareContactsWithMyOSEnabled"
         static let shareCalendarWithMyOSEnabled = "ShareCalendarWithMyOSEnabled"
         static let keepMessageTextForMyOSEnabled = "KeepMessageTextForMyOSEnabled"

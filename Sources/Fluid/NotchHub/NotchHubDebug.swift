@@ -387,6 +387,7 @@ enum NotchHubDebug {
             SettingsStore.shared.meetingNotesCommand = ""
 
             SettingsStore.shared.meetingBrainFolderOverride = ""
+            SettingsStore.shared.meetingBrainExportEnabled = false
             try? FileManager.default.removeItem(at: root)
             print(failures == 0 ? "AUTONOTES AUTOTEST ALL PASSED" : "AUTONOTES AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)
