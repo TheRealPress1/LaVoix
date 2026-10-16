@@ -28,15 +28,33 @@ nonisolated struct LiveEngineSpeech: EngineSpeechProviding {
         VoiceEngineSettingsViewModel(settings: SettingsStore.shared, appServices: AppServices.shared)
     }
 
+    @MainActor private static var lastCheck = Date.distantPast
+
     @MainActor private static func find(_ id: String) throws -> SettingsStore.SpeechModel {
         guard let m = SettingsStore.SpeechModel.availableModels.first(where: { $0.id == id }) else { throw EngineSpeechError.unknownModel }
         return m
     }
 
+    /// Why model actions are refused, in words (and for finding out when it is not obvious).
+    @MainActor private static func reason(_ vm: VoiceEngineSettingsViewModel) -> String {
+        if !vm.installations.canUseModelActions { return "Checking which models are installed (state: \(vm.installations.state))." }
+        if vm.asr.isRunning { return "Dictation is recording." }
+        if vm.asr.deletingModelID != nil { return "A model is being deleted." }
+        if vm.asr.activeExclusiveActivity != nil { return "A meeting recording or another audio task is using the speech engine." }
+        if vm.downloadingModel != nil || vm.asr.hasActiveModelDownload { return "A model is downloading." }
+        if vm.asr.hasActiveModelPreparation || vm.asr.isCancellingModelPreparation { return "A model is loading." }
+        return "The speech engine is starting up."
+    }
+
     func list() async -> [String: Any] {
         await MainActor.run {
             let vm = Self.model
-            vm.installations.refresh()
+            // Looking again puts the installed-models check back into "checking", which blocks every action while it runs, so
+            // do it when it has never run, after a failure, and now and then, not on every request.
+            if vm.installations.state == .failed || Date().timeIntervalSince(Self.lastCheck) > 120 {
+                Self.lastCheck = Date()
+                vm.installations.refresh()
+            }
             let models: [[String: Any]] = SettingsStore.SpeechModel.availableModels.map { m in
                 [
                     "id": m.id, "name": m.humanReadableName, "brand": m.brandName, "language": m.languageSupport,
@@ -46,6 +64,7 @@ nonisolated struct LiveEngineSpeech: EngineSpeechProviding {
                 ]
             }
             var out: [String: Any] = ["models": models, "blocked": vm.areSpeechModelActionsBlocked]
+            if vm.areSpeechModelActionsBlocked { out["blocked_reason"] = Self.reason(vm) }
             if let downloading = vm.downloadingModel {
                 out["downloading"] = ["id": downloading.id, "progress": vm.downloadProgress, "cancelling": vm.isCancellingModelDownload] as [String: Any]
             }
