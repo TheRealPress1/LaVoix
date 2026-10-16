@@ -90,6 +90,27 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
         asr.showError = true
     }
 
+    /// `withSummary`, but if the meeting's own transcription still holds the model (notes start the moment a meeting is
+    /// marked complete) it waits its turn instead of failing: checks every 3 s, up to `maxWaitSeconds`.
+    func withSummaryWhenFree<T>(
+        activity: any ASRActivityLeasing,
+        maxWaitSeconds: Double = 180,
+        onWaiting: () -> Void = {},
+        work: () async throws -> T
+    ) async throws -> T {
+        var waited = 0.0
+        while true {
+            do {
+                return try await self.withSummary(activity: activity, work: work)
+            } catch MeetingModelResidencyError.busy {
+                guard waited < maxWaitSeconds else { throw MeetingModelResidencyError.busy }
+                onWaiting()
+                try await Task.sleep(nanoseconds: 3_000_000_000)
+                waited += 3
+            }
+        }
+    }
+
     func withSummary<T>(activity: any ASRActivityLeasing, work: () async throws -> T) async throws -> T {
         try Task.checkCancellation()
         guard self.summary == nil, self.processing.isEmpty else { throw MeetingModelResidencyError.busy }

@@ -49,7 +49,7 @@ enum NotchGeometry {
     /// Live-meeting card size; like the notification card, its top band sits behind the hardware notch.
     /// The "meeting starting soon" heads-up is a slim single strip.
     static func meetingCardSize(notchHeight: CGFloat, compact: Bool = false) -> CGSize {
-        CGSize(width: compact ? 360 : 400, height: notchHeight + (compact ? 44 : 66))
+        CGSize(width: compact ? 360 : 400, height: notchHeight + (compact ? 54 : 66))
     }
 
     /// While recording the card sits closed: a strip at the notch's own height that reaches out to either side of it

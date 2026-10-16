@@ -75,7 +75,11 @@ final class MeetingAutoAnalysis: ObservableObject {
             if override != nil {
                 text = try await run()
             } else {
-                text = try await MeetingSummaryActivityCoordinator.shared.withSummary(activity: AppServices.shared.asr, work: run)
+                text = try await MeetingSummaryActivityCoordinator.shared.withSummaryWhenFree(
+                    activity: AppServices.shared.asr,
+                    onWaiting: { MeetingAutoAnalysis.shared.setProgress("Waiting for the transcription to finish…") },
+                    work: run
+                )
             }
             try Task.checkCancellation()
             let saved = MeetingNotesViewModel.Saved(

@@ -118,7 +118,11 @@ final class MeetingNotesViewModel: ObservableObject {
                 }
                 let text: String
                 if let asr {
-                    text = try await MeetingSummaryActivityCoordinator.shared.withSummary(activity: asr, work: run)
+                    text = try await MeetingSummaryActivityCoordinator.shared.withSummaryWhenFree(
+                        activity: asr,
+                        onWaiting: { Task { @MainActor [weak self] in self?.setProgress("Waiting for the transcription to finish…") } },
+                        work: run
+                    )
                 } else {
                     text = try await run()
                 }
