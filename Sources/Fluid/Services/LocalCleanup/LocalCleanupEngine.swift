@@ -161,6 +161,23 @@ actor LocalCleanupEngine {
         return cleaned
     }
 
+    /// Same model, same settings as `generate`, but hands back the words as they are written, so a caller can show them
+    /// live. No prefix cache and no reasoning-tag stripping: this is for open questions and chat, not dictation cleanup.
+    func generateStream(
+        system: String,
+        user: String,
+        modelID: String,
+        maxTokens: Int = 700,
+        temperature: Float = 0.2
+    ) async throws -> AsyncThrowingStream<String, Error> {
+        let container = try await self.container(for: modelID, progress: nil)
+        self.lastUsed = Date()
+        self.scheduleIdleUnload()
+        let parameters = GenerateParameters(maxTokens: maxTokens, temperature: temperature)
+        let session = MLXLMCommon.ChatSession(container, instructions: system, generateParameters: parameters)
+        return session.streamResponse(to: user)
+    }
+
     func unload() {
         self.idleTask?.cancel()
         self.idleTask = nil
