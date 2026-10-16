@@ -105,7 +105,13 @@ nonisolated enum MeetingAttendees {
             var changed = false
             if remote.count == 1, remote[0].displayName.hasPrefix("Speaker"), (try? current.renameSpeaker(id: remote[0].id, to: attendees[0].name)) != nil { changed = true }
             if mine.count == 1, mine[0].displayName.hasPrefix("Speaker"), (try? current.renameSpeaker(id: mine[0].id, to: "Me")) != nil { changed = true }
-            if changed { try? await store.save(current) }
+            if changed {
+                try? await store.save(current)
+                // Notes written before the speakers had names say "Speaker 1"; write them again with the real names.
+                if FileManager.default.fileExists(atPath: directory.appendingPathComponent("manual-summary-executive.json").path) {
+                    try? await LiveEngineMeetings(store: store).generateNotes(id: session.id, kind: "executive", auto: false, emit: { _ in true })
+                }
+            }
         }
     }
 }
