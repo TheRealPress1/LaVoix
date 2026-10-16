@@ -30,6 +30,7 @@ import Foundation
 ///   {"op":"dictionary.list"}                              -> {"ok":true,"entries":[{id,triggers:[...],replacement}]}
 ///   {"op":"dictionary.save","id"?,"triggers":[...],"replacement"} -> {"ok":true,"entry":{...}}   (no id adds; a clash or empty field is refused)
 ///   {"op":"dictionary.delete","id"}                       -> {"ok":true}
+///   {"op":"stats.get"}                                    -> {"ok":true,"stats":{total_words,total_transcriptions,current_streak,best_streak,time_saved,top_apps,hourly,activity,milestones,...}}   (numbers only)
 /// Failures come back as {"ok":false,"error":"..."} (streams: {"event":"error","error":"..."}).
 nonisolated enum EngineSocket {
     static let maxRequestBytes = 1_000_000
@@ -61,6 +62,7 @@ nonisolated enum EngineSocket {
         var history: (any EngineHistoryProviding)?
         var settings: (any EngineSettingsProviding)?
         var dictionary: (any EngineDictionaryProviding)?
+        var stats: (any EngineStatsProviding)?
     }
 
     private static let lock = NSLock()
@@ -98,7 +100,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats())
     }
 
     enum EngineError: LocalizedError {
@@ -304,6 +306,9 @@ nonisolated enum EngineSocket {
                 guard let id = uuid() else { return fail("missing or bad id") }
                 do { try await dictionary.delete(id: id); _ = emit(["ok": true]) } catch { fail(message(error)) }
             }
+        case "stats.get":
+            guard let stats = services.stats else { return fail("stats are not available") }
+            do { _ = emit(["ok": true, "stats": try await stats.snapshot()]) } catch { fail("could not work out the stats") }
         default:
             fail("unknown op")
         }
@@ -460,6 +465,19 @@ private final class FakeDictionary: EngineDictionaryProviding, @unchecked Sendab
     }
 }
 
+private struct FakeStats: EngineStatsProviding {
+    func snapshot() async throws -> [String: Any] {
+        // Real code on made-up history: two dictations today, one two days ago.
+        let calendar = Calendar(identifier: .gregorian)
+        let now = Date()
+        func entry(_ text: String, daysAgo: Int, app: String) -> TranscriptionHistoryEntry {
+            TranscriptionHistoryEntry(timestamp: calendar.date(byAdding: .day, value: -daysAgo, to: now) ?? now, rawText: text, processedText: text, appName: app, windowTitle: "", wasAIProcessed: false)
+        }
+        let built = try StatsSnapshot.build(entries: [entry("one two three", daysAgo: 0, app: "Notes"), entry("four five", daysAgo: 0, app: "Notes"), entry("six", daysAgo: 2, app: "Mail")], now: now, calendar: calendar)
+        return LiveEngineStats.describe(built, typingWPM: 40, weekdays: false, calendar: calendar)
+    }
+}
+
 /// `LAVOIX_ENGINE_SOCKET_AUTOTEST=1` serves fakes on a temp socket and talks to it as a client.
 nonisolated enum EngineSocketAutotest {
     static func runIfRequested() {
@@ -495,7 +513,8 @@ nonisolated enum EngineSocketAutotest {
                 writing: fakeWriting,
                 history: fakeHistory,
                 settings: FakeSettings(),
-                dictionary: FakeDictionary()
+                dictionary: FakeDictionary(),
+                stats: FakeStats()
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -621,6 +640,14 @@ nonisolated enum EngineSocketAutotest {
             check("dictionary.save refuses a bad id", ask(#"{"op":"dictionary.save","id":"nope","triggers":["zzz"],"replacement":"X"}"#)?["ok"] as? Bool == false)
             check("dictionary.delete removes it", ask(#"{"op":"dictionary.delete","id":"\#(d1id)"}"#)?["ok"] as? Bool == true && (ask(#"{"op":"dictionary.list"}"#)?["entries"] as? [Any])?.isEmpty == true)
             check("dictionary.delete of a missing entry is refused", ask(#"{"op":"dictionary.delete","id":"\#(d1id)"}"#)?["ok"] as? Bool == false)
+
+            // stats
+            let st = ask(#"{"op":"stats.get"}"#)?["stats"] as? [String: Any]
+            check("stats.get adds up words and dictations", st?["total_words"] as? Int == 6 && st?["total_transcriptions"] as? Int == 3)
+            check("stats.get ranks the apps", (st?["top_apps"] as? [[String: Any]])?.first?["name"] as? String == "Notes" && (st?["top_apps"] as? [[String: Any]])?.first?["sessions"] as? Int == 2)
+            check("stats.get has 24 hours and 180 days of activity", (st?["hourly"] as? [Int])?.count == 24 && (st?["activity"] as? [[String: Any]])?.count == 180)
+            check("stats.get's streak counts today but not the gap", st?["current_streak"] as? Int == 1 && st?["best_streak"] as? Int == 1)
+            check("stats.get carries no dictation text", !(String(data: (try? JSONSerialization.data(withJSONObject: st ?? [:])) ?? Data(), encoding: .utf8) ?? "").contains("three"))
 
             // robustness
             check("garbage is rejected", ask("not json")?["ok"] as? Bool == false)
