@@ -12,6 +12,8 @@ nonisolated enum CalendarLinks {
         let end: Date
         let emails: [String]      // invitees other than you; in memory only
         let attendeeCount: Int
+        /// email -> the name the calendar shows for that invitee (in memory; may be the email itself)
+        var names: [String: String] = [:]
     }
 
     struct Item: Codable, Equatable {
@@ -38,10 +40,15 @@ nonisolated enum CalendarLinks {
             return raw.lowercased().hasPrefix("mailto:") ? String(raw.dropFirst(7)).lowercased() : nil
         }
         guard !emails.isEmpty else { return nil }
+        var names: [String: String] = [:]
+        for participant in attendees where !participant.isCurrentUser {
+            let raw = participant.url.absoluteString
+            if raw.lowercased().hasPrefix("mailto:"), let name = participant.name, !name.isEmpty { names[String(raw.dropFirst(7)).lowercased()] = name }
+        }
         return Candidate(
             id: "\(event.eventIdentifier ?? event.title ?? "event")|\(event.startDate.timeIntervalSince1970)",
             title: (event.title?.isEmpty == false ? event.title : nil) ?? "Untitled",
-            start: event.startDate, end: event.endDate, emails: emails, attendeeCount: attendees.count
+            start: event.startDate, end: event.endDate, emails: emails, attendeeCount: attendees.count, names: names
         )
     }
 

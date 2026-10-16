@@ -1,3 +1,4 @@
+import Contacts
 import Foundation
 
 /// What myOS can ask the engine about meetings. Plain dictionaries so the socket can send them as JSON as they are; the
@@ -20,6 +21,67 @@ nonisolated enum EngineMeetingsError: LocalizedError {
         case .noTranscript: "This meeting has no transcript text to write notes from."
         case .modelMissing: "Download the on-device model (or set a notes command) to get notes."
         case .busy: "Notes are already being written."
+        }
+    }
+}
+
+/// Someone who was invited to a meeting, from the calendar. Kept in the meeting's own folder (`attendees.json`), never in
+/// the iCloud-synced data folder, because it holds an email address.
+nonisolated struct MeetingAttendee: Codable, Equatable {
+    var name: String
+    var email: String
+    /// Small contact photo (base64), when the address book has one for this email.
+    var photo: String?
+}
+
+nonisolated enum MeetingAttendees {
+    static func file(in directory: URL) -> URL { directory.appendingPathComponent("attendees.json") }
+
+    static func load(from directory: URL) -> [MeetingAttendee]? {
+        (try? Data(contentsOf: self.file(in: directory))).flatMap { try? JSONDecoder().decode([MeetingAttendee].self, from: $0) }
+    }
+
+    /// "jane.doe@x.com" -> "Jane Doe", for invitees whose calendar entry carries no name.
+    static func nameFromEmail(_ email: String) -> String {
+        let local = email.split(separator: "@").first.map(String.init) ?? email
+        return local.split(whereSeparator: { ".-_".contains($0) }).map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+    }
+
+    static func photo(forEmail email: String) -> String? {
+        guard CNContactStore.authorizationStatus(for: .contacts) == .authorized else { return nil }
+        let keys = [CNContactThumbnailImageDataKey as CNKeyDescriptor, CNContactImageDataAvailableKey as CNKeyDescriptor]
+        let contact = try? CNContactStore().unifiedContacts(matching: CNContact.predicateForContacts(matchingEmailAddress: email), keysToFetch: keys).first
+        return contact?.thumbnailImageData?.base64EncodedString()
+    }
+
+    private static let lock = NSLock()
+    private nonisolated(unsafe) static var inFlight = Set<UUID>()
+
+    /// Looks the meeting up in the calendar once, in the background, and saves who was invited. For a one-on-one it also
+    /// names the call's speaker after that person (and yours "Me"), which sticks in the session itself.
+    static func resolveInBackground(session: MeetingSession, directory: URL, store: any MeetingSessionStoring) {
+        self.lock.lock()
+        let fresh = self.inFlight.insert(session.id).inserted
+        self.lock.unlock()
+        guard fresh, let end = session.endedAt else { return }
+        Task.detached(priority: .utility) {
+            defer { self.lock.lock(); self.inFlight.remove(session.id); self.lock.unlock() }
+            guard let candidates = CalendarLinks.fetch(start: session.startedAt - 3600, end: end + 3600),
+                  let match = CalendarLinks.bestOverlap(candidates, start: session.startedAt, end: end) else {
+                try? JSONEncoder().encode([MeetingAttendee]()).write(to: self.file(in: directory)) // looked, found nothing
+                return
+            }
+            let attendees = match.emails.map {
+                MeetingAttendee(name: match.names[$0].flatMap { $0.contains("@") ? nil : $0 } ?? self.nameFromEmail($0), email: $0, photo: self.photo(forEmail: $0))
+            }
+            try? JSONEncoder().encode(attendees).write(to: self.file(in: directory), options: .atomic)
+            guard attendees.count == 1, var current = try? await store.load(id: session.id) else { return }
+            let remote = current.speakers.filter { $0.mergedIntoSpeakerID == nil && $0.trackKind == .applicationAudio }
+            let mine = current.speakers.filter { $0.mergedIntoSpeakerID == nil && $0.trackKind == .microphone }
+            var changed = false
+            if remote.count == 1, remote[0].displayName.hasPrefix("Speaker"), (try? current.renameSpeaker(id: remote[0].id, to: attendees[0].name)) != nil { changed = true }
+            if mine.count == 1, mine[0].displayName.hasPrefix("Speaker"), (try? current.renameSpeaker(id: mine[0].id, to: "Me")) != nil { changed = true }
+            if changed { try? await store.save(current) }
         }
     }
 }
@@ -59,6 +121,14 @@ nonisolated struct LiveEngineMeetings: EngineMeetingsProviding {
         }
         var summaries: [String: Any] = [:]
         var notes = ""
+        var attendees: [[String: Any]] = []
+        if let directory, s.state == .completed {
+            if let known = MeetingAttendees.load(from: directory) {
+                attendees = known.map { ["name": $0.name, "email": $0.email, "photo": $0.photo ?? NSNull()] as [String: Any] }
+            } else {
+                MeetingAttendees.resolveInBackground(session: s, directory: directory, store: self.store)
+            }
+        }
         if let directory {
             notes = (try? String(contentsOf: directory.appendingPathComponent("notes.md"), encoding: .utf8)) ?? ""
             let transcript = MeetingSummaryInput.transcript(for: s)
@@ -74,7 +144,7 @@ nonisolated struct LiveEngineMeetings: EngineMeetingsProviding {
             "duration_seconds": Int(max(0, s.duration)), "state": s.state.rawValue, "source": s.capturedApplication?.displayName ?? "",
             "mode": s.mode.rawValue, "words": Self.words(s),
             "speakers": s.activeSpeakers.map { ["name": $0.displayName, "is_me": $0.isLocalUser] as [String: Any] },
-            "segments": segments, "summaries": summaries, "notes": notes,
+            "segments": segments, "summaries": summaries, "notes": notes, "attendees": attendees,
             "kinds": MeetingSummaryKind.allCases.map { ["id": $0.rawValue, "title": $0.title] },
             "audio_saved": directory.map { FileManager.default.fileExists(atPath: $0.appendingPathComponent("tracks").path) } ?? false,
         ]
