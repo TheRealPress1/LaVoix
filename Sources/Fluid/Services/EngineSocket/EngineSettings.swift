@@ -146,10 +146,7 @@ enum SettingsRegistry {
             choice("meetings.audio_retention", "Meetings", "Keep meeting audio", "How long recordings are kept after the transcript is made.", [
                 (MeetingAudioRetentionPolicy.afterTranscription, "Delete after transcription"), (.days7, "7 days"), (.days30, "30 days"), (.never, "Forever"),
             ], \.meetingAudioRetentionPolicy),
-            // Look
-            choice("appearance.theme", "Look", "Theme", "Light, dark or follow the system.", [
-                (SettingsStore.ThemePreference.system, "System"), (.light, "Light"), (.dark, "Dark"),
-            ], \.themePreference),
+            // Notch & overlay
             choice("notch.presentation", "Notch & overlay", "Notch style", "How the notch shows dictation.", [
                 (SettingsStore.NotchPresentationMode.standard, "Standard"), (.minimal, "Minimal"),
             ], \.notchPresentationMode),
