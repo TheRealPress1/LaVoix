@@ -38,6 +38,7 @@ import Foundation
 ///   {"op":"prompts.delete","id"} / {"op":"prompts.select","mode","selection":"default|off|profile:<id>"} / {"op":"prompts.set_default","mode","text"}  -> {"ok":true}
 ///   {"op":"speech.list"}                                  -> {"ok":true,"speech":{models:[{id,name,brand,language,size,installed,active,update_available,accuracy,speed,description}],blocked,downloading?:{id,progress,cancelling},error?}}
 ///   {"op":"speech.activate","id"} / speech.download / speech.delete / {"op":"speech.cancel"}  -> {"ok":true}   (start the work and return; ask speech.list for progress)
+///   {"op":"activity"}                                     -> {"ok":true,"activity":{recording,meeting_processing,dictating,busy}}   (so background work can wait its turn)
 /// Failures come back as {"ok":false,"error":"..."} (streams: {"event":"error","error":"..."}).
 nonisolated enum EngineSocket {
     static let maxRequestBytes = 1_000_000
@@ -72,6 +73,7 @@ nonisolated enum EngineSocket {
         var stats: (any EngineStatsProviding)?
         var prompts: (any EnginePromptsProviding)?
         var speech: (any EngineSpeechProviding)?
+        var activity: (any EngineActivityProviding)?
     }
 
     private static let lock = NSLock()
@@ -109,7 +111,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity())
     }
 
     enum EngineError: LocalizedError {
@@ -298,6 +300,9 @@ nonisolated enum EngineSocket {
                 if op == "history.star" { await history.toggleStar(id: id) } else { await history.delete(id: id) }
                 _ = emit(["ok": true])
             }
+        case "activity":
+            guard let activity = services.activity else { return fail("activity is not available") }
+            _ = emit(["ok": true, "activity": await activity.snapshot()])
         case "training.status":
             _ = emit(["ok": true, "training": TrainingData.status()])
         case "training.export":
@@ -576,6 +581,10 @@ private final class FakePrompts: EnginePromptsProviding, @unchecked Sendable {
     func setDefault(mode: String, text: String) async throws { _ = try PromptRules.mode(mode); _ = try PromptRules.cleanPrompt(text) }
 }
 
+private struct FakeActivity: EngineActivityProviding {
+    func snapshot() async -> [String: Any] { ["recording": false, "meeting_processing": false, "dictating": true, "busy": true] }
+}
+
 private final class FakeSpeech: EngineSpeechProviding, @unchecked Sendable {
     private let lock = NSLock()
     var calls: [String] = []
@@ -626,7 +635,8 @@ nonisolated enum EngineSocketAutotest {
                 dictionary: FakeDictionary(),
                 stats: FakeStats(),
                 prompts: FakePrompts(),
-                speech: fakeSpeech
+                speech: fakeSpeech,
+                activity: FakeActivity()
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -822,6 +832,10 @@ nonisolated enum EngineSocketAutotest {
             check("speech.delete deletes another model", ask(#"{"op":"speech.delete","id":"m3"}"#)?["ok"] as? Bool == true && fakeSpeech.calls.contains("delete:m3"))
             check("speech.cancel with nothing running says so", ask(#"{"op":"speech.cancel"}"#)?["error"] as? String == EngineSpeechError.nothingToCancel.errorDescription)
             check("speech actions need a model id", ask(#"{"op":"speech.download"}"#)?["ok"] as? Bool == false)
+
+            // activity
+            let act = ask(#"{"op":"activity"}"#)?["activity"] as? [String: Any]
+            check("activity reports what the engine is busy with", act?["dictating"] as? Bool == true && act?["busy"] as? Bool == true && act?["recording"] as? Bool == false)
 
             // robustness
             check("garbage is rejected", ask("not json")?["ok"] as? Bool == false)
