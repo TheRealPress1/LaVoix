@@ -34,6 +34,8 @@ import Foundation
 ///   {"op":"prompts.list"}                                 -> {"ok":true,"prompts":{profiles:[{id,name,mode,prompt,include_context}],dictate:{selected,default_prompt,default_is_custom},edit:{...}}}
 ///   {"op":"prompts.save","id"?,"name","prompt","mode":"dictate|edit","include_context"} -> {"ok":true,"profile":{...}}
 ///   {"op":"prompts.delete","id"} / {"op":"prompts.select","mode","selection":"default|off|profile:<id>"} / {"op":"prompts.set_default","mode","text"}  -> {"ok":true}
+///   {"op":"speech.list"}                                  -> {"ok":true,"speech":{models:[{id,name,brand,language,size,installed,active,update_available,accuracy,speed,description}],blocked,downloading?:{id,progress,cancelling},error?}}
+///   {"op":"speech.activate","id"} / speech.download / speech.delete / {"op":"speech.cancel"}  -> {"ok":true}   (start the work and return; ask speech.list for progress)
 /// Failures come back as {"ok":false,"error":"..."} (streams: {"event":"error","error":"..."}).
 nonisolated enum EngineSocket {
     static let maxRequestBytes = 1_000_000
@@ -67,6 +69,7 @@ nonisolated enum EngineSocket {
         var dictionary: (any EngineDictionaryProviding)?
         var stats: (any EngineStatsProviding)?
         var prompts: (any EnginePromptsProviding)?
+        var speech: (any EngineSpeechProviding)?
     }
 
     private static let lock = NSLock()
@@ -104,7 +107,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech())
     }
 
     enum EngineError: LocalizedError {
@@ -336,6 +339,22 @@ nonisolated enum EngineSocket {
                     _ = emit(["ok": true])
                 }
             } catch { fail(message(error)) }
+        case "speech.list", "speech.activate", "speech.download", "speech.delete", "speech.cancel":
+            guard let speech = services.speech else { return fail("speech models are not available") }
+            do {
+                switch op {
+                case "speech.list": _ = emit(["ok": true, "speech": await speech.list()])
+                case "speech.cancel": try await speech.cancelDownload(); _ = emit(["ok": true])
+                default:
+                    guard let id = object["id"] as? String, !id.isEmpty, id.count <= 80 else { return fail("missing model id") }
+                    switch op {
+                    case "speech.activate": try await speech.activate(id: id)
+                    case "speech.download": try await speech.download(id: id)
+                    default: try await speech.delete(id: id)
+                    }
+                    _ = emit(["ok": true])
+                }
+            } catch { fail(message(error)) }
         default:
             fail("unknown op")
         }
@@ -540,6 +559,17 @@ private final class FakePrompts: EnginePromptsProviding, @unchecked Sendable {
     func setDefault(mode: String, text: String) async throws { _ = try PromptRules.mode(mode); _ = try PromptRules.cleanPrompt(text) }
 }
 
+private final class FakeSpeech: EngineSpeechProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    var calls: [String] = []
+    func list() async -> [String: Any] { ["models": [["id": "m1", "name": "Model One", "installed": true, "active": true]], "blocked": false] }
+    private func note(_ s: String) { self.lock.lock(); self.calls.append(s); self.lock.unlock() }
+    func activate(id: String) async throws { if id == "missing" { throw EngineSpeechError.unknownModel }; if id == "notyet" { throw EngineSpeechError.notInstalled }; self.note("activate:\(id)") }
+    func download(id: String) async throws { if id == "busy" { throw EngineSpeechError.busy }; self.note("download:\(id)") }
+    func cancelDownload() async throws { throw EngineSpeechError.nothingToCancel }
+    func delete(id: String) async throws { if id == "m1" { throw EngineSpeechError.activeModel }; self.note("delete:\(id)") }
+}
+
 /// `LAVOIX_ENGINE_SOCKET_AUTOTEST=1` serves fakes on a temp socket and talks to it as a client.
 nonisolated enum EngineSocketAutotest {
     static func runIfRequested() {
@@ -555,6 +585,7 @@ nonisolated enum EngineSocketAutotest {
             let notesSaved = AutotestFlag()
             let fakeWriting = FakeWriting()
             let fakeHistory = FakeHistory()
+            let fakeSpeech = FakeSpeech()
             let services = EngineSocket.Services(
                 generator: { system, user, maxTokens in
                     if user.contains("explode") { throw NSError(domain: "t", code: 1) }
@@ -577,7 +608,8 @@ nonisolated enum EngineSocketAutotest {
                 settings: FakeSettings(),
                 dictionary: FakeDictionary(),
                 stats: FakeStats(),
-                prompts: FakePrompts()
+                prompts: FakePrompts(),
+                speech: fakeSpeech
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -728,6 +760,18 @@ nonisolated enum EngineSocketAutotest {
             check("prompts.delete resets the selection to default", ask(#"{"op":"prompts.delete","id":"\#(prid)"}"#)?["ok"] as? Bool == true && ((ask(#"{"op":"prompts.list"}"#)?["prompts"] as? [String: Any])?["dictate"] as? [String: Any])?["selected"] as? String == "default")
             check("prompts.delete of a missing style is refused", ask(#"{"op":"prompts.delete","id":"\#(prid)"}"#)?["ok"] as? Bool == false)
             check("prompts.set_default works and refuses a bad mode", ask(#"{"op":"prompts.set_default","mode":"edit","text":"Be brief."}"#)?["ok"] as? Bool == true && ask(#"{"op":"prompts.set_default","mode":"x","text":"a"}"#)?["ok"] as? Bool == false)
+
+            // speech models
+            check("speech.list lists the models", ((ask(#"{"op":"speech.list"}"#)?["speech"] as? [String: Any])?["models"] as? [[String: Any]])?.first?["name"] as? String == "Model One")
+            check("speech.download starts a download", ask(#"{"op":"speech.download","id":"m2"}"#)?["ok"] as? Bool == true && fakeSpeech.calls.contains("download:m2"))
+            check("speech.download while busy says why", ask(#"{"op":"speech.download","id":"busy"}"#)?["error"] as? String == EngineSpeechError.busy.errorDescription)
+            check("speech.activate switches", ask(#"{"op":"speech.activate","id":"m2"}"#)?["ok"] as? Bool == true && fakeSpeech.calls.contains("activate:m2"))
+            check("speech.activate refuses one that is not installed", ask(#"{"op":"speech.activate","id":"notyet"}"#)?["error"] as? String == EngineSpeechError.notInstalled.errorDescription)
+            check("speech.activate refuses an unknown model", ask(#"{"op":"speech.activate","id":"missing"}"#)?["ok"] as? Bool == false)
+            check("speech.delete refuses the model in use", ask(#"{"op":"speech.delete","id":"m1"}"#)?["error"] as? String == EngineSpeechError.activeModel.errorDescription)
+            check("speech.delete deletes another model", ask(#"{"op":"speech.delete","id":"m3"}"#)?["ok"] as? Bool == true && fakeSpeech.calls.contains("delete:m3"))
+            check("speech.cancel with nothing running says so", ask(#"{"op":"speech.cancel"}"#)?["error"] as? String == EngineSpeechError.nothingToCancel.errorDescription)
+            check("speech actions need a model id", ask(#"{"op":"speech.download"}"#)?["ok"] as? Bool == false)
 
             // robustness
             check("garbage is rejected", ask("not json")?["ok"] as? Bool == false)
