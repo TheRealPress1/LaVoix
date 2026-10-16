@@ -498,6 +498,9 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .openCustomDictionaryFromVoiceEngine)) { _ in
                 self.navigateToApp(.customDictionary)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .lavoixDebugNavigate)) { note in
+                if let name = note.object as? String, let item = SidebarItem.debug(name) { self.navigateToApp(item) }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .appNavigationRequested)) { _ in
                 self.handlePendingAppNavigation()
             }

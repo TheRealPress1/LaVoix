@@ -332,22 +332,23 @@ struct AppTheme {
         )
     }
 
-    /// Default dark-forward theme tuned for macOS Sonoma / Sequoia aesthetics.
+    /// myOS's dark theme: near-black surfaces in neutral greys, hairline white borders, light text. The values are myOS's
+    /// own design tokens (`app/src/styles/app.css`, `.dark`) converted from oklch to sRGB.
     static func dark(accent: Color) -> AppTheme {
         AppTheme(
             palette: Palette(
-                windowBackground: Color(red: 0.07, green: 0.07, blue: 0.07),
-                contentBackground: Color(red: 0.09, green: 0.09, blue: 0.09),
-                sidebarBackground: Color(red: 0.06, green: 0.06, blue: 0.06),
-                cardBackground: Color(red: 0.08, green: 0.08, blue: 0.08),
-                elevatedCardBackground: Color(red: 0.11, green: 0.11, blue: 0.11),
-                toolbarBackground: Color(red: 0.06, green: 0.06, blue: 0.06),
+                windowBackground: Color(red: 0.020, green: 0.020, blue: 0.020), // --background  #050505
+                contentBackground: Color(red: 0.020, green: 0.020, blue: 0.020),
+                sidebarBackground: Color(red: 0.039, green: 0.039, blue: 0.039), // --sidebar     #0a0a0a
+                cardBackground: Color(red: 0.071, green: 0.071, blue: 0.071), // --card        #121212
+                elevatedCardBackground: Color(red: 0.118, green: 0.118, blue: 0.118), // --secondary   #1e1e1e
+                toolbarBackground: Color(red: 0.039, green: 0.039, blue: 0.039),
 
-                cardBorder: Color.white.opacity(0.10),
-                separator: Color.white.opacity(0.16),
-                primaryText: Color(nsColor: .labelColor),
-                secondaryText: Color(nsColor: .secondaryLabelColor),
-                tertiaryText: Color(nsColor: .tertiaryLabelColor),
+                cardBorder: Color.white.opacity(0.08), // --border
+                separator: Color.white.opacity(0.08),
+                primaryText: Color(red: 0.980, green: 0.980, blue: 0.980), // --foreground  #fafafa
+                secondaryText: Color(red: 0.549, green: 0.549, blue: 0.549), // --muted-foreground #8c8c8c
+                tertiaryText: Color(red: 0.400, green: 0.400, blue: 0.400),
                 accent: accent,
                 warning: Color(nsColor: .systemOrange),
                 success: Color(nsColor: .systemGreen)

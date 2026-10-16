@@ -12,10 +12,11 @@ enum FluidTypography {
         case named(String)
     }
 
-    static let standard: Family = .system
-    static let serif: Family = .system
-    static let rounded: Family = .system
-    static let monospace: Family = .system
+    // myOS's typefaces: Inter for everything (titles that used to be serif included), JetBrains Mono for labels and code.
+    static let standard: Family = .named("Inter-Regular")
+    static let serif: Family = .named("Inter-Regular")
+    static let rounded: Family = .named("Inter-Regular")
+    static let monospace: Family = .named("JetBrainsMono-Regular")
 
     // Resolve each choice once, rather than looking up installed fonts during rendering.
     private static let standardName = resolvedName(for: standard)
@@ -24,6 +25,7 @@ enum FluidTypography {
     private static let monospaceName = resolvedName(for: monospace)
 
     static func resolvedName(for family: Family) -> String? {
+        LaVoixFonts.registerAll() // bundled fonts must be registered before they can be found by name
         guard case let .named(name) = family, NSFont(name: name, size: 12) != nil else { return nil }
         return name
     }

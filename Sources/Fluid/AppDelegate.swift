@@ -113,6 +113,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         OnboardingAISetupController.live.resumePendingDownload()
         LocalAPIServer.shared.start()
         EngineSocket.startIfEnabled()
+        DebugWindowSnapshot.startIfRequested()
         WritingRecoveryMonitor.shared.apply()
 
         // Record first-open synchronously before async analytics bootstrap so

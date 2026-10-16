@@ -39,6 +39,31 @@ enum SidebarItem: Hashable {
     }
 }
 
+extension Notification.Name {
+    /// Debug only: `object` is a sidebar page name (see `SidebarItem.debug`). Used by the window snapshot tool.
+    static let lavoixDebugNavigate = Notification.Name("lavoix.debug.navigate")
+}
+
+extension SidebarItem {
+    static func debug(_ name: String) -> SidebarItem? {
+        switch name {
+        case "dashboard": .welcome
+        case "voice": .voiceEngine
+        case "ai": .aiEnhancements
+        case "cleanup": .cleanupStyles
+        case "files": .fileTranscription
+        case "meetings": .meetingTranscription
+        case "dictionary": .customDictionary
+        case "stats": .stats
+        case "history": .history
+        case "writing": .writing
+        case "command": .commandMode
+        case "edit": .rewriteMode
+        default: nil
+        }
+    }
+}
+
 /// Read-only projection; changing chrome cannot navigate or alter a page's state.
 struct AppPagePresentation: Equatable {
     let title: String
