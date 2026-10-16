@@ -34,7 +34,7 @@ nonisolated struct LiveEngineMeetings: EngineMeetingsProviding {
     }
 
     func list() async throws -> [[String: Any]] {
-        let sessions = try await self.store.loadAll().filter { $0.state != .preparing }.sorted { $0.startedAt > $1.startedAt }
+        let sessions = try await self.store.loadAllForDisplay().filter { $0.state != .preparing }.sorted { $0.startedAt > $1.startedAt }
         var rows: [[String: Any]] = []
         for s in sessions {
             let directory = try? await self.store.existingSessionDirectory(for: s.id)
@@ -50,7 +50,7 @@ nonisolated struct LiveEngineMeetings: EngineMeetingsProviding {
     }
 
     func get(id: UUID) async throws -> [String: Any]? {
-        guard let s = try await self.store.load(id: id) else { return nil }
+        guard let s = try await self.store.loadForDisplay(id: id) else { return nil }
         let directory = try await self.store.existingSessionDirectory(for: id)
         let names = Dictionary(uniqueKeysWithValues: s.speakers.map { ($0.id, ($0.displayName, $0.isLocalUser)) })
         let segments: [[String: Any]] = s.transcriptSegments.filter { !$0.isEcho }.sorted { $0.start.seconds < $1.start.seconds }.map { seg in

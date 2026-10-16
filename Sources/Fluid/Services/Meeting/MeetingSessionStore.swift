@@ -7,6 +7,10 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     func save(_ session: MeetingSession) async throws
     func load(id: MeetingSessionID) async throws -> MeetingSession?
     func loadAll() async throws -> [MeetingSession]
+    /// Read-only reads for screens that only show meetings: the saved file as it is, without `load`'s reconciliation with
+    /// the audio chunks on disk (which touches every chunk and takes seconds for a long meeting).
+    func loadForDisplay(id: MeetingSessionID) async throws -> MeetingSession?
+    func loadAllForDisplay() async throws -> [MeetingSession]
     func loadRecoverable() async throws -> [MeetingSession]
     func sessionDirectory(for id: MeetingSessionID) async throws -> URL
     func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL?
@@ -14,6 +18,11 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     /// Removes the `tracks/` directory and any processing checkpoint, leaving the manifest and
     /// transcript untouched. Idempotent — missing paths are not an error.
     func deleteAudioFiles(for id: MeetingSessionID) async throws
+}
+
+extension MeetingSessionStoring {
+    func loadForDisplay(id: MeetingSessionID) async throws -> MeetingSession? { try await self.load(id: id) }
+    func loadAllForDisplay() async throws -> [MeetingSession] { try await self.loadAll() }
 }
 
 private final nonisolated class MeetingSessionFileSystem: @unchecked Sendable {
@@ -131,6 +140,19 @@ actor MeetingSessionStore: MeetingSessionStoring {
             }
         }
         return sessions.sorted { $0.startedAt > $1.startedAt }
+    }
+
+    func loadForDisplay(id: MeetingSessionID) throws -> MeetingSession? {
+        guard !self.tombstonedIDs.contains(id) else { return nil }
+        let url = self.sessionManifestURL(for: id)
+        guard self.fileSystem.manager.fileExists(atPath: url.path) else { return nil }
+        return try self.decodeSession(at: url)
+    }
+
+    func loadAllForDisplay() throws -> [MeetingSession] {
+        let indexedIDs = (try? self.readIndex().sessionIDs) ?? []
+        let allIDs = Array(Set(indexedIDs).union(try self.discoverSessionIDs()))
+        return allIDs.compactMap { try? self.loadForDisplay(id: $0) }.sorted { $0.startedAt > $1.startedAt }
     }
 
     func loadRecoverable() throws -> [MeetingSession] {
