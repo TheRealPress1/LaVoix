@@ -129,6 +129,10 @@ enum SettingsRegistry {
             bool("cleanup.filler_words", "Cleanup", "Remove filler words", "Drop \"um\", \"uh\" and the like.", \.removeFillerWordsEnabled),
             bool("cleanup.punctuation", "Cleanup", "Spoken punctuation", "Turn \"comma\" and \"new line\" into the symbol.", \.autoConvertPunctuationEnabled),
             bool("cleanup.literal", "Cleanup", "Literal formatting", "Keep what you said exactly, without rewriting numbers and symbols.", \.literalDictationFormattingEnabled),
+            // Dictionary
+            bool("dictionary.boosting", "Dictionary", "Boost your words", "Make the recognizer favour the words in your dictionary.", \.vocabularyBoostingEnabled),
+            bool("dictionary.learning", "Dictionary", "Suggest words from your corrections", "Offer to add a word when you fix the same mistake again.", \.automaticDictionaryLearningEnabled),
+            bool("dictionary.pronunciation", "Dictionary", "Match by pronunciation", "Also catch words that sound like an entry.", \.pronunciationMatchingEnabled),
             // History
             bool("history.save", "History", "Keep a history", "Save each dictation so you can find it later.", \.saveTranscriptionHistory),
             bool("history.save_audio", "History", "Keep the audio too", "Save the recording next to each history entry.", \.saveAudioWithTranscriptionHistory),

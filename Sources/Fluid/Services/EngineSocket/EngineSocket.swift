@@ -27,6 +27,9 @@ import Foundation
 ///   {"op":"history.star","id"} / history.delete / {"op":"history.clear"}  -> {"ok":true}
 ///   {"op":"settings.list"}                                -> {"ok":true,"settings":[{key,group,title,detail,kind,value,options?,min?,max?}]}
 ///   {"op":"settings.set","key","value"}                   -> {"ok":true,"setting":{...}}   (only listed settings; wrong values are refused)
+///   {"op":"dictionary.list"}                              -> {"ok":true,"entries":[{id,triggers:[...],replacement}]}
+///   {"op":"dictionary.save","id"?,"triggers":[...],"replacement"} -> {"ok":true,"entry":{...}}   (no id adds; a clash or empty field is refused)
+///   {"op":"dictionary.delete","id"}                       -> {"ok":true}
 /// Failures come back as {"ok":false,"error":"..."} (streams: {"event":"error","error":"..."}).
 nonisolated enum EngineSocket {
     static let maxRequestBytes = 1_000_000
@@ -57,6 +60,7 @@ nonisolated enum EngineSocket {
         var writing: (any EngineWritingProviding)?
         var history: (any EngineHistoryProviding)?
         var settings: (any EngineSettingsProviding)?
+        var dictionary: (any EngineDictionaryProviding)?
     }
 
     private static let lock = NSLock()
@@ -94,7 +98,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary())
     }
 
     enum EngineError: LocalizedError {
@@ -287,6 +291,19 @@ nonisolated enum EngineSocket {
                 guard let key = object["key"] as? String, let value = object["value"], !(value is NSNull) else { return fail("missing key or value") }
                 do { _ = emit(["ok": true, "setting": try await settings.set(key: key, value: value)]) } catch { fail(message(error)) }
             }
+        case "dictionary.list", "dictionary.save", "dictionary.delete":
+            guard let dictionary = services.dictionary else { return fail("the dictionary is not available") }
+            switch op {
+            case "dictionary.list":
+                _ = emit(["ok": true, "entries": await dictionary.list()])
+            case "dictionary.save":
+                guard let triggers = object["triggers"] as? [String], let replacement = object["replacement"] as? String else { return fail("missing triggers or replacement") }
+                if object["id"] != nil, uuid() == nil { return fail("bad id") }
+                do { _ = emit(["ok": true, "entry": try await dictionary.save(id: uuid(), triggers: triggers, replacement: replacement)]) } catch { fail(message(error)) }
+            default:
+                guard let id = uuid() else { return fail("missing or bad id") }
+                do { try await dictionary.delete(id: id); _ = emit(["ok": true]) } catch { fail(message(error)) }
+            }
         default:
             fail("unknown op")
         }
@@ -419,6 +436,30 @@ private final class FakeSettings: EngineSettingsProviding, @unchecked Sendable {
     }
 }
 
+/// A dictionary kept in memory, using the real rules.
+private final class FakeDictionary: EngineDictionaryProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [(id: UUID, triggers: [String], replacement: String)] = []
+    func list() async -> [[String: Any]] { self.lock.lock(); defer { self.lock.unlock() }; return self.entries.map { ["id": $0.id.uuidString, "triggers": $0.triggers, "replacement": $0.replacement] } }
+    func save(id: UUID?, triggers: [String], replacement: String) async throws -> [String: Any] {
+        self.lock.lock(); defer { self.lock.unlock() }
+        let valid = try DictionaryRules.validate(triggers: triggers, replacement: replacement, others: self.entries.filter { $0.id != id }.map { ($0.id, $0.triggers) })
+        if let id {
+            guard let i = self.entries.firstIndex(where: { $0.id == id }) else { throw EngineDictionaryError.notFound }
+            self.entries[i] = (id, valid.triggers, valid.replacement)
+            return ["id": id.uuidString, "triggers": valid.triggers, "replacement": valid.replacement]
+        }
+        let new = (id: UUID(), triggers: valid.triggers, replacement: valid.replacement)
+        self.entries.insert(new, at: 0)
+        return ["id": new.id.uuidString, "triggers": new.triggers, "replacement": new.replacement]
+    }
+    func delete(id: UUID) async throws {
+        self.lock.lock(); defer { self.lock.unlock() }
+        guard self.entries.contains(where: { $0.id == id }) else { throw EngineDictionaryError.notFound }
+        self.entries.removeAll { $0.id == id }
+    }
+}
+
 /// `LAVOIX_ENGINE_SOCKET_AUTOTEST=1` serves fakes on a temp socket and talks to it as a client.
 nonisolated enum EngineSocketAutotest {
     static func runIfRequested() {
@@ -453,7 +494,8 @@ nonisolated enum EngineSocketAutotest {
                 meetings: FakeMeetings(notesSaved: notesSaved),
                 writing: fakeWriting,
                 history: fakeHistory,
-                settings: FakeSettings()
+                settings: FakeSettings(),
+                dictionary: FakeDictionary()
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -564,6 +606,21 @@ nonisolated enum EngineSocketAutotest {
                 }
             })
             check("real settings: nothing secret-looking is exposed", !real.contains { d in ["api", "secret", "token", "password", "credential", "message_text", "keep_message"].contains { (d["key"] as? String ?? "").lowercased().contains($0) } })
+
+            // dictionary
+            let d1 = ask(#"{"op":"dictionary.save","triggers":["  Fluid Voice ","fluid boys","FLUID VOICE"],"replacement":"FluidVoice"}"#)?["entry"] as? [String: Any]
+            check("dictionary.save adds an entry with cleaned, de-duplicated, lowercase triggers", d1?["triggers"] as? [String] == ["fluid voice", "fluid boys"] && d1?["replacement"] as? String == "FluidVoice")
+            let d1id = d1?["id"] as? String ?? ""
+            check("dictionary.list returns it", (ask(#"{"op":"dictionary.list"}"#)?["entries"] as? [[String: Any]])?.count == 1)
+            check("dictionary.save refuses a trigger another entry already uses", ask(#"{"op":"dictionary.save","triggers":["fluid boys"],"replacement":"X"}"#)?["error"] as? String == EngineDictionaryError.duplicate("fluid boys").errorDescription)
+            check("dictionary.save lets an entry keep its own triggers when edited", (ask(#"{"op":"dictionary.save","id":"\#(d1id)","triggers":["fluid voice"],"replacement":"FluidVoice 2"}"#)?["entry"] as? [String: Any])?["replacement"] as? String == "FluidVoice 2")
+            check("dictionary.save refuses no triggers", ask(#"{"op":"dictionary.save","triggers":["  "],"replacement":"X"}"#)?["error"] as? String == EngineDictionaryError.noTriggers.errorDescription)
+            check("dictionary.save refuses an empty replacement", ask(#"{"op":"dictionary.save","triggers":["a"],"replacement":""}"#)?["error"] as? String == EngineDictionaryError.noReplacement.errorDescription)
+            check("dictionary.save refuses a very long phrase", ask(#"{"op":"dictionary.save","triggers":["\#(String(repeating: "a", count: 81))"],"replacement":"X"}"#)?["ok"] as? Bool == false)
+            check("dictionary.save refuses an unknown id", ask(#"{"op":"dictionary.save","id":"\#(UUID().uuidString)","triggers":["zzz"],"replacement":"X"}"#)?["ok"] as? Bool == false)
+            check("dictionary.save refuses a bad id", ask(#"{"op":"dictionary.save","id":"nope","triggers":["zzz"],"replacement":"X"}"#)?["ok"] as? Bool == false)
+            check("dictionary.delete removes it", ask(#"{"op":"dictionary.delete","id":"\#(d1id)"}"#)?["ok"] as? Bool == true && (ask(#"{"op":"dictionary.list"}"#)?["entries"] as? [Any])?.isEmpty == true)
+            check("dictionary.delete of a missing entry is refused", ask(#"{"op":"dictionary.delete","id":"\#(d1id)"}"#)?["ok"] as? Bool == false)
 
             // robustness
             check("garbage is rejected", ask("not json")?["ok"] as? Bool == false)
