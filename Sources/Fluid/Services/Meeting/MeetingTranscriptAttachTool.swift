@@ -17,6 +17,20 @@ nonisolated enum MeetingTranscriptAttachTool {
                 }
                 let store = MeetingSessionStore.shared
                 guard var session = try await store.load(id: id) else { out("ATTACH FAILED: no such session"); exit(1) }
+                // LAVOIX_ATTACH_SUMMARY_FILE=<text> saves that text as the session's executive notes (what the Meet Summary
+                // tab shows). On a session that already has its transcript attached, that is all the tool does.
+                if let summaryFile = env["LAVOIX_ATTACH_SUMMARY_FILE"], !session.transcriptSegments.isEmpty {
+                    let text = try String(contentsOfFile: summaryFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !text.isEmpty, let directory = try await store.existingSessionDirectory(for: id) else { out("ATTACH FAILED: empty summary or no folder"); exit(1) }
+                    let transcript = MeetingSummaryInput.transcript(for: session)
+                    let notes = (try? String(contentsOf: directory.appendingPathComponent("notes.md"), encoding: .utf8)) ?? ""
+                    let saved = MeetingNotesViewModel.Saved(
+                        transcriptHash: MeetingSummaryInput.fingerprint(transcript + "\n[notes]\n" + notes), modelID: "recovered", text: text
+                    )
+                    try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-executive.json"), options: .atomic)
+                    out("SUMMARY SAVED (\(text.count) characters)")
+                    exit(0)
+                }
                 guard session.transcriptSegments.isEmpty else { out("ATTACH FAILED: the session already has a transcript"); exit(1) }
                 guard let mic = session.audioTracks.first(where: { $0.kind == .microphone }) else { out("ATTACH FAILED: no microphone track"); exit(1) }
 

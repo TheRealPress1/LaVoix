@@ -14,7 +14,10 @@ struct MeetingSummaryView: View {
     var body: some View {
         if let session {
             self.content(session)
-                .task(id: session.id) { await self.model.load(session: session) }
+                .task(id: session.id) {
+                    await self.model.load(session: session)
+                    self.model.autoGenerateIfNeeded(session: session, asr: self.asrService, isQuiescent: self.isQuiescent)
+                }
         } else {
             Text("Select a meeting to write notes.")
                 .font(self.theme.typography.body)

@@ -147,6 +147,24 @@ final class MeetingNotesViewModel: ObservableObject {
         }
     }
 
+    /// Granola-style: opening a recent, finished meeting that has a transcript and no notes writes them without a button
+    /// press. Tried once per meeting (a marker file), so a failing notes command or model cannot loop on every visit.
+    /// Older meetings are left alone, so browsing the list never starts a pile of model runs.
+    func autoGenerateIfNeeded(session: MeetingSession, asr: ASRService?, isQuiescent: Bool) {
+        guard isQuiescent, SettingsStore.shared.meetingAutoNotesEnabled, self.kind == .executive, self.output.isEmpty,
+              !self.isGenerating, self.phase == .idle, self.sessionID == session.id, session.state == .completed,
+              let ended = session.endedAt, Date().timeIntervalSince(ended) < Self.autoNotesMaxAge,
+              let directory = self.directory else { return }
+        let words = session.transcriptSegments.filter { !$0.isEcho }.reduce(0) { $0 + $1.text.split(separator: " ").count }
+        guard words >= 40 else { return }
+        let marker = directory.appendingPathComponent("auto-notes-attempted")
+        guard !FileManager.default.fileExists(atPath: marker.path) else { return }
+        try? Data().write(to: marker)
+        self.generate(session: session, asr: asr)
+    }
+
+    static let autoNotesMaxAge: TimeInterval = 7 * 86400
+
     func cancel() {
         self.task?.cancel()
         self.task = nil
