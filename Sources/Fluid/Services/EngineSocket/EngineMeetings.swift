@@ -174,7 +174,7 @@ nonisolated struct LiveEngineMeetings: EngineMeetingsProviding {
             "duration_seconds": Int(max(0, s.duration)), "state": s.state.rawValue, "source": s.capturedApplication?.displayName ?? "",
             "mode": s.mode.rawValue, "words": Self.words(s),
             "speakers": s.activeSpeakers.map { ["name": $0.displayName, "is_me": $0.isLocalUser] as [String: Any] },
-            "segments": segments, "summaries": summaries, "notes": notes, "attendees": attendees,
+            "segments": segments, "summaries": summaries, "notes": notes, "attendees": attendees, "note_file": MeetingBrainExporter.fileName(for: s),
             "kinds": MeetingSummaryKind.allCases.map { ["id": $0.rawValue, "title": $0.title] },
             "audio_saved": directory.map { FileManager.default.fileExists(atPath: $0.appendingPathComponent("tracks").path) } ?? false,
         ]
