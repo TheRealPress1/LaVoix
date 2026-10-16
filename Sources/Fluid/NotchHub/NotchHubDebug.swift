@@ -387,6 +387,7 @@ enum NotchHubDebug {
             SettingsStore.shared.meetingNotesCommand = ""
 
             SettingsStore.shared.meetingBrainFolderOverride = ""
+            check("notes: your turns are labelled You for the model, and only the label changes", MeetingNotesPrompt.relabelingMe("**Me**: Me and Dana agreed.") == "**You**: Me and Dana agreed." && MeetingNotesPrompt.relabelingMe("Participants: Me, Dana Moreau") == "Participants: You, Dana Moreau" && MeetingNotesPrompt.relabelingMe("**Dana**: Me too.") == "**Dana**: Me too." && MeetingNotesPrompt.relabelingMe("Title: Me time") == "Title: Me time")
             SettingsStore.shared.meetingBrainExportEnabled = false
             try? FileManager.default.removeItem(at: root)
             print(failures == 0 ? "AUTONOTES AUTOTEST ALL PASSED" : "AUTONOTES AUTOTEST \(failures) FAILED")

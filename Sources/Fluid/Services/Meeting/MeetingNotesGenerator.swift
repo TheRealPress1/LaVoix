@@ -15,6 +15,7 @@ nonisolated enum MeetingNotesPrompt {
     - Be concrete: keep names, numbers, dates, decisions and reasons. Avoid vague abstraction.
     - Never invent anything that was not said or written. If something is unclear, leave it out.
     - Write days and times exactly as they were said ("Thursday", "tomorrow", "next Monday", "end of day"). Never turn them into calendar dates. Only write a full date if someone actually said it.
+    - The speaker labelled "You" is the person who recorded the meeting and will read these notes. Write "you" for them ("You asked about pricing") and use the other speakers' labels as they appear.
     - Do not add generic openers such as "Overview", "Introduction" or "Participants" unless asked.
     - Output ONLY the notes in Markdown. No preamble, no commentary, no "Here is the summary".
     """
@@ -79,6 +80,18 @@ nonisolated enum MeetingNotesPrompt {
         }
     }
 
+    /// Your own turns are labelled "Me" in the transcript. A small model reads "Me" as a third person ("Gaspard and Me
+    /// agreed"), so the notes are written from a transcript where you are "You". Only the label and the participants line
+    /// change, never what anyone said, and the saved transcript is untouched.
+    static func relabelingMe(_ line: String) -> String {
+        if line.hasPrefix("**Me**:") { return "**You**:" + line.dropFirst("**Me**:".count) }
+        if line.hasPrefix("Participants:") {
+            let names = line.dropFirst("Participants:".count).split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            return "Participants: " + names.map { $0 == "Me" ? "You" : $0 }.joined(separator: ", ")
+        }
+        return line
+    }
+
     static func user(transcript: String, userNotes: String) -> String {
         var text = ""
         let notes = userNotes.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -131,6 +144,7 @@ nonisolated enum MeetingNotesGenerator {
         let body = transcript
             .split(separator: "\n", omittingEmptySubsequences: false)
             .filter { !$0.hasPrefix("Date:") && !$0.hasPrefix("Time:") }
+            .map { MeetingNotesPrompt.relabelingMe(String($0)) }
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { throw MeetingNotesError.emptyTranscript }
