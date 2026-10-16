@@ -20,6 +20,8 @@ import Foundation
 ///   {"op":"writing.delete","entry"} / {"op":"writing.delete_all","bundle_id"?}  -> {"ok":true}
 ///   {"op":"writing.settings"}                             -> {"ok":true,"settings":{enabled,days,excluded,accessibility,count}}
 ///   {"op":"writing.settings_set","enabled"?,"days"?,"excluded"?}  -> {"ok":true,"settings":{...}}
+///   {"op":"history.list","search","starred","limit"}      -> {"ok":true,"history":{entries:[...],matched,total,today_words,today_transcriptions,loading,error}}
+///   {"op":"history.star","id"} / history.delete / {"op":"history.clear"}  -> {"ok":true}
 /// Failures come back as {"ok":false,"error":"..."} (streams: {"event":"error","error":"..."}).
 nonisolated enum EngineSocket {
     static let maxRequestBytes = 1_000_000
@@ -48,6 +50,7 @@ nonisolated enum EngineSocket {
         var warm: Warmer = {}
         var meetings: (any EngineMeetingsProviding)?
         var writing: (any EngineWritingProviding)?
+        var history: (any EngineHistoryProviding)?
     }
 
     private static let lock = NSLock()
@@ -85,7 +88,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory())
     }
 
     enum EngineError: LocalizedError {
@@ -240,6 +243,19 @@ nonisolated enum EngineSocket {
                 await writing.updateSettings(object)
                 _ = emit(["ok": true, "settings": await writing.settings()])
             }
+        case "history.list", "history.star", "history.delete", "history.clear":
+            guard let history = services.history else { return fail("history is not available") }
+            switch op {
+            case "history.list":
+                _ = emit(["ok": true, "history": await history.list(search: object["search"] as? String ?? "", starredOnly: object["starred"] as? Bool ?? false, limit: object["limit"] as? Int ?? 200)])
+            case "history.clear":
+                await history.clearAll()
+                _ = emit(["ok": true])
+            default:
+                guard let id = uuid() else { return fail("missing or bad id") }
+                if op == "history.star" { await history.toggleStar(id: id) } else { await history.delete(id: id) }
+                _ = emit(["ok": true])
+            }
         default:
             fail("unknown op")
         }
@@ -332,6 +348,21 @@ private final class FakeWriting: EngineWritingProviding, @unchecked Sendable {
     }
 }
 
+/// Dictation history with made-up entries.
+private final class FakeHistory: EngineHistoryProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var starred = 0, deleted: [UUID] = [], cleared = false
+    var starCount: Int { self.lock.lock(); defer { self.lock.unlock() }; return self.starred }
+    var deletedIDs: [UUID] { self.lock.lock(); defer { self.lock.unlock() }; return self.deleted }
+    var wasCleared: Bool { self.lock.lock(); defer { self.lock.unlock() }; return self.cleared }
+    func list(search: String, starredOnly: Bool, limit: Int) async -> [String: Any] {
+        ["entries": [["id": "A", "raw_text": "hello", "starred": starredOnly]], "matched": 1, "total": 5, "today_words": 12, "today_transcriptions": 2, "loading": false, "error": search]
+    }
+    func toggleStar(id: UUID) async { self.lock.lock(); self.starred += 1; self.lock.unlock() }
+    func delete(id: UUID) async { self.lock.lock(); self.deleted.append(id); self.lock.unlock() }
+    func clearAll() async { self.lock.lock(); self.cleared = true; self.lock.unlock() }
+}
+
 /// `LAVOIX_ENGINE_SOCKET_AUTOTEST=1` serves fakes on a temp socket and talks to it as a client.
 nonisolated enum EngineSocketAutotest {
     static func runIfRequested() {
@@ -346,6 +377,7 @@ nonisolated enum EngineSocketAutotest {
             let warmed = AutotestFlag()
             let notesSaved = AutotestFlag()
             let fakeWriting = FakeWriting()
+            let fakeHistory = FakeHistory()
             let services = EngineSocket.Services(
                 generator: { system, user, maxTokens in
                     if user.contains("explode") { throw NSError(domain: "t", code: 1) }
@@ -363,7 +395,8 @@ nonisolated enum EngineSocketAutotest {
                 status: { ("test-model", true, false) },
                 warm: { warmed.set() },
                 meetings: FakeMeetings(notesSaved: notesSaved),
-                writing: fakeWriting
+                writing: fakeWriting,
+                history: fakeHistory
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -422,6 +455,16 @@ nonisolated enum EngineSocketAutotest {
             check("writing.settings_set applies and returns the settings", ws?["enabled"] as? Bool == false && ws?["days"] as? Int == 30 && ws?["excluded"] as? [String] == ["com.x.y"])
             check("writing.settings_set ignores a retention that is not offered", (ask(#"{"op":"writing.settings_set","days":3}"#)?["settings"] as? [String: Any])?["days"] as? Int == 30)
             check("writing.settings reads them back", (ask(#"{"op":"writing.settings"}"#)?["settings"] as? [String: Any])?["enabled"] as? Bool == false)
+
+            // history
+            let hl = ask(#"{"op":"history.list","search":"abc","starred":true,"limit":10}"#)?["history"] as? [String: Any]
+            check("history.list returns entries and counts", (hl?["entries"] as? [[String: Any]])?.first?["raw_text"] as? String == "hello" && hl?["total"] as? Int == 5 && hl?["today_words"] as? Int == 12)
+            check("history.list passes the search and the starred filter", hl?["error"] as? String == "abc" && (hl?["entries"] as? [[String: Any]])?.first?["starred"] as? Bool == true)
+            let hid = UUID().uuidString
+            check("history.star toggles", ask(#"{"op":"history.star","id":"\#(hid)"}"#)?["ok"] as? Bool == true && fakeHistory.starCount == 1)
+            check("history.delete deletes that entry", ask(#"{"op":"history.delete","id":"\#(hid)"}"#)?["ok"] as? Bool == true && fakeHistory.deletedIDs.map(\.uuidString) == [hid])
+            check("history.delete rejects a bad id", ask(#"{"op":"history.delete","id":"nope"}"#)?["ok"] as? Bool == false)
+            check("history.clear clears", ask(#"{"op":"history.clear"}"#)?["ok"] as? Bool == true && fakeHistory.wasCleared)
 
             // robustness
             check("garbage is rejected", ask("not json")?["ok"] as? Bool == false)
