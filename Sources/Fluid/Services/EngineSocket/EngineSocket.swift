@@ -22,6 +22,8 @@ import Foundation
 ///   {"op":"writing.settings_set","enabled"?,"days"?,"excluded"?}  -> {"ok":true,"settings":{...}}
 ///   {"op":"history.list","search","starred","limit"}      -> {"ok":true,"history":{entries:[...],matched,total,today_words,today_transcriptions,loading,error}}
 ///   {"op":"history.star","id"} / history.delete / {"op":"history.clear"}  -> {"ok":true}
+///   {"op":"settings.list"}                                -> {"ok":true,"settings":[{key,group,title,detail,kind,value,options?,min?,max?}]}
+///   {"op":"settings.set","key","value"}                   -> {"ok":true,"setting":{...}}   (only listed settings; wrong values are refused)
 /// Failures come back as {"ok":false,"error":"..."} (streams: {"event":"error","error":"..."}).
 nonisolated enum EngineSocket {
     static let maxRequestBytes = 1_000_000
@@ -51,6 +53,7 @@ nonisolated enum EngineSocket {
         var meetings: (any EngineMeetingsProviding)?
         var writing: (any EngineWritingProviding)?
         var history: (any EngineHistoryProviding)?
+        var settings: (any EngineSettingsProviding)?
     }
 
     private static let lock = NSLock()
@@ -88,7 +91,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings())
     }
 
     enum EngineError: LocalizedError {
@@ -256,6 +259,14 @@ nonisolated enum EngineSocket {
                 if op == "history.star" { await history.toggleStar(id: id) } else { await history.delete(id: id) }
                 _ = emit(["ok": true])
             }
+        case "settings.list", "settings.set":
+            guard let settings = services.settings else { return fail("settings are not available") }
+            if op == "settings.list" {
+                _ = emit(["ok": true, "settings": await settings.list()])
+            } else {
+                guard let key = object["key"] as? String, let value = object["value"], !(value is NSNull) else { return fail("missing key or value") }
+                do { _ = emit(["ok": true, "setting": try await settings.set(key: key, value: value)]) } catch { fail(message(error)) }
+            }
         default:
             fail("unknown op")
         }
@@ -363,6 +374,20 @@ private final class FakeHistory: EngineHistoryProviding, @unchecked Sendable {
     func clearAll() async { self.lock.lock(); self.cleared = true; self.lock.unlock() }
 }
 
+/// Settings backed by a dictionary, using the real validation, so the protocol and the refusals can be exercised.
+private final class FakeSettings: EngineSettingsProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: Any] = ["a.flag": true, "a.count": 5, "a.mode": "one"]
+    private let kinds: [String: SettingKind] = ["a.flag": .bool, "a.count": .int(min: 1, max: 10), "a.mode": .choice([("one", "One"), ("two", "Two")])]
+    func list() async -> [[String: Any]] { self.lock.lock(); defer { self.lock.unlock() }; return self.kinds.keys.sorted().map { ["key": $0, "kind": self.kinds[$0]!.name, "value": self.values[$0]!] } }
+    func set(key: String, value: Any) async throws -> [String: Any] {
+        guard let kind = self.kinds[key] else { throw EngineSettingsError.unknownKey }
+        let clean = try kind.coerce(value)
+        self.lock.lock(); self.values[key] = clean; self.lock.unlock()
+        return ["key": key, "value": clean]
+    }
+}
+
 /// `LAVOIX_ENGINE_SOCKET_AUTOTEST=1` serves fakes on a temp socket and talks to it as a client.
 nonisolated enum EngineSocketAutotest {
     static func runIfRequested() {
@@ -396,7 +421,8 @@ nonisolated enum EngineSocketAutotest {
                 warm: { warmed.set() },
                 meetings: FakeMeetings(notesSaved: notesSaved),
                 writing: fakeWriting,
-                history: fakeHistory
+                history: fakeHistory,
+                settings: FakeSettings()
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -465,6 +491,33 @@ nonisolated enum EngineSocketAutotest {
             check("history.delete deletes that entry", ask(#"{"op":"history.delete","id":"\#(hid)"}"#)?["ok"] as? Bool == true && fakeHistory.deletedIDs.map(\.uuidString) == [hid])
             check("history.delete rejects a bad id", ask(#"{"op":"history.delete","id":"nope"}"#)?["ok"] as? Bool == false)
             check("history.clear clears", ask(#"{"op":"history.clear"}"#)?["ok"] as? Bool == true && fakeHistory.wasCleared)
+
+            // settings bridge
+            check("settings.list lists them", (ask(#"{"op":"settings.list"}"#)?["settings"] as? [[String: Any]])?.count == 3)
+            check("settings.set changes a bool", (ask(#"{"op":"settings.set","key":"a.flag","value":false}"#)?["setting"] as? [String: Any])?["value"] as? Bool == false)
+            check("settings.set changes an int in range", (ask(#"{"op":"settings.set","key":"a.count","value":7}"#)?["setting"] as? [String: Any])?["value"] as? Int == 7)
+            check("settings.set refuses an unknown key", ask(#"{"op":"settings.set","key":"api.key","value":"x"}"#)?["ok"] as? Bool == false)
+            check("settings.set refuses a number for a bool", ask(#"{"op":"settings.set","key":"a.flag","value":1}"#)?["ok"] as? Bool == false)
+            check("settings.set refuses a bool for an int", ask(#"{"op":"settings.set","key":"a.count","value":true}"#)?["ok"] as? Bool == false)
+            check("settings.set refuses an out-of-range int", ask(#"{"op":"settings.set","key":"a.count","value":99}"#)?["ok"] as? Bool == false)
+            check("settings.set refuses a fractional int", ask(#"{"op":"settings.set","key":"a.count","value":2.5}"#)?["ok"] as? Bool == false)
+            check("settings.set refuses a choice that is not offered", ask(#"{"op":"settings.set","key":"a.mode","value":"three"}"#)?["ok"] as? Bool == false)
+            check("settings.set accepts a choice that is offered", (ask(#"{"op":"settings.set","key":"a.mode","value":"two"}"#)?["setting"] as? [String: Any])?["value"] as? String == "two")
+            check("a refused value left the setting as it was", (ask(#"{"op":"settings.list"}"#)?["settings"] as? [[String: Any]])?.first(where: { $0["key"] as? String == "a.count" })?["value"] as? Int == 7)
+            // the real list: unique keys, every value of the declared kind, every choice's current value is one of its options
+            let real = await MainActor.run { SettingsRegistry.all.map { $0.describe() } }
+            check("real settings: keys are unique", Set(real.compactMap { $0["key"] as? String }).count == real.count && !real.isEmpty)
+            check("real settings: every value matches its kind", real.allSatisfy { d in
+                switch d["kind"] as? String {
+                case "bool": d["value"] is Bool
+                case "int": d["value"] is Int
+                case "double": d["value"] is Double
+                case "text": d["value"] is String
+                case "choice": (d["options"] as? [[String: Any]])?.contains { $0["id"] as? String == d["value"] as? String } == true
+                default: false
+                }
+            })
+            check("real settings: nothing secret-looking is exposed", !real.contains { d in ["api", "secret", "token", "password", "credential", "message_text", "keep_message"].contains { (d["key"] as? String ?? "").lowercased().contains($0) } })
 
             // robustness
             check("garbage is rejected", ask("not json")?["ok"] as? Bool == false)
