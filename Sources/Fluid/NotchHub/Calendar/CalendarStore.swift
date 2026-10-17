@@ -366,7 +366,7 @@ final class CalendarStore: ObservableObject {
             location: event.location.flatMap { $0.isEmpty ? nil : $0 },
             joinURL: Self.joinURL(in: [event.url?.absoluteString, event.location, event.notes]),
             attendeeCount: event.attendees?.count ?? 0,
-            attendeeEmails: (event.attendees ?? []).filter { !$0.isCurrentUser }.compactMap { participant in
+            attendeeEmails: (event.attendees ?? []).filter { !CalendarLinks.isMe($0) }.compactMap { participant in
                 let raw = participant.url.absoluteString
                 return raw.lowercased().hasPrefix("mailto:") ? String(raw.dropFirst(7)).lowercased() : nil
             },

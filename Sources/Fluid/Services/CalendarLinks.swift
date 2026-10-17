@@ -1,4 +1,5 @@
 import CryptoKit
+import Contacts
 import EventKit
 import Foundation
 
@@ -33,17 +34,35 @@ nonisolated enum CalendarLinks {
 
     // MARK: - Reading the calendar
 
+    /// Every address that is you: the "Me" card in Contacts plus the calendar accounts that are email addresses. The calendar
+    /// marks only one of your addresses as the current user, so an invite sent to another one would show you as a guest.
+    static let myEmails: Set<String> = {
+        var out = Set<String>()
+        if CNContactStore.authorizationStatus(for: .contacts) == .authorized,
+           let me = try? CNContactStore().unifiedMeContactWithKeys(toFetch: [CNContactEmailAddressesKey as CNKeyDescriptor]) {
+            out.formUnion(me.emailAddresses.map { String($0.value).lowercased() })
+        }
+        for source in EKEventStore().sources where source.title.contains("@") { out.insert(source.title.lowercased()) }
+        return out
+    }()
+
+    static func isMe(_ participant: EKParticipant) -> Bool {
+        if participant.isCurrentUser { return true }
+        let raw = participant.url.absoluteString.lowercased()
+        return raw.hasPrefix("mailto:") && self.myEmails.contains(String(raw.dropFirst(7)))
+    }
+
     static func candidate(from event: EKEvent) -> Candidate? {
         guard !event.isAllDay, event.status != .canceled else { return nil }
         let attendees = event.attendees ?? []
         if attendees.first(where: \.isCurrentUser)?.participantStatus == .declined { return nil }
-        let emails = attendees.filter { !$0.isCurrentUser }.compactMap { participant -> String? in
+        let emails = attendees.filter { !self.isMe($0) }.compactMap { participant -> String? in
             let raw = participant.url.absoluteString
             return raw.lowercased().hasPrefix("mailto:") ? String(raw.dropFirst(7)).lowercased() : nil
         }
         guard !emails.isEmpty else { return nil }
         var names: [String: String] = [:]
-        for participant in attendees where !participant.isCurrentUser {
+        for participant in attendees where !self.isMe(participant) {
             let raw = participant.url.absoluteString
             if raw.lowercased().hasPrefix("mailto:"), let name = participant.name, !name.isEmpty { names[String(raw.dropFirst(7)).lowercased()] = name }
         }

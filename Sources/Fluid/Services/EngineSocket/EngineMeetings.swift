@@ -168,7 +168,7 @@ nonisolated struct LiveEngineMeetings: EngineMeetingsProviding {
         var notes = ""
         var attendees: [[String: Any]] = []
         if let directory, s.state == .completed {
-            if let known = MeetingAttendees.load(from: directory) {
+            if let known = MeetingAttendees.load(from: directory)?.filter({ !CalendarLinks.myEmails.contains($0.email.lowercased()) }) {
                 attendees = known.map { ["name": $0.name, "email": $0.email, "photo": $0.photo ?? NSNull(), "linkedin": $0.linkedin ?? NSNull(), "role": $0.role ?? NSNull()] as [String: Any] }
             } else {
                 MeetingAttendees.resolveInBackground(session: s, directory: directory, store: self.store)
