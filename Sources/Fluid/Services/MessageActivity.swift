@@ -53,7 +53,7 @@ nonisolated enum MessageActivity {
 
     /// `rows` must be ordered by chat, then date.
     static func aggregate(
-        rows: [Row], excluded: Set<String> = [], now: Date, calendar: Calendar, maxDays: Int = 730
+        rows: [Row], excluded: Set<String> = [], now: Date, calendar: Calendar, maxDays: Int = 7300
     ) -> [Conversation] {
         let iso = ISO8601DateFormatter()
         let dayFormatter = DateFormatter()
