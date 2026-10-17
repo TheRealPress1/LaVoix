@@ -11,10 +11,12 @@ nonisolated protocol EngineContactsProviding: Sendable {
 nonisolated struct LiveEngineContacts: EngineContactsProviding {
     func lookup(emails: [String], phones: [String]) async -> [String: Any] {
         guard CNContactStore.authorizationStatus(for: .contacts) == .authorized else { return ["found": false, "reason": "LaVoix doesn't have access to your contacts."] }
-        let keys: [CNKeyDescriptor] = [
-            CNContactGivenNameKey, CNContactFamilyNameKey, CNContactNicknameKey, CNContactOrganizationNameKey, CNContactJobTitleKey,
-            CNContactEmailAddressesKey, CNContactPhoneNumbersKey, CNContactThumbnailImageDataKey, CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
-        ].map { $0 as CNKeyDescriptor }
+        var keys: [CNKeyDescriptor] = [
+            CNContactGivenNameKey as CNKeyDescriptor, CNContactFamilyNameKey as CNKeyDescriptor, CNContactNicknameKey as CNKeyDescriptor,
+            CNContactOrganizationNameKey as CNKeyDescriptor, CNContactJobTitleKey as CNKeyDescriptor, CNContactEmailAddressesKey as CNKeyDescriptor,
+            CNContactPhoneNumbersKey as CNKeyDescriptor, CNContactThumbnailImageDataKey as CNKeyDescriptor,
+        ]
+        keys.append(CNContactFormatter.descriptorForRequiredKeys(for: .fullName))
         let store = CNContactStore()
         var contact: CNContact?
         for email in emails.prefix(8) where contact == nil {
