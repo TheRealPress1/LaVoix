@@ -18,6 +18,7 @@ import Foundation
 ///   {"op":"meetings.rename","id","title"}  /  {"op":"meetings.rename_speaker","id","speaker","name"}  /  {"op":"meetings.delete","id"}  -> {"ok":true}
 ///   {"op":"meetings.notes_feedback","id","kind","rating":"good|bad|edited","text"?}  -> {"ok":true}   (your verdict on the notes; "edited" carries your corrected version)
 ///   {"op":"training.status"} -> {"ok":true,"training":{good,bad,edited,usable,unrated_inputs,folder}}  /  {"op":"training.export"} -> {"ok":true,"export":{train,valid,folder}}  /  {"op":"training.clear"}
+///   {"op":"training.rate_ask","system","user","output","rating":"good|bad|edited","corrected"?}  -> {"ok":true}   (an answer from Ask, with the exact input it was given)
 ///   {"op":"meetings.notes_save","id","text"}              -> {"ok":true}
 ///   {"op":"meetings.notes_generate","id","kind","auto"}   -> {"event":"progress","message"} ... {"event":"done","text"}
 ///   {"op":"writing.list","search","limit"}               -> {"ok":true,"entries":[{id,bundle_id,app_name,window_title,first_at,last_at,latest,peak,version_count}]}
@@ -303,6 +304,10 @@ nonisolated enum EngineSocket {
         case "activity":
             guard let activity = services.activity else { return fail("activity is not available") }
             _ = emit(["ok": true, "activity": await activity.snapshot()])
+        case "training.rate_ask":
+            guard let system = object["system"] as? String, let user = object["user"] as? String, let output = object["output"] as? String,
+                  let rating = (object["rating"] as? String).flatMap(TrainingData.Rating.init(rawValue:)) else { return fail("missing system, user, output or a valid rating") }
+            do { _ = try TrainingData.rate(task: "ask", system: system, user: user, output: output, rating: rating, corrected: object["corrected"] as? String); _ = emit(["ok": true]) } catch { fail(message(error)) }
         case "training.status":
             _ = emit(["ok": true, "training": TrainingData.status()])
         case "training.export":
@@ -712,6 +717,7 @@ nonisolated enum EngineSocketAutotest {
             check("training files are owner-only", perms?.intValue == 0o600 && rootPerms?.intValue == 0o700)
             check("meetings.notes_feedback refuses a bad rating", ask(#"{"op":"meetings.notes_feedback","id":"\#(id)","kind":"executive","rating":"meh"}"#)?["ok"] as? Bool == false)
             check("meetings.notes_feedback works for a known meeting", ask(#"{"op":"meetings.notes_feedback","id":"\#(id)","kind":"executive","rating":"good"}"#)?["ok"] as? Bool == true)
+            check("training.rate_ask keeps an answer once however often it is rated, and a correction is needed for edited", ask(#"{"op":"training.rate_ask","system":"S","user":"U question","output":"A answer","rating":"good"}"#)?["ok"] as? Bool == true && ask(#"{"op":"training.rate_ask","system":"S","user":"U question","output":"A answer","rating":"edited","corrected":"A better answer"}"#)?["ok"] as? Bool == true && ask(#"{"op":"training.rate_ask","system":"S","user":"U question","output":"A answer","rating":"edited"}"#)?["ok"] as? Bool == false && ((ask(#"{"op":"training.status"}"#)?["training"] as? [String: Any])?["usable"] as? Int) == 3)
             check("training.clear removes everything", ask(#"{"op":"training.clear"}"#)?["ok"] as? Bool == true && !FileManager.default.fileExists(atPath: trainingRoot.path) && (ask(#"{"op":"training.status"}"#)?["training"] as? [String: Any])?["usable"] as? Int == 0)
             TrainingData.rootOverride = nil
 

@@ -24,12 +24,13 @@ nonisolated enum TrainingData {
     enum Rating: String, CaseIterable { case good, bad, edited }
 
     enum Failure: LocalizedError, Equatable {
-        case noRecord, emptyText, badRating
+        case noRecord, emptyText, badRating, tooLarge
         var errorDescription: String? {
             switch self {
             case .noRecord: "These notes were written before feedback was available. Rewrite them, then rate the new version."
             case .emptyText: "The corrected notes can't be empty."
             case .badRating: "The rating must be good, bad or edited."
+            case .tooLarge: "That answer is too large to keep as an example."
             }
         }
     }
@@ -97,6 +98,24 @@ nonisolated enum TrainingData {
             example = ["id": "\(meeting.uuidString)-\(kind)", "meeting": meeting.uuidString, "kind": kind, "created": Date().timeIntervalSince1970,
                        "model": record["model"] ?? "", "system": system, "user": user, "output": notes.trimmingCharacters(in: .whitespacesAndNewlines)]
         }
+        example["rating"] = rating.rawValue
+        example["updated"] = Date().timeIntervalSince1970
+        example["corrected"] = rating == .edited ? fixed : nil
+        try self.write(example, to: url)
+        return self.summary(of: example)
+    }
+
+    /// Rates a one-off answer (for example from "Ask about a person"), where the caller holds the exact input. The example is
+    /// keyed by a hash of the input and the answer, so rating the same answer again updates it instead of adding a copy.
+    @discardableResult
+    static func rate(task: String, system: String, user: String, output: String, rating: Rating, corrected: String?) throws -> [String: Any] {
+        let fixed = corrected?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if rating == .edited, fixed?.isEmpty != false { throw Failure.emptyText }
+        guard system.count <= 20_000, user.count <= 80_000, output.count <= 10_000, !user.isEmpty, !output.isEmpty else { throw Failure.tooLarge }
+        try self.prepare(self.examplesDir)
+        let key = String(self.hash(system + "\u{1}" + user + "\u{1}" + output).prefix(24))
+        let url = self.examplesDir.appendingPathComponent("\(task.filter { $0.isLetter })-\(key).json")
+        var example = self.read(url) ?? ["id": "\(task)-\(key)", "task": task, "created": Date().timeIntervalSince1970, "system": system, "user": user, "output": output.trimmingCharacters(in: .whitespacesAndNewlines)]
         example["rating"] = rating.rawValue
         example["updated"] = Date().timeIntervalSince1970
         example["corrected"] = rating == .edited ? fixed : nil
