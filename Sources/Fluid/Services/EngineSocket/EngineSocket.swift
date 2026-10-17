@@ -40,6 +40,7 @@ import Foundation
 ///   {"op":"speech.list"}                                  -> {"ok":true,"speech":{models:[{id,name,brand,language,size,installed,active,update_available,accuracy,speed,description}],blocked,downloading?:{id,progress,cancelling},error?}}
 ///   {"op":"speech.activate","id"} / speech.download / speech.delete / {"op":"speech.cancel"}  -> {"ok":true}   (start the work and return; ask speech.list for progress)
 ///   {"op":"activity"}                                     -> {"ok":true,"activity":{recording,meeting_processing,dictating,busy}}   (so background work can wait its turn)
+///   {"op":"contacts.lookup","emails":[...],"phones":[...]} -> {"ok":true,"contact":{found,full_name,nickname,organization,job_title,emails,phones,photo?}}   (found by those addresses only)
 /// Failures come back as {"ok":false,"error":"..."} (streams: {"event":"error","error":"..."}).
 nonisolated enum EngineSocket {
     static let maxRequestBytes = 1_000_000
@@ -75,6 +76,7 @@ nonisolated enum EngineSocket {
         var prompts: (any EnginePromptsProviding)?
         var speech: (any EngineSpeechProviding)?
         var activity: (any EngineActivityProviding)?
+        var contacts: (any EngineContactsProviding)?
     }
 
     private static let lock = NSLock()
@@ -112,7 +114,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts())
     }
 
     enum EngineError: LocalizedError {
@@ -301,6 +303,12 @@ nonisolated enum EngineSocket {
                 if op == "history.star" { await history.toggleStar(id: id) } else { await history.delete(id: id) }
                 _ = emit(["ok": true])
             }
+        case "contacts.lookup":
+            guard let contacts = services.contacts else { return fail("contacts are not available") }
+            let emails = (object["emails"] as? [String] ?? []).filter { $0.count <= 200 }
+            let phones = (object["phones"] as? [String] ?? []).filter { $0.count <= 40 }
+            guard !emails.isEmpty || !phones.isEmpty else { return fail("give at least one email or phone number") }
+            _ = emit(["ok": true, "contact": await contacts.lookup(emails: emails, phones: phones)])
         case "activity":
             guard let activity = services.activity else { return fail("activity is not available") }
             _ = emit(["ok": true, "activity": await activity.snapshot()])
@@ -586,6 +594,10 @@ private final class FakePrompts: EnginePromptsProviding, @unchecked Sendable {
     func setDefault(mode: String, text: String) async throws { _ = try PromptRules.mode(mode); _ = try PromptRules.cleanPrompt(text) }
 }
 
+private struct FakeContacts: EngineContactsProviding {
+    func lookup(emails: [String], phones: [String]) async -> [String: Any] { ["found": emails.first == "a@x.com", "full_name": "Ada Example", "emails": emails, "phones": phones] }
+}
+
 private struct FakeActivity: EngineActivityProviding {
     func snapshot() async -> [String: Any] { ["recording": false, "meeting_processing": false, "dictating": true, "busy": true] }
 }
@@ -641,7 +653,8 @@ nonisolated enum EngineSocketAutotest {
                 stats: FakeStats(),
                 prompts: FakePrompts(),
                 speech: fakeSpeech,
-                activity: FakeActivity()
+                activity: FakeActivity(),
+                contacts: FakeContacts()
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -842,6 +855,12 @@ nonisolated enum EngineSocketAutotest {
             // activity
             let act = ask(#"{"op":"activity"}"#)?["activity"] as? [String: Any]
             check("activity reports what the engine is busy with", act?["dictating"] as? Bool == true && act?["busy"] as? Bool == true && act?["recording"] as? Bool == false)
+
+            // contacts
+            let cl = ask(#"{"op":"contacts.lookup","emails":["a@x.com"],"phones":["+14155551234"]}"#)?["contact"] as? [String: Any]
+            check("contacts.lookup returns the card for the addresses it was given", cl?["found"] as? Bool == true && cl?["full_name"] as? String == "Ada Example")
+            check("contacts.lookup says when nobody matches", ((ask(#"{"op":"contacts.lookup","emails":["nobody@x.com"]}"#)?["contact"] as? [String: Any])?["found"] as? Bool) == false)
+            check("contacts.lookup needs an address or number, never a name", ask(#"{"op":"contacts.lookup","name":"Ada"}"#)?["ok"] as? Bool == false)
 
             // robustness
             check("garbage is rejected", ask("not json")?["ok"] as? Bool == false)
