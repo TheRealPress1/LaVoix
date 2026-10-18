@@ -1690,6 +1690,7 @@ final class ASRService: ObservableObject {
             return
         }
         let handoffGeneration = self.meetingAudioHandoffGeneration
+        self.refreshMicStatusIfNeeded()
         guard self.micStatus == .authorized else {
             DebugLogger.shared.debug("Audio engine prewarm skipped - mic not authorized", source: "ASRService")
             return
@@ -2027,6 +2028,16 @@ final class ASRService: ObservableObject {
 
     private var inputFormat: AVAudioFormat?
     private var micPermissionGranted = false
+
+    /// The microphone can be allowed after this service looked (myOS asks macOS from outside it), so a "not allowed" answer is
+    /// checked against macOS again before it blocks a recording.
+    private func refreshMicStatusIfNeeded() {
+        guard self.micStatus != .authorized else { return }
+        let live = AVCaptureDevice.authorizationStatus(for: .audio)
+        guard live == .authorized else { return }
+        self.micStatus = live
+        self.micPermissionGranted = true
+    }
     private var isRequestingMicrophoneAccess = false
 
     // Internal access for MeetingTranscriptionService to share models
@@ -2756,6 +2767,7 @@ final class ASRService: ObservableObject {
         guard !forDictionaryTraining || !requiresPronunciation || DictionaryMatcherExperiment.sharedFeaturesEnabled else { return .failed }
         DebugLogger.shared.info("🎤 START() called - beginning recording session", source: "ASRService")
 
+        self.refreshMicStatusIfNeeded()
         guard self.micStatus == .authorized else {
             DebugLogger.shared.error("❌ START() blocked - mic not authorized", source: "ASRService")
             return .failed
