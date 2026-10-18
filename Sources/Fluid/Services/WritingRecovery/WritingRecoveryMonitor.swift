@@ -34,7 +34,7 @@ nonisolated enum WritingFilter {
         "com.apple.keychainaccess", "com.apple.Passwords", "org.keepassxc.keepassxc", "com.dashlane.dashlanephonefinal",
         "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "dev.warp.Warp-Stable", "net.kovidgoyal.kitty",
         "org.alacritty", "com.apple.dt.Xcode", "com.microsoft.VSCode", "com.todesktop.230313mzl4w4u92", "com.sublimetext.4",
-        "com.lavoix.app",
+        "com.lavoix.app", "com.myos.engine",
     ]
     static let excludedBundlePrefixes = ["com.jetbrains."]
 
