@@ -50,6 +50,8 @@ import Foundation
 ///   {"op":"words.list"} / {"op":"words.add","text","aliases"?} / {"op":"words.delete","text"}  -> {"ok":true,"words":[{text,aliases}]} / {"ok":true,"word":{...}} / {"ok":true}   (boost words)
 ///   {"op":"dictionary.export"}                            -> {"ok":true,"file":"<json>"}   (replacements and boost words, as LaVoix's own export file)
 ///   {"op":"dictionary.import","file","replace"?}          -> {"ok":true,"replacements":n,"words":n}   (merges unless replace is true)
+///   {"op":"meetings.merge_speakers","id","source","into"} / {"op":"meetings.reassign","id","segment","speaker"} / {"op":"meetings.undo","id"}  -> {"ok":true}   (fixes to a finished meeting)
+///   {"op":"meetings.export","id","format":"text|json"}    -> {"ok":true,"file":"..."}   (the transcript)
 /// Failures come back as {"ok":false,"error":"..."} (streams: {"event":"error","error":"..."}).
 nonisolated enum EngineSocket {
     static let maxRequestBytes = 1_000_000
@@ -89,6 +91,7 @@ nonisolated enum EngineSocket {
         var permissions: (any EnginePermissionsProviding)?
         var shortcuts: (any EngineShortcutsProviding)?
         var words: (any EngineWordsProviding)?
+        var meetingEdits: (any EngineMeetingEditsProviding)?
     }
 
     private static let lock = NSLock()
@@ -126,7 +129,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits())
     }
 
     enum EngineError: LocalizedError {
@@ -366,6 +369,24 @@ nonisolated enum EngineSocket {
                 guard let id = uuid() else { return fail("missing or bad id") }
                 do { try await dictionary.delete(id: id); _ = emit(["ok": true]) } catch { fail(message(error)) }
             }
+        case "meetings.merge_speakers", "meetings.reassign", "meetings.undo", "meetings.export":
+            guard let edits = services.meetingEdits else { return fail("meetings are not available") }
+            guard let id = uuid() else { return fail("missing or bad id") }
+            func other(_ key: String) -> UUID? { (object[key] as? String).flatMap(UUID.init(uuidString:)) }
+            do {
+                switch op {
+                case "meetings.merge_speakers":
+                    guard let source = other("source"), let target = other("into") else { return fail("missing source or into") }
+                    try await edits.mergeSpeakers(id: id, source: source, into: target); _ = emit(["ok": true])
+                case "meetings.reassign":
+                    guard let segment = other("segment"), let speaker = other("speaker") else { return fail("missing segment or speaker") }
+                    try await edits.reassign(id: id, segment: segment, to: speaker); _ = emit(["ok": true])
+                case "meetings.undo":
+                    try await edits.undo(id: id); _ = emit(["ok": true])
+                default:
+                    _ = emit(["ok": true, "file": try await edits.export(id: id, format: object["format"] as? String ?? "text")])
+                }
+            } catch { fail(message(error)) }
         case "words.list", "words.add", "words.delete", "dictionary.export", "dictionary.import":
             guard let words = services.words else { return fail("the dictionary is not available") }
             do {
@@ -639,6 +660,16 @@ private struct FakeContacts: EngineContactsProviding {
     func lookup(emails: [String], phones: [String]) async -> [String: Any] { ["found": emails.first == "a@x.com", "full_name": "Ada Example", "emails": emails, "phones": phones] }
 }
 
+private final class FakeMeetingEdits: EngineMeetingEditsProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    var calls: [String] = []
+    private func note(_ s: String) { self.lock.lock(); self.calls.append(s); self.lock.unlock() }
+    func mergeSpeakers(id: UUID, source: UUID, into target: UUID) async throws { if source == target { throw EngineMeetingsError.unavailable("Pick a different speaker to merge into.") }; self.note("merge") }
+    func reassign(id: UUID, segment: UUID, to speaker: UUID) async throws { self.note("reassign") }
+    func undo(id: UUID) async throws { self.note("undo") }
+    func export(id: UUID, format: String) async throws -> String { if format != "text" && format != "json" { throw EngineMeetingsError.unavailable("Format must be text or json.") }; return "[00:00] Dana: hello (\(format))" }
+}
+
 private final class FakeWords: EngineWordsProviding, @unchecked Sendable {
     private let lock = NSLock()
     private var words: [(text: String, aliases: [String])] = []
@@ -703,6 +734,7 @@ nonisolated enum EngineSocketAutotest {
             let fakeWriting = FakeWriting()
             let fakeHistory = FakeHistory()
             let fakeSpeech = FakeSpeech()
+            let fakeEdits = FakeMeetingEdits()
             let services = EngineSocket.Services(
                 generator: { system, user, maxTokens in
                     if user.contains("explode") { throw NSError(domain: "t", code: 1) }
@@ -731,7 +763,8 @@ nonisolated enum EngineSocketAutotest {
                 contacts: FakeContacts(),
                 permissions: FakePermissions(),
                 shortcuts: FakeShortcuts(),
-                words: FakeWords()
+                words: FakeWords(),
+                meetingEdits: fakeEdits
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -933,6 +966,16 @@ nonisolated enum EngineSocketAutotest {
             let act = ask(#"{"op":"activity"}"#)?["activity"] as? [String: Any]
             check("activity reports what the engine is busy with", act?["dictating"] as? Bool == true && act?["busy"] as? Bool == true && act?["recording"] as? Bool == false)
 
+            // fixing meetings
+            do {
+                let a = UUID().uuidString, b = UUID().uuidString, m = UUID().uuidString
+                check("meetings.merge_speakers merges", ask(#"{"op":"meetings.merge_speakers","id":"\#(m)","source":"\#(a)","into":"\#(b)"}"#)?["ok"] as? Bool == true)
+                check("meetings.merge_speakers refuses merging a speaker into itself", ask(#"{"op":"meetings.merge_speakers","id":"\#(m)","source":"\#(a)","into":"\#(a)"}"#)?["ok"] as? Bool == false)
+                check("meetings.reassign and meetings.undo work", ask(#"{"op":"meetings.reassign","id":"\#(m)","segment":"\#(a)","speaker":"\#(b)"}"#)?["ok"] as? Bool == true && ask(#"{"op":"meetings.undo","id":"\#(m)"}"#)?["ok"] as? Bool == true)
+                check("meetings.reassign needs a segment and speaker", ask(#"{"op":"meetings.reassign","id":"\#(m)"}"#)?["ok"] as? Bool == false)
+                check("meetings.export returns the transcript and refuses odd formats", (ask(#"{"op":"meetings.export","id":"\#(m)","format":"json"}"#)?["file"] as? String)?.contains("json") == true && ask(#"{"op":"meetings.export","id":"\#(m)","format":"pdf"}"#)?["ok"] as? Bool == false)
+                check("the edits reached the meeting service", fakeEdits.calls == ["merge", "reassign", "undo"])
+            }
             // boost words and dictionary files
             do {
                 check("words.add keeps a word with its other spellings", ((ask(#"{"op":"words.add","text":"  Qwen ","aliases":["quen","QUEN","  ","qwen"]}"#)?["word"] as? [String: Any])?["aliases"] as? [String]) == ["quen"])

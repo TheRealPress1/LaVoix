@@ -162,7 +162,7 @@ nonisolated struct LiveEngineMeetings: EngineMeetingsProviding {
         let names = Dictionary(uniqueKeysWithValues: s.speakers.map { ($0.id, ($0.displayName, $0.isLocalUser)) })
         let segments: [[String: Any]] = s.transcriptSegments.filter { !$0.isEcho }.sorted { $0.start.seconds < $1.start.seconds }.map { seg in
             let who = seg.speakerID.flatMap { names[$0] }
-            return ["start": seg.start.seconds, "end": seg.end.seconds, "speaker": who?.0 ?? "Unknown", "is_me": who?.1 ?? false, "text": seg.text]
+            return ["id": seg.id.uuidString, "speaker_id": seg.speakerID?.uuidString ?? NSNull(), "start": seg.start.seconds, "end": seg.end.seconds, "speaker": who?.0 ?? "Unknown", "is_me": who?.1 ?? false, "text": seg.text]
         }
         var summaries: [String: Any] = [:]
         var notes = ""
