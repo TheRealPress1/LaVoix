@@ -52,6 +52,8 @@ import Foundation
 ///   {"op":"dictionary.import","file","replace"?}          -> {"ok":true,"replacements":n,"words":n}   (merges unless replace is true)
 ///   {"op":"meetings.merge_speakers","id","source","into"} / {"op":"meetings.reassign","id","segment","speaker"} / {"op":"meetings.undo","id"}  -> {"ok":true}   (fixes to a finished meeting)
 ///   {"op":"meetings.export","id","format":"text|json"}    -> {"ok":true,"file":"..."}   (the transcript)
+///   {"op":"model.status"}                                 -> {"ok":true,"model":{enabled,selected,state,progress?,error?,models:[{id,name,detail,bytes,downloaded}]}}   (the on-device cleanup model)
+///   {"op":"model.enable","enabled"} / {"op":"model.select","id"} / {"op":"model.download"}  -> {"ok":true}   (download starts and returns; ask model.status for progress)
 /// Failures come back as {"ok":false,"error":"..."} (streams: {"event":"error","error":"..."}).
 nonisolated enum EngineSocket {
     static let maxRequestBytes = 1_000_000
@@ -92,6 +94,7 @@ nonisolated enum EngineSocket {
         var shortcuts: (any EngineShortcutsProviding)?
         var words: (any EngineWordsProviding)?
         var meetingEdits: (any EngineMeetingEditsProviding)?
+        var model: (any EngineModelProviding)?
     }
 
     private static let lock = NSLock()
@@ -129,7 +132,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel())
     }
 
     enum EngineError: LocalizedError {
@@ -368,6 +371,19 @@ nonisolated enum EngineSocket {
             default:
                 guard let id = uuid() else { return fail("missing or bad id") }
                 do { try await dictionary.delete(id: id); _ = emit(["ok": true]) } catch { fail(message(error)) }
+            }
+        case "model.status", "model.enable", "model.select", "model.download":
+            guard let model = services.model else { return fail("the model is not available") }
+            switch op {
+            case "model.status": _ = emit(["ok": true, "model": await model.status()])
+            case "model.enable":
+                guard let enabled = object["enabled"] as? Bool else { return fail("missing enabled") }
+                await model.setEnabled(enabled); _ = emit(["ok": true])
+            case "model.select":
+                guard let id = object["id"] as? String else { return fail("missing id") }
+                do { try await model.select(id: id); _ = emit(["ok": true]) } catch { fail(message(error)) }
+            default:
+                await model.download(); _ = emit(["ok": true])
             }
         case "meetings.merge_speakers", "meetings.reassign", "meetings.undo", "meetings.export":
             guard let edits = services.meetingEdits else { return fail("meetings are not available") }
@@ -660,6 +676,16 @@ private struct FakeContacts: EngineContactsProviding {
     func lookup(emails: [String], phones: [String]) async -> [String: Any] { ["found": emails.first == "a@x.com", "full_name": "Ada Example", "emails": emails, "phones": phones] }
 }
 
+private final class FakeModel: EngineModelProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    var calls: [String] = []
+    private func note(_ s: String) { self.lock.lock(); self.calls.append(s); self.lock.unlock() }
+    func status() async -> [String: Any] { ["enabled": true, "selected": "m1", "state": "ready", "models": [["id": "m1", "name": "Model One", "detail": "", "bytes": 100, "downloaded": true]]] }
+    func setEnabled(_ enabled: Bool) async { self.note("enable:\(enabled)") }
+    func select(id: String) async throws { if id == "nope" { throw EngineModelError.unknownModel }; if id == "busy" { throw EngineModelError.busy }; self.note("select:\(id)") }
+    func download() async { self.note("download") }
+}
+
 private final class FakeMeetingEdits: EngineMeetingEditsProviding, @unchecked Sendable {
     private let lock = NSLock()
     var calls: [String] = []
@@ -735,6 +761,7 @@ nonisolated enum EngineSocketAutotest {
             let fakeHistory = FakeHistory()
             let fakeSpeech = FakeSpeech()
             let fakeEdits = FakeMeetingEdits()
+            let fakeModel = FakeModel()
             let services = EngineSocket.Services(
                 generator: { system, user, maxTokens in
                     if user.contains("explode") { throw NSError(domain: "t", code: 1) }
@@ -764,7 +791,8 @@ nonisolated enum EngineSocketAutotest {
                 permissions: FakePermissions(),
                 shortcuts: FakeShortcuts(),
                 words: FakeWords(),
-                meetingEdits: fakeEdits
+                meetingEdits: fakeEdits,
+                model: fakeModel
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -966,6 +994,14 @@ nonisolated enum EngineSocketAutotest {
             let act = ask(#"{"op":"activity"}"#)?["activity"] as? [String: Any]
             check("activity reports what the engine is busy with", act?["dictating"] as? Bool == true && act?["busy"] as? Bool == true && act?["recording"] as? Bool == false)
 
+            // the on-device model
+            do {
+                let ms = ask(#"{"op":"model.status"}"#)?["model"] as? [String: Any]
+                check("model.status reports state, selection and the catalog", ms?["state"] as? String == "ready" && ms?["selected"] as? String == "m1" && (ms?["models"] as? [[String: Any]])?.count == 1)
+                check("model.enable, select and download reach the model", ask(#"{"op":"model.enable","enabled":false}"#)?["ok"] as? Bool == true && ask(#"{"op":"model.select","id":"m1"}"#)?["ok"] as? Bool == true && ask(#"{"op":"model.download"}"#)?["ok"] as? Bool == true && fakeModel.calls == ["enable:false", "select:m1", "download"])
+                check("model.select refuses an unknown or busy model", ask(#"{"op":"model.select","id":"nope"}"#)?["ok"] as? Bool == false && ask(#"{"op":"model.select","id":"busy"}"#)?["ok"] as? Bool == false)
+                check("model.enable needs true or false", ask(#"{"op":"model.enable"}"#)?["ok"] as? Bool == false)
+            }
             // fixing meetings
             do {
                 let a = UUID().uuidString, b = UUID().uuidString, m = UUID().uuidString
