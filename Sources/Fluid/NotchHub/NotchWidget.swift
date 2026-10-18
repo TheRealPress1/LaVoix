@@ -30,6 +30,9 @@ enum NotchWidgetRegistry {
         widgets.append(NotchWidget(id: "nowplaying", title: "Now Playing", systemImage: "music.note") {
             AnyView(NowPlayingWidgetView(store: NowPlayingStore.shared))
         })
+        widgets.append(NotchWidget(id: "links", title: "Quick links", systemImage: "link") {
+            AnyView(QuickLinksWidgetView(store: QuickLinksStore.shared))
+        })
         if NotchCalendarSettings.isEnabled {
             widgets.append(NotchWidget(id: "calendar", title: "Calendar", systemImage: "calendar") {
                 AnyView(CalendarWidgetView(store: CalendarStore.shared))

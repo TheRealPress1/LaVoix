@@ -1076,6 +1076,14 @@ nonisolated enum EngineSocketAutotest {
                 check("meetings.export returns the transcript and refuses odd formats", (ask(#"{"op":"meetings.export","id":"\#(m)","format":"json"}"#)?["file"] as? String)?.contains("json") == true && ask(#"{"op":"meetings.export","id":"\#(m)","format":"pdf"}"#)?["ok"] as? Bool == false)
                 check("the edits reached the meeting service", fakeEdits.calls == ["merge", "reassign", "undo"])
             }
+            // quick links in the notch
+            do {
+                let file = #"{"links":[{"id":"a","label":" LinkedIn ","value":"https://linkedin.com/in/me"},{"id":"a","label":"Site","value":"https://me.com"},{"id":"c","label":"","value":"x"},{"id":"d","label":"No text","value":"  "}]}"#
+                let parsed = QuickLinksStore.parse(Data(file.utf8))
+                check("quick links are read in order, trimmed, with blank entries dropped", parsed.map(\.label) == ["LinkedIn", "Site"] && parsed[0].value == "https://linkedin.com/in/me")
+                check("quick link ids stay unique", Set(parsed.map(\.id)).count == 2)
+                check("a file that isn't ours gives no links", QuickLinksStore.parse(Data("not json".utf8)).isEmpty && QuickLinksStore.parse(Data(#"{"other":1}"#.utf8)).isEmpty)
+            }
             // boost words and dictionary files
             do {
                 check("words.add keeps a word with its other spellings", ((ask(#"{"op":"words.add","text":"  Qwen ","aliases":["quen","QUEN","  ","qwen"]}"#)?["word"] as? [String: Any])?["aliases"] as? [String]) == ["quen"])
