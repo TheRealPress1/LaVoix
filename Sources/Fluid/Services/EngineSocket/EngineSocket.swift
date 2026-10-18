@@ -47,6 +47,9 @@ import Foundation
 ///   {"op":"permissions.request","name"}                   -> {"ok":true}   (shows macOS's own question where there is one; Full Disk Access is refused, the user switches it on in System Settings)
 ///   {"op":"shortcuts.get"}                                -> {"ok":true,"shortcuts":{dictation:[...],edit,command,cancel,paste_last}}   (labels such as "Fn"; read-only)
 ///   {"op":"audio.inputs"}                                 -> {"ok":true,"audio":{inputs:[{uid,name,preferred,default}]}}   (read-only)
+///   {"op":"words.list"} / {"op":"words.add","text","aliases"?} / {"op":"words.delete","text"}  -> {"ok":true,"words":[{text,aliases}]} / {"ok":true,"word":{...}} / {"ok":true}   (boost words)
+///   {"op":"dictionary.export"}                            -> {"ok":true,"file":"<json>"}   (replacements and boost words, as LaVoix's own export file)
+///   {"op":"dictionary.import","file","replace"?}          -> {"ok":true,"replacements":n,"words":n}   (merges unless replace is true)
 /// Failures come back as {"ok":false,"error":"..."} (streams: {"event":"error","error":"..."}).
 nonisolated enum EngineSocket {
     static let maxRequestBytes = 1_000_000
@@ -85,6 +88,7 @@ nonisolated enum EngineSocket {
         var contacts: (any EngineContactsProviding)?
         var permissions: (any EnginePermissionsProviding)?
         var shortcuts: (any EngineShortcutsProviding)?
+        var words: (any EngineWordsProviding)?
     }
 
     private static let lock = NSLock()
@@ -122,7 +126,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords())
     }
 
     enum EngineError: LocalizedError {
@@ -362,6 +366,25 @@ nonisolated enum EngineSocket {
                 guard let id = uuid() else { return fail("missing or bad id") }
                 do { try await dictionary.delete(id: id); _ = emit(["ok": true]) } catch { fail(message(error)) }
             }
+        case "words.list", "words.add", "words.delete", "dictionary.export", "dictionary.import":
+            guard let words = services.words else { return fail("the dictionary is not available") }
+            do {
+                switch op {
+                case "words.list": _ = emit(["ok": true, "words": await words.list()])
+                case "words.add":
+                    guard let text = object["text"] as? String else { return fail("missing text") }
+                    _ = emit(["ok": true, "word": try await words.add(text: text, aliases: object["aliases"] as? [String] ?? [])])
+                case "words.delete":
+                    guard let text = object["text"] as? String else { return fail("missing text") }
+                    try await words.delete(text: text); _ = emit(["ok": true])
+                case "dictionary.export": _ = emit(["ok": true, "file": try await words.export()])
+                default:
+                    guard let file = object["file"] as? String else { return fail("missing file") }
+                    var out = try await words.importFile(file, replace: object["replace"] as? Bool ?? false)
+                    out["ok"] = true
+                    _ = emit(out)
+                }
+            } catch { fail(message(error)) }
         case "stats.get":
             guard let stats = services.stats else { return fail("stats are not available") }
             do { _ = emit(["ok": true, "stats": try await stats.snapshot()]) } catch { fail("could not work out the stats") }
@@ -616,6 +639,29 @@ private struct FakeContacts: EngineContactsProviding {
     func lookup(emails: [String], phones: [String]) async -> [String: Any] { ["found": emails.first == "a@x.com", "full_name": "Ada Example", "emails": emails, "phones": phones] }
 }
 
+private final class FakeWords: EngineWordsProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var words: [(text: String, aliases: [String])] = []
+    func list() async -> [[String: Any]] { self.lock.lock(); defer { self.lock.unlock() }; return self.words.map { ["text": $0.text, "aliases": $0.aliases] } }
+    func add(text: String, aliases: [String]) async throws -> [String: Any] {
+        let c = try WordRules.clean(text: text, aliases: aliases)
+        self.lock.lock(); defer { self.lock.unlock() }
+        self.words.removeAll { $0.text.lowercased() == c.text.lowercased() }
+        self.words.insert((c.text, c.aliases), at: 0)
+        return ["text": c.text, "aliases": c.aliases]
+    }
+    func delete(text: String) async throws {
+        self.lock.lock(); defer { self.lock.unlock() }
+        guard self.words.contains(where: { $0.text == text }) else { throw EngineWordsError.notFound }
+        self.words.removeAll { $0.text == text }
+    }
+    func export() async throws -> String { "{\"replacements\":[]}" }
+    func importFile(_ json: String, replace: Bool) async throws -> [String: Any] {
+        guard json.contains("replacements") else { throw EngineWordsError.unreadable }
+        return ["replacements": 0, "words": self.words.count]
+    }
+}
+
 private struct FakeShortcuts: EngineShortcutsProviding {
     func shortcuts() async -> [String: Any] { ["dictation": ["Fn"], "edit": "Right Option", "command": "", "cancel": "Esc", "paste_last": ""] }
     func inputs() async -> [String: Any] { ["inputs": [["uid": "mic1", "name": "Test Mic", "preferred": true, "default": true]]] }
@@ -684,7 +730,8 @@ nonisolated enum EngineSocketAutotest {
                 activity: FakeActivity(),
                 contacts: FakeContacts(),
                 permissions: FakePermissions(),
-                shortcuts: FakeShortcuts()
+                shortcuts: FakeShortcuts(),
+                words: FakeWords()
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -886,6 +933,15 @@ nonisolated enum EngineSocketAutotest {
             let act = ask(#"{"op":"activity"}"#)?["activity"] as? [String: Any]
             check("activity reports what the engine is busy with", act?["dictating"] as? Bool == true && act?["busy"] as? Bool == true && act?["recording"] as? Bool == false)
 
+            // boost words and dictionary files
+            do {
+                check("words.add keeps a word with its other spellings", ((ask(#"{"op":"words.add","text":"  Qwen ","aliases":["quen","QUEN","  ","qwen"]}"#)?["word"] as? [String: Any])?["aliases"] as? [String]) == ["quen"])
+                check("words.list returns it", ((ask(#"{"op":"words.list"}"#)?["words"] as? [[String: Any]])?.first?["text"] as? String) == "Qwen")
+                check("words.add refuses an empty word", ask(#"{"op":"words.add","text":"   "}"#)?["ok"] as? Bool == false)
+                check("words.delete removes it, and a missing word is refused", ask(#"{"op":"words.delete","text":"Qwen"}"#)?["ok"] as? Bool == true && ask(#"{"op":"words.delete","text":"Qwen"}"#)?["ok"] as? Bool == false)
+                check("dictionary.export returns a file", (ask(#"{"op":"dictionary.export"}"#)?["file"] as? String)?.contains("replacements") == true)
+                check("dictionary.import reads a file and refuses nonsense", ask(#"{"op":"dictionary.import","file":"{\"replacements\":[]}"}"#)?["ok"] as? Bool == true && ask(#"{"op":"dictionary.import","file":"hello"}"#)?["ok"] as? Bool == false)
+            }
             // shortcuts and microphones
             do {
                 let sc = ask(#"{"op":"shortcuts.get"}"#)?["shortcuts"] as? [String: Any]
