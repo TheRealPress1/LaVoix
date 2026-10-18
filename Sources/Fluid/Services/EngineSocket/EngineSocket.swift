@@ -1,3 +1,4 @@
+import Contacts
 import Darwin
 import Foundation
 
@@ -40,7 +41,7 @@ import Foundation
 ///   {"op":"speech.list"}                                  -> {"ok":true,"speech":{models:[{id,name,brand,language,size,installed,active,update_available,accuracy,speed,description}],blocked,downloading?:{id,progress,cancelling},error?}}
 ///   {"op":"speech.activate","id"} / speech.download / speech.delete / {"op":"speech.cancel"}  -> {"ok":true}   (start the work and return; ask speech.list for progress)
 ///   {"op":"activity"}                                     -> {"ok":true,"activity":{recording,meeting_processing,dictating,busy}}   (so background work can wait its turn)
-///   {"op":"contacts.lookup","emails":[...],"phones":[...]} -> {"ok":true,"contact":{found,full_name,nickname,organization,job_title,emails,phones,photo?}}   (found by those addresses only)
+///   {"op":"contacts.lookup","emails":[...],"phones":[...]} -> {"ok":true,"contact":{found,full_name,nickname,organization,job_title,emails,phones,photo?,birthday?{month,day},dates?[{label,month,day}],addresses?[{label,city,state,country}],relations?[{label,name}],urls?[...]}}   (found by those addresses only; no birth year, no street)
 /// Failures come back as {"ok":false,"error":"..."} (streams: {"event":"error","error":"..."}).
 nonisolated enum EngineSocket {
     static let maxRequestBytes = 1_000_000
@@ -857,6 +858,22 @@ nonisolated enum EngineSocketAutotest {
             check("activity reports what the engine is busy with", act?["dictating"] as? Bool == true && act?["busy"] as? Bool == true && act?["recording"] as? Bool == false)
 
             // contacts
+            do {
+                let card = CNMutableContact()
+                card.birthday = DateComponents(year: 1990, month: 3, day: 4)
+                card.dates = [CNLabeledValue(label: CNLabelDateAnniversary, value: DateComponents(month: 6, day: 12) as NSDateComponents)]
+                let addr = CNMutablePostalAddress(); addr.street = "1 Secret Street"; addr.city = "Providence"; addr.state = "RI"; addr.postalCode = "02903"; addr.country = "USA"
+                card.postalAddresses = [CNLabeledValue(label: CNLabelHome, value: addr)]
+                card.contactRelations = [CNLabeledValue(label: CNLabelContactRelationSister, value: CNContactRelation(name: "Priya"))]
+                card.urlAddresses = [CNLabeledValue(label: CNLabelWork, value: "https://www.linkedin.com/in/ada" as NSString)]
+                card.socialProfiles = [CNLabeledValue(label: nil, value: CNSocialProfile(urlString: "https://instagram.com/ada", username: "ada", userIdentifier: nil, service: "Instagram"))]
+                let d = EngineContactDetails.details(of: card)
+                let blob = String(describing: d)
+                check("contact details carry the birthday as month and day only", (d["birthday"] as? [String: Int]) == ["month": 3, "day": 4] && !blob.contains("1990"))
+                check("contact details carry other dates, relatives and links", ((d["dates"] as? [[String: Any]])?.first?["month"] as? Int) == 6 && ((d["relations"] as? [[String: Any]])?.first?["name"] as? String) == "Priya" && ((d["urls"] as? [String])?.count == 2))
+                check("contact details keep the city but never the street or postcode", ((d["addresses"] as? [[String: Any]])?.first?["city"] as? String) == "Providence" && !blob.contains("Secret") && !blob.contains("02903"))
+                check("a card with nothing extra has no extra keys", EngineContactDetails.details(of: CNMutableContact()).isEmpty)
+            }
             let cl = ask(#"{"op":"contacts.lookup","emails":["a@x.com"],"phones":["+14155551234"]}"#)?["contact"] as? [String: Any]
             check("contacts.lookup returns the card for the addresses it was given", cl?["found"] as? Bool == true && cl?["full_name"] as? String == "Ada Example")
             check("contacts.lookup says when nobody matches", ((ask(#"{"op":"contacts.lookup","emails":["nobody@x.com"]}"#)?["contact"] as? [String: Any])?["found"] as? Bool) == false)
