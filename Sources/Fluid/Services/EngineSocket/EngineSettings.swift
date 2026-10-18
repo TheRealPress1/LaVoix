@@ -100,6 +100,10 @@ enum SettingsRegistry {
         SettingSpec(key: key, group: group, title: title, detail: detail, kind: .int(min: min, max: max), read: { s[keyPath: path] }, write: { s[keyPath: path] = ($0 as? Int) ?? s[keyPath: path] })
     }
 
+    private static func double(_ key: String, _ group: String, _ title: String, _ detail: String, min: Double, max: Double, step: Double, _ path: ReferenceWritableKeyPath<SettingsStore, Double>) -> SettingSpec {
+        SettingSpec(key: key, group: group, title: title, detail: detail, kind: .double(min: min, max: max, step: step), read: { s[keyPath: path] }, write: { s[keyPath: path] = ($0 as? Double) ?? s[keyPath: path] })
+    }
+
     private static func text(_ key: String, _ group: String, _ title: String, _ detail: String, _ path: ReferenceWritableKeyPath<SettingsStore, String>) -> SettingSpec {
         SettingSpec(key: key, group: group, title: title, detail: detail, kind: .text, read: { s[keyPath: path] }, write: { s[keyPath: path] = ($0 as? String) ?? s[keyPath: path] })
     }
@@ -124,6 +128,10 @@ enum SettingsRegistry {
                 (.automatic, "Automatic (both)"), (.doubleTapLatch, "Hold, or double-tap to latch"),
             ], \.hotkeyMode),
             bool("dictation.sounds", "Dictation", "Sounds", "Play a sound when dictation starts and stops.", \.enableTranscriptionSounds),
+            bool("dictation.pause_media", "Dictation", "Pause music while you talk", "Pause what is playing during dictation and resume after.", \.pauseMediaDuringTranscription),
+            bool("dictation.spoken_send", "Dictation", "Say \"send\" to press Return", "End a dictation with your send phrase to submit it.", \.spokenSendEnabled),
+            text("dictation.spoken_send_phrase", "Dictation", "Send phrase", "The words that press Return when you end with them.", \.spokenSendPhrase),
+            bool("dictation.spoken_send_immediately", "Dictation", "Send straight away", "Press Return as soon as the send phrase is heard.", \.spokenSendImmediatelyEnabled),
             // Cleanup
             bool("cleanup.ai", "Cleanup", "Clean up with AI", "Tidy each dictation with the on-device model (or your chosen provider) before typing it.", \.enableAIProcessing),
             bool("cleanup.filler_words", "Cleanup", "Remove filler words", "Drop \"um\", \"uh\" and the like.", \.removeFillerWordsEnabled),
@@ -156,6 +164,7 @@ enum SettingsRegistry {
             choice("overlay.size", "Notch & overlay", "Overlay size", "", [
                 (SettingsStore.OverlaySize.pill, "Pill"), (.small, "Small"), (.medium, "Medium"), (.large, "Large"),
             ], \.overlaySize),
+            double("overlay.bottom_offset", "Notch & overlay", "Distance from the bottom", "How far above the screen edge the bottom overlay sits.", min: 10, max: 500, step: 5, \.overlayBottomOffset),
             choice("meetings.overlay", "Notch & overlay", "While recording a meeting", "Show a small pill or live captions.", [
                 (MeetingOverlayPreference.pill, "Pill"), (.captions, "Live captions"),
             ], \.meetingOverlayPreference),

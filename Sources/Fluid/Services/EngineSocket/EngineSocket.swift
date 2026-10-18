@@ -45,6 +45,8 @@ import Foundation
 ///   {"op":"contacts.lookup","emails":[...],"phones":[...]} -> {"ok":true,"contact":{found,full_name,nickname,organization,job_title,emails,phones,photo?,birthday?{month,day},dates?[{label,month,day}],addresses?[{label,city,state,country}],relations?[{label,name}],urls?[...]}}   (found by those addresses only; no birth year, no street)
 ///   {"op":"permissions.status"}                          -> {"ok":true,"permissions":{microphone,accessibility,input_monitoring,contacts,full_disk_access}}   (each "granted" | "denied" | "not_asked"; read-only)
 ///   {"op":"permissions.request","name"}                   -> {"ok":true}   (shows macOS's own question where there is one; Full Disk Access is refused, the user switches it on in System Settings)
+///   {"op":"shortcuts.get"}                                -> {"ok":true,"shortcuts":{dictation:[...],edit,command,cancel,paste_last}}   (labels such as "Fn"; read-only)
+///   {"op":"audio.inputs"}                                 -> {"ok":true,"audio":{inputs:[{uid,name,preferred,default}]}}   (read-only)
 /// Failures come back as {"ok":false,"error":"..."} (streams: {"event":"error","error":"..."}).
 nonisolated enum EngineSocket {
     static let maxRequestBytes = 1_000_000
@@ -82,6 +84,7 @@ nonisolated enum EngineSocket {
         var activity: (any EngineActivityProviding)?
         var contacts: (any EngineContactsProviding)?
         var permissions: (any EnginePermissionsProviding)?
+        var shortcuts: (any EngineShortcutsProviding)?
     }
 
     private static let lock = NSLock()
@@ -119,7 +122,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts())
     }
 
     enum EngineError: LocalizedError {
@@ -314,6 +317,9 @@ nonisolated enum EngineSocket {
             let phones = (object["phones"] as? [String] ?? []).filter { $0.count <= 40 }
             guard !emails.isEmpty || !phones.isEmpty else { return fail("give at least one email or phone number") }
             _ = emit(["ok": true, "contact": await contacts.lookup(emails: emails, phones: phones)])
+        case "shortcuts.get", "audio.inputs":
+            guard let shortcuts = services.shortcuts else { return fail("shortcuts are not available") }
+            if op == "shortcuts.get" { _ = emit(["ok": true, "shortcuts": await shortcuts.shortcuts()]) } else { _ = emit(["ok": true, "audio": await shortcuts.inputs()]) }
         case "permissions.status":
             guard let permissions = services.permissions else { return fail("permissions are not available") }
             _ = emit(["ok": true, "permissions": await permissions.status()])
@@ -610,6 +616,11 @@ private struct FakeContacts: EngineContactsProviding {
     func lookup(emails: [String], phones: [String]) async -> [String: Any] { ["found": emails.first == "a@x.com", "full_name": "Ada Example", "emails": emails, "phones": phones] }
 }
 
+private struct FakeShortcuts: EngineShortcutsProviding {
+    func shortcuts() async -> [String: Any] { ["dictation": ["Fn"], "edit": "Right Option", "command": "", "cancel": "Esc", "paste_last": ""] }
+    func inputs() async -> [String: Any] { ["inputs": [["uid": "mic1", "name": "Test Mic", "preferred": true, "default": true]]] }
+}
+
 private struct FakePermissions: EnginePermissionsProviding {
     func status() async -> [String: String] { Dictionary(uniqueKeysWithValues: EnginePermissionNames.all.map { ($0, $0 == "contacts" ? "denied" : "granted") }) }
     func request(_ name: String) async throws { if name == "full_disk_access" { throw EnginePermissionsError.notPromptable } }
@@ -672,7 +683,8 @@ nonisolated enum EngineSocketAutotest {
                 speech: fakeSpeech,
                 activity: FakeActivity(),
                 contacts: FakeContacts(),
-                permissions: FakePermissions()
+                permissions: FakePermissions(),
+                shortcuts: FakeShortcuts()
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -874,6 +886,13 @@ nonisolated enum EngineSocketAutotest {
             let act = ask(#"{"op":"activity"}"#)?["activity"] as? [String: Any]
             check("activity reports what the engine is busy with", act?["dictating"] as? Bool == true && act?["busy"] as? Bool == true && act?["recording"] as? Bool == false)
 
+            // shortcuts and microphones
+            do {
+                let sc = ask(#"{"op":"shortcuts.get"}"#)?["shortcuts"] as? [String: Any]
+                check("shortcuts.get reports the dictation keys", (sc?["dictation"] as? [String]) == ["Fn"] && sc?["cancel"] as? String == "Esc")
+                let inputs = (ask(#"{"op":"audio.inputs"}"#)?["audio"] as? [String: Any])?["inputs"] as? [[String: Any]]
+                check("audio.inputs lists the microphones and which is preferred", inputs?.first?["name"] as? String == "Test Mic" && inputs?.first?["preferred"] as? Bool == true)
+            }
             // permissions
             do {
                 check("macOS authorization states map to granted, denied or not_asked",
