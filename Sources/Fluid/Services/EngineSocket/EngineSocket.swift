@@ -1082,6 +1082,12 @@ nonisolated enum EngineSocketAutotest {
                 let parsed = QuickLinksStore.parse(Data(file.utf8))
                 check("quick links are read in order, trimmed, with blank entries dropped", parsed.map(\.label) == ["LinkedIn", "Site"] && parsed[0].value == "https://linkedin.com/in/me")
                 check("quick link ids stay unique", Set(parsed.map(\.id)).count == 2)
+                let added = try? QuickLinksStore.adding(label: " Site ", value: " https://me.com ", to: parsed, id: "a")
+                check("adding a quick link trims it, keeps the others and keeps ids unique", added?.count == 3 && added?.last?.label == "Site" && added?.last?.value == "https://me.com" && Set(added?.map(\.id) ?? []).count == 3)
+                check("a quick link needs a name and text and the list holds forty", (try? QuickLinksStore.adding(label: "", value: "x", to: [])) == nil && (try? QuickLinksStore.adding(label: "x", value: " ", to: [])) == nil
+                        && (try? QuickLinksStore.adding(label: "x", value: "y", to: (0..<40).map { QuickLinksStore.Link(id: "\($0)", label: "l", value: "v") })) == nil)
+                check("what is saved reads back the same", (try? QuickLinksStore.encode(added ?? [])).map(QuickLinksStore.parse) == added)
+                check("a link suggests a name from its address", QuickLinksWidgetView.nameGuess(for: "https://www.linkedin.com/in/me") == "Linkedin" && QuickLinksWidgetView.nameGuess(for: "just text") == nil)
                 check("a file that isn't ours gives no links", QuickLinksStore.parse(Data("not json".utf8)).isEmpty && QuickLinksStore.parse(Data(#"{"other":1}"#.utf8)).isEmpty)
             }
             // boost words and dictionary files
