@@ -1,3 +1,4 @@
+import AVFoundation
 import Contacts
 import Darwin
 import Foundation
@@ -42,6 +43,8 @@ import Foundation
 ///   {"op":"speech.activate","id"} / speech.download / speech.delete / {"op":"speech.cancel"}  -> {"ok":true}   (start the work and return; ask speech.list for progress)
 ///   {"op":"activity"}                                     -> {"ok":true,"activity":{recording,meeting_processing,dictating,busy}}   (so background work can wait its turn)
 ///   {"op":"contacts.lookup","emails":[...],"phones":[...]} -> {"ok":true,"contact":{found,full_name,nickname,organization,job_title,emails,phones,photo?,birthday?{month,day},dates?[{label,month,day}],addresses?[{label,city,state,country}],relations?[{label,name}],urls?[...]}}   (found by those addresses only; no birth year, no street)
+///   {"op":"permissions.status"}                          -> {"ok":true,"permissions":{microphone,accessibility,input_monitoring,contacts,full_disk_access}}   (each "granted" | "denied" | "not_asked"; read-only)
+///   {"op":"permissions.request","name"}                   -> {"ok":true}   (shows macOS's own question where there is one; Full Disk Access is refused, the user switches it on in System Settings)
 /// Failures come back as {"ok":false,"error":"..."} (streams: {"event":"error","error":"..."}).
 nonisolated enum EngineSocket {
     static let maxRequestBytes = 1_000_000
@@ -78,6 +81,7 @@ nonisolated enum EngineSocket {
         var speech: (any EngineSpeechProviding)?
         var activity: (any EngineActivityProviding)?
         var contacts: (any EngineContactsProviding)?
+        var permissions: (any EnginePermissionsProviding)?
     }
 
     private static let lock = NSLock()
@@ -115,7 +119,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions())
     }
 
     enum EngineError: LocalizedError {
@@ -310,6 +314,13 @@ nonisolated enum EngineSocket {
             let phones = (object["phones"] as? [String] ?? []).filter { $0.count <= 40 }
             guard !emails.isEmpty || !phones.isEmpty else { return fail("give at least one email or phone number") }
             _ = emit(["ok": true, "contact": await contacts.lookup(emails: emails, phones: phones)])
+        case "permissions.status":
+            guard let permissions = services.permissions else { return fail("permissions are not available") }
+            _ = emit(["ok": true, "permissions": await permissions.status()])
+        case "permissions.request":
+            guard let permissions = services.permissions else { return fail("permissions are not available") }
+            guard let name = object["name"] as? String, EnginePermissionNames.all.contains(name) else { return fail("name must be one of: \(EnginePermissionNames.all.joined(separator: ", "))") }
+            do { try await permissions.request(name); _ = emit(["ok": true]) } catch EnginePermissionsError.notPromptable { fail("macOS can't ask for this one: switch it on in System Settings") } catch { fail(message(error)) }
         case "activity":
             guard let activity = services.activity else { return fail("activity is not available") }
             _ = emit(["ok": true, "activity": await activity.snapshot()])
@@ -599,6 +610,11 @@ private struct FakeContacts: EngineContactsProviding {
     func lookup(emails: [String], phones: [String]) async -> [String: Any] { ["found": emails.first == "a@x.com", "full_name": "Ada Example", "emails": emails, "phones": phones] }
 }
 
+private struct FakePermissions: EnginePermissionsProviding {
+    func status() async -> [String: String] { Dictionary(uniqueKeysWithValues: EnginePermissionNames.all.map { ($0, $0 == "contacts" ? "denied" : "granted") }) }
+    func request(_ name: String) async throws { if name == "full_disk_access" { throw EnginePermissionsError.notPromptable } }
+}
+
 private struct FakeActivity: EngineActivityProviding {
     func snapshot() async -> [String: Any] { ["recording": false, "meeting_processing": false, "dictating": true, "busy": true] }
 }
@@ -655,7 +671,8 @@ nonisolated enum EngineSocketAutotest {
                 prompts: FakePrompts(),
                 speech: fakeSpeech,
                 activity: FakeActivity(),
-                contacts: FakeContacts()
+                contacts: FakeContacts(),
+                permissions: FakePermissions()
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -857,6 +874,18 @@ nonisolated enum EngineSocketAutotest {
             let act = ask(#"{"op":"activity"}"#)?["activity"] as? [String: Any]
             check("activity reports what the engine is busy with", act?["dictating"] as? Bool == true && act?["busy"] as? Bool == true && act?["recording"] as? Bool == false)
 
+            // permissions
+            do {
+                check("macOS authorization states map to granted, denied or not_asked",
+                      EnginePermissionState.map(AVAuthorizationStatus.authorized) == "granted" && EnginePermissionState.map(AVAuthorizationStatus.notDetermined) == "not_asked"
+                        && EnginePermissionState.map(AVAuthorizationStatus.denied) == "denied" && EnginePermissionState.map(AVAuthorizationStatus.restricted) == "denied"
+                        && EnginePermissionState.map(CNAuthorizationStatus.authorized) == "granted" && EnginePermissionState.map(CNAuthorizationStatus.notDetermined) == "not_asked"
+                        && EnginePermissionState.map(CNAuthorizationStatus.denied) == "denied" && EnginePermissionState.map(trusted: true) == "granted" && EnginePermissionState.map(trusted: false) == "denied")
+                let ps = ask(#"{"op":"permissions.status"}"#)?["permissions"] as? [String: String]
+                check("permissions.status reports all five permissions", Set(ps?.keys.map { $0 } ?? []) == Set(EnginePermissionNames.all))
+                check("permissions.request works for a promptable permission", ask(#"{"op":"permissions.request","name":"microphone"}"#)?["ok"] as? Bool == true)
+                check("permissions.request refuses Full Disk Access and unknown names", ask(#"{"op":"permissions.request","name":"full_disk_access"}"#)?["ok"] as? Bool == false && ask(#"{"op":"permissions.request","name":"nope"}"#)?["ok"] as? Bool == false)
+            }
             // contacts
             do {
                 let card = CNMutableContact()
