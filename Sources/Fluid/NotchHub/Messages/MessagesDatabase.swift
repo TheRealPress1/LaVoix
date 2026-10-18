@@ -133,6 +133,27 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
         }
     }
 
+    /// Group chats with who is in them and how active they are. Counts and dates only, never text. nil when the database couldn't be read.
+    func groupChats() -> [GroupChatsExport.Group]? {
+        let count = "(SELECT COUNT(*) FROM chat_message_join j JOIN message m ON m.ROWID = j.message_id WHERE j.chat_id = c.ROWID AND m.item_type = 0 AND m.associated_message_type = 0"
+        let sql = """
+        SELECT c.guid, COALESCE(c.display_name, ''),
+               COALESCE((SELECT GROUP_CONCAT(h.id, ',') FROM chat_handle_join chj JOIN handle h ON h.ROWID = chj.handle_id WHERE chj.chat_id = c.ROWID), ''),
+               \(count)), \(count) AND m.is_from_me = 1),
+               (SELECT MAX(m.date) FROM chat_message_join j JOIN message m ON m.ROWID = j.message_id WHERE j.chat_id = c.ROWID)
+        FROM chat c WHERE c.style = 43
+        """
+        return self.query(sql, bind: { _ in }) { row in
+            let last = sqlite3_column_int64(row, 5)
+            return GroupChatsExport.Group(
+                guid: Self.string(row, 0), name: Self.string(row, 1),
+                handles: Self.string(row, 2).split(separator: ",").map(String.init),
+                total: Int(sqlite3_column_int(row, 3)), fromMe: Int(sqlite3_column_int(row, 4)),
+                lastAt: last > 0 ? Self.date(last) : nil
+            )
+        }
+    }
+
     struct ContentRow {
         let rowid: Int64
         let chat: String

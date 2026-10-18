@@ -1076,6 +1076,23 @@ nonisolated enum EngineSocketAutotest {
                 check("meetings.export returns the transcript and refuses odd formats", (ask(#"{"op":"meetings.export","id":"\#(m)","format":"json"}"#)?["file"] as? String)?.contains("json") == true && ask(#"{"op":"meetings.export","id":"\#(m)","format":"pdf"}"#)?["ok"] as? Bool == false)
                 check("the edits reached the meeting service", fakeEdits.calls == ["merge", "reassign", "undo"])
             }
+            // group chats for the people map
+            do {
+                let day = Date(timeIntervalSince1970: 1_790_000_000)
+                let raw = [
+                    GroupChatsExport.Group(guid: "g1", name: " Ski trip ", handles: ["+14155550101", "ada@x.com", "+14155550101", "123", "+14155550102"], total: 40, fromMe: 9, lastAt: day),
+                    GroupChatsExport.Group(guid: "g2", name: "Pair", handles: ["+14155550101"], total: 5, fromMe: 1, lastAt: nil),
+                    GroupChatsExport.Group(guid: "g3", name: "Big list", handles: (0..<60).map { "+1415555\(String(format: "%04d", $0))" }, total: 3, fromMe: 0, lastAt: nil),
+                    GroupChatsExport.Group(guid: "g4", name: "With a blocked one", handles: ["+14155550101", "+14155550103"], total: 2, fromMe: 0, lastAt: day),
+                ]
+                let kept = GroupChatsExport.prepare(raw, excluded: ["+14155550103"])
+                check("group chats keep 2 to 40 other people with a usable handle, deduplicated", kept.map(\.name) == ["Ski trip"] && kept[0].handles == ["+14155550101", "+14155550102", "ada@x.com"])
+                check("an excluded person leaves a chat that is then too small", !kept.contains { $0.guid == "g4" })
+                let data = (try? GroupChatsExport.encode(kept, now: day)) ?? Data()
+                let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                let first = (parsed?["groups"] as? [[String: Any]])?.first
+                check("the group file has members and counts and no text, and hides the chat identifier", (first?["handles"] as? [String])?.count == 3 && first?["total"] as? Int == 40 && first?["id"] as? String == GroupChatsExport.id(for: "g1") && !String(decoding: data, as: UTF8.self).contains("g1"))
+            }
             // quick links in the notch
             do {
                 let file = #"{"links":[{"id":"a","label":" LinkedIn ","value":"https://linkedin.com/in/me"},{"id":"a","label":"Site","value":"https://me.com"},{"id":"c","label":"","value":"x"},{"id":"d","label":"No text","value":"  "}]}"#

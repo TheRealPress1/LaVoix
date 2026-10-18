@@ -238,6 +238,11 @@ final class MessagesInboxScheduler {
             } else {
                 PrivateMessageStore.purge()
             }
+            // Who is in which group chat (names and members, never text), for the people map.
+            if let groups = database.groupChats() {
+                let shared = GroupChatsExport.prepare(groups, excluded: excluded)
+                do { try GroupChatsExport.write(shared) } catch { DebugLogger.shared.warning("Group chats export failed: \(error.localizedDescription)", source: "MessagesInbox") }
+            }
             do {
                 if let file = try MessageActivity.write(conversations: conversations, dataDirectory: data) {
                     DebugLogger.shared.info("Shared \(conversations.count) conversations' activity with myOS (\(file.lastPathComponent))", source: "MessagesInbox")
