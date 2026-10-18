@@ -54,6 +54,11 @@ import Foundation
 ///   {"op":"meetings.export","id","format":"text|json"}    -> {"ok":true,"file":"..."}   (the transcript)
 ///   {"op":"model.status"}                                 -> {"ok":true,"model":{enabled,selected,state,progress?,error?,models:[{id,name,detail,bytes,downloaded}]}}   (the on-device cleanup model)
 ///   {"op":"model.enable","enabled"} / {"op":"model.select","id"} / {"op":"model.download"}  -> {"ok":true}   (download starts and returns; ask model.status for progress)
+///   {"op":"providers.list"}                              -> {"ok":true,"providers":[{id,name,base_url,has_key,local,built_in,selected,model}]}   (a key is never sent back, only whether one is stored)
+///   {"op":"providers.set_key","id","key"}                 -> {"ok":true}   (an empty key removes it; stored in the Keychain)
+///   {"op":"providers.add","name","base_url","key"?} / {"op":"providers.remove","id"}  -> {"ok":true,"provider":{...}} / {"ok":true}   (your own OpenAI-compatible server; built-ins can't be removed)
+///   {"op":"providers.models","id"}                        -> {"ok":true,"models":[...]}   (asks the provider, using the stored key)
+///   {"op":"providers.select","id","model"?}               -> {"ok":true}
 /// Failures come back as {"ok":false,"error":"..."} (streams: {"event":"error","error":"..."}).
 nonisolated enum EngineSocket {
     static let maxRequestBytes = 1_000_000
@@ -95,6 +100,7 @@ nonisolated enum EngineSocket {
         var words: (any EngineWordsProviding)?
         var meetingEdits: (any EngineMeetingEditsProviding)?
         var model: (any EngineModelProviding)?
+        var providers: (any EngineProvidersProviding)?
     }
 
     private static let lock = NSLock()
@@ -132,7 +138,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel(), providers: LiveEngineProviders())
     }
 
     enum EngineError: LocalizedError {
@@ -372,6 +378,26 @@ nonisolated enum EngineSocket {
                 guard let id = uuid() else { return fail("missing or bad id") }
                 do { try await dictionary.delete(id: id); _ = emit(["ok": true]) } catch { fail(message(error)) }
             }
+        case "providers.list", "providers.set_key", "providers.add", "providers.remove", "providers.models", "providers.select":
+            guard let providers = services.providers else { return fail("providers are not available") }
+            do {
+                switch op {
+                case "providers.list": _ = emit(["ok": true, "providers": await providers.list()])
+                case "providers.add":
+                    guard let name = object["name"] as? String, let url = object["base_url"] as? String else { return fail("missing name or base_url") }
+                    _ = emit(["ok": true, "provider": try await providers.add(name: name, baseURL: url, key: object["key"] as? String ?? "")])
+                default:
+                    guard let id = object["id"] as? String, !id.isEmpty else { return fail("missing id") }
+                    switch op {
+                    case "providers.set_key":
+                        guard let key = object["key"] as? String else { return fail("missing key") }
+                        try await providers.setKey(id: id, key: key); _ = emit(["ok": true])
+                    case "providers.remove": try await providers.remove(id: id); _ = emit(["ok": true])
+                    case "providers.models": _ = emit(["ok": true, "models": try await providers.models(id: id)])
+                    default: try await providers.select(id: id, model: object["model"] as? String); _ = emit(["ok": true])
+                    }
+                }
+            } catch { fail(message(error)) }
         case "model.status", "model.enable", "model.select", "model.download":
             guard let model = services.model else { return fail("the model is not available") }
             switch op {
@@ -676,6 +702,30 @@ private struct FakeContacts: EngineContactsProviding {
     func lookup(emails: [String], phones: [String]) async -> [String: Any] { ["found": emails.first == "a@x.com", "full_name": "Ada Example", "emails": emails, "phones": phones] }
 }
 
+private final class FakeProviders: EngineProvidersProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var keys: [String: String] = [:]
+    private var custom: [String] = []
+    func list() async -> [[String: Any]] {
+        self.lock.lock(); defer { self.lock.unlock() }
+        return (["openai"] + self.custom).map { ["id": $0, "name": $0, "base_url": "https://x", "has_key": !(self.keys[$0] ?? "").isEmpty, "local": false, "built_in": $0 == "openai", "selected": false, "model": ""] }
+    }
+    func setKey(id: String, key: String) async throws {
+        let k = try ProviderRules.key(key)
+        self.lock.lock(); defer { self.lock.unlock() }
+        guard id == "openai" || self.custom.contains(id) else { throw EngineProvidersError.unknownProvider }
+        if k.isEmpty { self.keys[id] = nil } else { self.keys[id] = k }
+    }
+    func add(name: String, baseURL: String, key: String) async throws -> [String: Any] {
+        let n = try ProviderRules.name(name); _ = try ProviderRules.baseURL(baseURL)
+        self.lock.lock(); self.custom.append(n); self.lock.unlock()
+        return ["id": n, "name": n]
+    }
+    func remove(id: String) async throws { if id == "openai" { throw EngineProvidersError.builtIn }; self.lock.lock(); defer { self.lock.unlock() }; guard self.custom.contains(id) else { throw EngineProvidersError.unknownProvider }; self.custom.removeAll { $0 == id } }
+    func models(id: String) async throws -> [String] { ["m-a", "m-b"] }
+    func select(id: String, model: String?) async throws { if id == "nope" { throw EngineProvidersError.unknownProvider } }
+}
+
 private final class FakeModel: EngineModelProviding, @unchecked Sendable {
     private let lock = NSLock()
     var calls: [String] = []
@@ -792,7 +842,8 @@ nonisolated enum EngineSocketAutotest {
                 shortcuts: FakeShortcuts(),
                 words: FakeWords(),
                 meetingEdits: fakeEdits,
-                model: fakeModel
+                model: fakeModel,
+                providers: FakeProviders()
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -994,6 +1045,19 @@ nonisolated enum EngineSocketAutotest {
             let act = ask(#"{"op":"activity"}"#)?["activity"] as? [String: Any]
             check("activity reports what the engine is busy with", act?["dictating"] as? Bool == true && act?["busy"] as? Bool == true && act?["recording"] as? Bool == false)
 
+            // providers and keys
+            do {
+                check("providers.set_key stores a key and providers.list says so without sending it", ask(#"{"op":"providers.set_key","id":"openai","key":"sk-secret-123"}"#)?["ok"] as? Bool == true)
+                let plist = ask(#"{"op":"providers.list"}"#)
+                let pl = plist?["providers"] as? [[String: Any]]
+                check("a stored key shows as has_key and never appears in a reply", pl?.first?["has_key"] as? Bool == true && !String(describing: plist ?? [:]).contains("sk-secret-123"))
+                check("an empty key removes it", ask(#"{"op":"providers.set_key","id":"openai","key":""}"#)?["ok"] as? Bool == true && ((ask(#"{"op":"providers.list"}"#)?["providers"] as? [[String: Any]])?.first?["has_key"] as? Bool) == false)
+                check("a key with a line break is refused", ask(#"{"op":"providers.set_key","id":"openai","key":"a\nb"}"#)?["ok"] as? Bool == false)
+                check("providers.add needs a name and an http address", ask(#"{"op":"providers.add","name":"Mine","base_url":"ftp://x"}"#)?["ok"] as? Bool == false && ask(#"{"op":"providers.add","name":" ","base_url":"https://x"}"#)?["ok"] as? Bool == false && ask(#"{"op":"providers.add","name":"Mine","base_url":"https://my.server/v1/"}"#)?["ok"] as? Bool == true)
+                check("a built-in provider can't be removed, your own can", ask(#"{"op":"providers.remove","id":"openai"}"#)?["ok"] as? Bool == false && ask(#"{"op":"providers.remove","id":"Mine"}"#)?["ok"] as? Bool == true)
+                check("providers.models lists models and providers.select refuses an unknown provider", (ask(#"{"op":"providers.models","id":"openai"}"#)?["models"] as? [String]) == ["m-a", "m-b"] && ask(#"{"op":"providers.select","id":"nope"}"#)?["ok"] as? Bool == false)
+                check("the provider rules trim and tidy", (try? ProviderRules.baseURL(" https://a.b/v1// ")) == "https://a.b/v1" && (try? ProviderRules.key("  k  ")) == "k")
+            }
             // the on-device model
             do {
                 let ms = ask(#"{"op":"model.status"}"#)?["model"] as? [String: Any]
