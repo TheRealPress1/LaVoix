@@ -313,6 +313,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         if ProcessInfo.processInfo.environment["FLUID_SIMULATE_LOGIN_LAUNCH"] == "1" {
             return true
         }
+        // Started by myOS as its background engine: behave like a login launch, with no window.
+        if CommandLine.arguments.contains("--background") {
+            return true
+        }
         guard let event = NSAppleEventManager.shared().currentAppleEvent else { return false }
         return event.eventID == AEEventID(kAEOpenApplication)
             && event.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue
