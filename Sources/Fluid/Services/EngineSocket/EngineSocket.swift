@@ -345,7 +345,13 @@ nonisolated enum EngineSocket {
             do { try await permissions.request(name); _ = emit(["ok": true]) } catch EnginePermissionsError.notPromptable { fail("macOS can't ask for this one: switch it on in System Settings") } catch { fail(message(error)) }
         case "activity":
             guard let activity = services.activity else { return fail("activity is not available") }
-            _ = emit(["ok": true, "activity": await activity.snapshot()])
+            // An answer that can't be given in time is an error, never a guess: callers use this to avoid interrupting a recording.
+            if let snapshot = await EngineTimeout.run(seconds: 4, { await activity.snapshot() }) {
+                _ = emit(["ok": true, "activity": snapshot])
+            } else {
+                DebugLogger.shared.warning("Activity check stalled at: \(ActivityProbe.step)", source: "EngineSocket")
+                fail("The engine is busy and could not say what it is doing. Try again in a moment.")
+            }
         case "training.rate_ask":
             guard let system = object["system"] as? String, let user = object["user"] as? String, let output = object["output"] as? String,
                   let rating = (object["rating"] as? String).flatMap(TrainingData.Rating.init(rawValue:)) else { return fail("missing system, user, output or a valid rating") }
@@ -1075,6 +1081,13 @@ nonisolated enum EngineSocketAutotest {
                 check("meetings.reassign needs a segment and speaker", ask(#"{"op":"meetings.reassign","id":"\#(m)"}"#)?["ok"] as? Bool == false)
                 check("meetings.export returns the transcript and refuses odd formats", (ask(#"{"op":"meetings.export","id":"\#(m)","format":"json"}"#)?["file"] as? String)?.contains("json") == true && ask(#"{"op":"meetings.export","id":"\#(m)","format":"pdf"}"#)?["ok"] as? Bool == false)
                 check("the edits reached the meeting service", fakeEdits.calls == ["merge", "reassign", "undo"])
+            }
+            // a stuck check gives up instead of hanging
+            do {
+                let quick: Int? = await EngineTimeout.run(seconds: 1) { 7 }
+                let stuck: Int? = await EngineTimeout.run(seconds: 0.2) { try? await Task.sleep(nanoseconds: 2_000_000_000); return 7 }
+                check("a quick operation returns its answer", quick == 7)
+                check("a stuck operation gives up with nothing instead of hanging", stuck == nil)
             }
             // group chats for the people map
             do {
