@@ -1107,6 +1107,12 @@ nonisolated enum EngineSocketAutotest {
                 let first = (parsed?["groups"] as? [[String: Any]])?.first
                 check("the group file has members and counts and no text, and hides the chat identifier", (first?["handles"] as? [String])?.count == 3 && first?["total"] as? Int == 40 && first?["id"] as? String == GroupChatsExport.id(for: "g1") && !String(decoding: data, as: UTF8.self).contains("g1"))
             }
+            // freeze snapshots
+            do {
+                check("a short stall is ignored", !StallRecorder.shouldCapture(stalledFor: 0.3, sinceLastCapture: 500))
+                check("a real stall is recorded", StallRecorder.shouldCapture(stalledFor: 1.2, sinceLastCapture: 500))
+                check("snapshots are spaced out", !StallRecorder.shouldCapture(stalledFor: 5, sinceLastCapture: 30))
+            }
             // now playing
             do {
                 let big = NSImage(size: NSSize(width: 600, height: 600), flipped: false) { rect in NSColor.red.setFill(); rect.fill(); return true }
