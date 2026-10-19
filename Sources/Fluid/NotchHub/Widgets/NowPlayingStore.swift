@@ -23,6 +23,12 @@ enum NotchNowPlayingSettings {
     }
 }
 
+/// Where the current track is, in seconds. Only the progress bar watches this.
+@MainActor
+final class PlaybackClock: ObservableObject {
+    @Published var elapsed: TimeInterval = 0
+}
+
 /// What is playing right now, system-wide (Music, Spotify, browsers, ...), via the MediaRemote bridge.
 /// The listener process only runs while the Now Playing widget is on screen.
 @MainActor
@@ -77,7 +83,13 @@ final class NowPlayingStore: ObservableObject {
     static let maxHistory = 100
 
     @Published private(set) var track: Track?
-    @Published private(set) var elapsed: TimeInterval = 0
+    /// The playback position changes every fraction of a second. It lives in its own object so only the progress bar redraws on each
+    /// tick, not the whole card with its artwork.
+    let clock = PlaybackClock()
+    private(set) var elapsed: TimeInterval {
+        get { self.clock.elapsed }
+        set { self.clock.elapsed = newValue }
+    }
     @Published private(set) var history: [HistoryItem] = []
 
     #if arch(arm64)

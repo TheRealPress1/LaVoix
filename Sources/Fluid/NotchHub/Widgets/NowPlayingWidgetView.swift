@@ -67,9 +67,8 @@ struct NowPlayingWidgetView: View {
             if let art {
                 // Drawn as an overlay of an empty box so the image fills the card but can't make it any wider.
                 Color.clear
-                    .overlay(Image(nsImage: art).resizable().aspectRatio(contentMode: .fill))
+                    .overlay(Image(nsImage: wide ? art : NowPlayingArtwork.soft(art)).resizable().interpolation(.high).aspectRatio(contentMode: .fill))
                     .clipped()
-                    .blur(radius: wide ? 0 : 28)
                     .brightness(wide ? 0 : -0.25)
             } else {
                 LinearGradient(colors: [Color.white.opacity(0.14), Color.white.opacity(0.04)], startPoint: .topLeading, endPoint: .bottomTrailing)
@@ -128,12 +127,11 @@ struct NowPlayingWidgetView: View {
     private func scrubber(_ track: NowPlayingStore.Track) -> some View {
         if let duration = track.duration, duration > 0 {
             HStack(spacing: 8) {
-                Text(Self.clock(self.store.elapsed)).frame(width: 34, alignment: .leading)
+                ElapsedText(clock: self.store.clock).frame(width: 34, alignment: .leading)
                 GeometryReader { proxy in
                     ZStack(alignment: .leading) {
                         Capsule().fill(Color.white.opacity(0.25))
-                        Capsule().fill(Color.white)
-                            .frame(width: max(3, proxy.size.width * min(self.store.elapsed / duration, 1)))
+                        ElapsedFill(clock: self.store.clock, duration: duration, width: proxy.size.width)
                     }
                     .frame(height: 4)
                     .frame(maxHeight: .infinity)
@@ -200,7 +198,7 @@ struct NowPlayingWidgetView: View {
         }
     }
 
-    private static func clock(_ seconds: TimeInterval) -> String {
+    fileprivate static func clock(_ seconds: TimeInterval) -> String {
         let s = Int(max(seconds, 0))
         return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
     }
@@ -266,4 +264,18 @@ private struct HistoryRow: View {
         if seconds < 172_800 { return "Yesterday" }
         return date.formatted(.dateTime.month(.abbreviated).day())
     }
+}
+
+/// The running time, redrawn on its own as the track plays.
+private struct ElapsedText: View {
+    @ObservedObject var clock: PlaybackClock
+    var body: some View { Text(NowPlayingWidgetView.clock(self.clock.elapsed)) }
+}
+
+/// The filled part of the progress bar, redrawn on its own as the track plays.
+private struct ElapsedFill: View {
+    @ObservedObject var clock: PlaybackClock
+    let duration: TimeInterval
+    let width: CGFloat
+    var body: some View { Capsule().fill(Color.white).frame(width: max(3, self.width * min(self.clock.elapsed / self.duration, 1))) }
 }

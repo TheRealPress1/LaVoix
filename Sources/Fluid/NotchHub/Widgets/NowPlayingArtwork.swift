@@ -30,6 +30,22 @@ enum NowPlayingArtwork {
         return self.genericFingerprints.contains { ($0 ^ print).nonzeroBitCount <= 8 }
     }
 
+    private static let softCache: NSCache<NSImage, NSImage> = { let c = NSCache<NSImage, NSImage>(); c.countLimit = 8; return c }()
+
+    /// A tiny copy of the artwork for the card's backdrop. Drawn large and smooth it looks blurred, and unlike a live blur it costs
+    /// nothing to redraw (a 28-point blur of a full-size cover on every update is what made the notch stall).
+    static func soft(_ image: NSImage) -> NSImage {
+        if let cached = self.softCache.object(forKey: image) { return cached }
+        let side: CGFloat = 32
+        let small = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            NSGraphicsContext.current?.imageInterpolation = .high
+            image.draw(in: rect, from: .zero, operation: .copy, fraction: 1)
+            return true
+        }
+        self.softCache.setObject(small, forKey: image)
+        return small
+    }
+
     // MARK: - YouTube
 
     struct YouTubeInfo: Equatable {

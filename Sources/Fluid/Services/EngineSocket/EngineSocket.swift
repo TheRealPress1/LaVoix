@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import Contacts
 import Darwin
@@ -1105,6 +1106,13 @@ nonisolated enum EngineSocketAutotest {
                 let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
                 let first = (parsed?["groups"] as? [[String: Any]])?.first
                 check("the group file has members and counts and no text, and hides the chat identifier", (first?["handles"] as? [String])?.count == 3 && first?["total"] as? Int == 40 && first?["id"] as? String == GroupChatsExport.id(for: "g1") && !String(decoding: data, as: UTF8.self).contains("g1"))
+            }
+            // now playing
+            do {
+                let big = NSImage(size: NSSize(width: 600, height: 600), flipped: false) { rect in NSColor.red.setFill(); rect.fill(); return true }
+                let soft = NowPlayingArtwork.soft(big)
+                check("the now playing backdrop is a tiny copy, not the full cover", soft.size == NSSize(width: 32, height: 32))
+                check("asking for the same backdrop again reuses it", NowPlayingArtwork.soft(big) === soft)
             }
             // quick links in the notch
             do {
