@@ -645,17 +645,56 @@ final class CoreAudioMicActivitySignal: MicActivitySignalProviding {
     }
 }
 
+/// Resolves meeting-app owners off the main thread. `NSRunningApplication.bundleIdentifier` is a
+/// synchronous LaunchServices round trip; with many audio apps it blocked the main thread for up to a
+/// second per poll. Only touched from the audio control queue, so it needs no lock.
+private final class MeetingOwnerResolver: @unchecked Sendable {
+    private struct Entry {
+        let launchDate: Date?
+        let owner: MeetingProcessOwner?
+    }
+
+    private var cache: [Int32: Entry] = [:]
+
+    func owners(from apps: [NSRunningApplication]) -> [MeetingProcessOwner] {
+        var live = Set<Int32>()
+        var result: [MeetingProcessOwner] = []
+        for app in apps where !app.isTerminated && app.processIdentifier > 0 {
+            let pid = app.processIdentifier
+            live.insert(pid)
+            let launchDate = app.launchDate
+            if let entry = self.cache[pid], entry.launchDate == launchDate {
+                if let owner = entry.owner { result.append(owner) }
+                continue
+            }
+            var owner: MeetingProcessOwner?
+            if let bundle = app.bundleIdentifier,
+               MeetingAppRegistry.isNativeMeetingApp(bundleIdentifier: bundle),
+               let path = app.bundleURL?.path
+            {
+                owner = MeetingProcessOwner(processID: pid, bundleIdentifier: bundle, bundlePath: path)
+            }
+            self.cache[pid] = Entry(launchDate: launchDate, owner: owner)
+            if let owner { result.append(owner) }
+        }
+        self.cache = self.cache.filter { live.contains($0.key) }
+        return result
+    }
+}
+
+private struct RunningApplicationsBox: @unchecked Sendable {
+    let apps: [NSRunningApplication]
+}
+
 @MainActor
 final class CoreAudioProcessActivityProvider: AudioProcessActivityProviding {
+    private let ownerResolver = MeetingOwnerResolver()
+
     func snapshot() async -> AudioProcessActivitySnapshot {
-        let owners = NSWorkspace.shared.runningApplications.compactMap { app -> MeetingProcessOwner? in
-            guard let bundle = app.bundleIdentifier,
-                  MeetingAppRegistry.isNativeMeetingApp(bundleIdentifier: bundle),
-                  !app.isTerminated, app.processIdentifier > 0,
-                  let path = app.bundleURL?.path else { return nil }
-            return MeetingProcessOwner(processID: app.processIdentifier, bundleIdentifier: bundle, bundlePath: path)
-        }
+        let box = RunningApplicationsBox(apps: NSWorkspace.shared.runningApplications)
+        let resolver = self.ownerResolver
         return await AudioTopologyListenerExecution.perform {
+            let owners = resolver.owners(from: box.apps)
             guard #available(macOS 14.4, *) else {
                 return AudioProcessActivitySnapshot(processes: [], owners: [], queryState: .unknown)
             }
