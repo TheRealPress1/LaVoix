@@ -63,6 +63,13 @@ import Foundation
 ///   {"op":"bookshelf.rate_history","id","score"|null,"note"?} -> {"ok":true,"event":{...}}   (grade 0-10, one decimal)
 ///   {"op":"bookshelf.now"}                                  -> {"ok":true,"connected","state","provider"?,"title"?,"artist"?,"album"?,"artwork_url"?,"can_rate","score"?,"note"?,"status"}
 ///   {"op":"bookshelf.rate_now","score"|null,"note"?}        -> {"ok":true,...same as now}   (grades the track playing now)
+///   {"op":"bump.status"}                                    -> {"ok":true,"connected":false,"pending"?:true}
+///   {"op":"bump.connect_start"}                             -> {"ok":true,"authorize_url"}   (the engine opens it in the browser; approve there)
+///   {"op":"bump.connect_poll"}                              -> {"ok":true,"status":"pending|connected|denied|expired|none"}   (tokens go to the Keychain, never sent back)
+///   {"op":"bump.disconnect"}                                -> {"ok":true}
+///   {"op":"bump.me"}                                        -> {"ok":true,"first_name"?,"home_country"?,"current_city"?,"is_traveling"?,"location_shared"?}
+///   {"op":"bump.tools"}                                     -> {"ok":true,"tools":[names]}
+///   {"op":"bump.call","name","arguments"?}                  -> {"ok":true,"result":{...}}   (read-only Bump tools only)
 ///   {"op":"providers.list"}                              -> {"ok":true,"providers":[{id,name,base_url,has_key,local,built_in,selected,model}]}   (a key is never sent back, only whether one is stored)
 ///   {"op":"providers.set_key","id","key"}                 -> {"ok":true}   (an empty key removes it; stored in the Keychain)
 ///   {"op":"providers.add","name","base_url","key"?} / {"op":"providers.remove","id"}  -> {"ok":true,"provider":{...}} / {"ok":true}   (your own OpenAI-compatible server; built-ins can't be removed)
@@ -111,6 +118,7 @@ nonisolated enum EngineSocket {
         var model: (any EngineModelProviding)?
         var providers: (any EngineProvidersProviding)?
         var bookshelf: (any EngineBookshelfProviding)?
+        var bump: (any EngineBumpProviding)?
     }
 
     private static let lock = NSLock()
@@ -148,7 +156,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel(), providers: LiveEngineProviders(), bookshelf: LiveEngineBookshelf())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel(), providers: LiveEngineProviders(), bookshelf: LiveEngineBookshelf(), bump: LiveEngineBump(openURL: { url in DispatchQueue.main.async { NSWorkspace.shared.open(url) } }))
     }
 
     enum EngineError: LocalizedError {
@@ -436,6 +444,21 @@ nonisolated enum EngineSocket {
                     let score: Double?
                     if let n = object["score"] as? NSNumber, !(object["score"] is NSNull) { score = n.doubleValue } else if object["score"] is NSNull { score = nil } else { return fail("missing score") }
                     _ = emit(["ok": true, "event": try await bookshelf.rateHistory(id: id, score: score, note: object["note"] as? String)])
+                }
+            } catch { fail(message(error)) }
+        case "bump.status", "bump.connect_start", "bump.connect_poll", "bump.disconnect", "bump.me", "bump.tools", "bump.call":
+            guard let bump = services.bump else { return fail("bump is not available") }
+            do {
+                switch op {
+                case "bump.status": var r = await bump.status(); r["ok"] = true; _ = emit(r)
+                case "bump.connect_start": var r = try await bump.connectStart(); r["ok"] = true; _ = emit(r)
+                case "bump.connect_poll": var r = try await bump.connectPoll(); r["ok"] = true; _ = emit(r)
+                case "bump.disconnect": try await bump.disconnect(); _ = emit(["ok": true])
+                case "bump.me": var r = try await bump.me(); r["ok"] = true; _ = emit(r)
+                case "bump.tools": _ = emit(["ok": true, "tools": try await bump.tools()])
+                default:
+                    guard let name = object["name"] as? String, BumpRules.readOnlyTools.contains(name) else { return fail("that Bump tool can't be called from here") }
+                    _ = emit(["ok": true, "result": try await bump.callTool(name: name, arguments: object["arguments"] as? [String: Any] ?? [:])])
                 }
             } catch { fail(message(error)) }
         case "model.status", "model.enable", "model.select", "model.download":
@@ -844,6 +867,97 @@ private final class BookshelfStubProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
+/// A stand-in for Bump's OAuth + MCP server, answered from memory.
+private final class BumpAutotestServer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _registered: [String: Any] = [:], _tokenForm: [String: String] = [:], _refreshForm: [String: String] = [:]
+    private var _lastAuth = "", _toolArgs: [String: Any] = [:], _init = false, _inited = false
+    private var _expire = false, _revoke = false, _access = "ACCESS-1", _tokens = 0
+    var registered: [String: Any] { self.lock.lock(); defer { self.lock.unlock() }; return self._registered }
+    var tokenForm: [String: String] { self.lock.lock(); defer { self.lock.unlock() }; return self._tokenForm }
+    var refreshForm: [String: String] { self.lock.lock(); defer { self.lock.unlock() }; return self._refreshForm }
+    var lastAuth: String { self.lock.lock(); defer { self.lock.unlock() }; return self._lastAuth }
+    var lastToolArgs: [String: Any] { self.lock.lock(); defer { self.lock.unlock() }; return self._toolArgs }
+    var sawInitialize: Bool { self.lock.lock(); defer { self.lock.unlock() }; return self._init }
+    var sawInitialized: Bool { self.lock.lock(); defer { self.lock.unlock() }; return self._inited }
+    var expireAccess: Bool { get { self.lock.lock(); defer { self.lock.unlock() }; return self._expire } set { self.lock.lock(); self._expire = newValue; self.lock.unlock() } }
+    var revokeRefresh: Bool { get { self.lock.lock(); defer { self.lock.unlock() }; return self._revoke } set { self.lock.lock(); self._revoke = newValue; self.lock.unlock() } }
+
+    lazy var client: LiveEngineBump = {
+        let config = URLSessionConfiguration.ephemeral
+        BumpStubProtocol.server = self
+        config.protocolClasses = [BumpStubProtocol.self]
+        return LiveEngineBump(session: URLSession(configuration: config), store: MemoryBookshelfCredentials())
+    }()
+
+    /// (status, content type, body)
+    fileprivate func answer(_ request: URLRequest) -> (Int, String, Data) {
+        self.lock.lock(); defer { self.lock.unlock() }
+        let path = request.url?.path ?? ""
+        let body = request.bodyData
+        func json(_ o: Any, _ status: Int = 200) -> (Int, String, Data) { (status, "application/json", (try? JSONSerialization.data(withJSONObject: o)) ?? Data()) }
+        func form(_ d: Data?) -> [String: String] {
+            guard let d, let s = String(data: d, encoding: .utf8) else { return [:] }
+            var c = URLComponents(); c.query = s
+            return Dictionary(uniqueKeysWithValues: (c.queryItems ?? []).compactMap { i in i.value.map { (i.name, $0) } })
+        }
+        if path == "/oauth/register" { self._registered = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]; return json(["client_id": "CLIENT-1"]) }
+        if path == "/oauth/token" {
+            let f = form(body)
+            if f["grant_type"] == "refresh_token" {
+                self._refreshForm = f
+                if self._revoke { return json(["error": "invalid_grant"], 400) }
+                self._tokens += 1; self._access = "ACCESS-\(self._tokens + 1)"; self._expire = false
+                return json(["access_token": self._access, "expires_in": 3600])
+            }
+            self._tokenForm = f
+            return json(["access_token": "ACCESS-1", "refresh_token": "REFRESH-1", "expires_in": 3600])
+        }
+        if path == "/mcp" {
+            // While "expired", every call is turned away with 401 until a refresh succeeds.
+            if self._expire { return (401, "text/plain", Data()) }
+            self._lastAuth = request.value(forHTTPHeaderField: "Authorization") ?? ""
+            let msg = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+            let method = msg["method"] as? String ?? ""
+            let id = msg["id"] as? Int ?? 0
+            func rpc(_ result: Any) -> (Int, String, Data) { json(["jsonrpc": "2.0", "id": id, "result": result]) }
+            switch method {
+            case "initialize": self._init = true; return rpc(["protocolVersion": "2025-06-18", "capabilities": ["tools": [String: Any]()], "serverInfo": ["name": "stub", "version": "1"]])
+            case "notifications/initialized": self._inited = true; return (202, "application/json", Data())
+            case "tools/list":
+                // Streamed, with an empty priming event first, the way the real server answers.
+                let payload = (try? JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": id, "result": ["tools": [["name": "bump_friends_places"], ["name": "bump_watch"]]]])) ?? Data()
+                return (200, "text/event-stream", Data("id: 0\ndata:\n\ndata: ".utf8) + payload + Data("\n\n".utf8))
+            case "tools/call":
+                let params = msg["params"] as? [String: Any] ?? [:]
+                self._toolArgs = params["arguments"] as? [String: Any] ?? [:]
+                switch params["name"] as? String {
+                case "bump_friends_friend_info": return rpc(["structuredContent": ["person": ["first_name": "Ada"], "home_country_name": "Freedonia", "current_city": "Springfield", "is_traveling": false, "location_shared": true]])
+                case "bump_friends_places": return rpc(["content": [["type": "text", "text": "{\"total_count\":74,\"places\":[]}"]]])
+                default: return rpc(["isError": true, "content": [["type": "text", "text": "nope"]]])
+                }
+            default: return json(["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "unknown"]])
+            }
+        }
+        return (404, "text/plain", Data())
+    }
+}
+
+private final class BumpStubProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var server: BumpAutotestServer?
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let server = Self.server else { self.client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost)); return }
+        let (status, type, data) = server.answer(self.request)
+        let response = HTTPURLResponse(url: self.request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": type])!
+        self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        self.client?.urlProtocol(self, didLoad: data)
+        self.client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
 private final class FakeProviders: EngineProvidersProviding, @unchecked Sendable {
     private let lock = NSLock()
     private var keys: [String: String] = [:]
@@ -955,6 +1069,7 @@ nonisolated enum EngineSocketAutotest {
             let fakeEdits = FakeMeetingEdits()
             let fakeModel = FakeModel()
             let bookshelfSession = BookshelfAutotestSession()
+            let bumpStub = BumpAutotestServer()
             let bookshelfCapture = await MainActor.run { bookshelfSession.capture }
             await MainActor.run { bookshelfCapture.start(interval: 3600) }
             let services = EngineSocket.Services(
@@ -989,7 +1104,8 @@ nonisolated enum EngineSocketAutotest {
                 meetingEdits: fakeEdits,
                 model: fakeModel,
                 providers: FakeProviders(),
-                bookshelf: bookshelfSession.client(capture: bookshelfCapture)
+                bookshelf: bookshelfSession.client(capture: bookshelfCapture),
+                bump: bumpStub.client
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -1237,6 +1353,28 @@ nonisolated enum EngineSocketAutotest {
                 bs.status = 200
                 bs.store.token = "T2"
                 check("bookshelf unpair forgets the token", ask(#"{"op":"bookshelf.unpair"}"#)?["ok"] as? Bool == true && bs.store.token == nil)
+                // Bump: sign-in through a loopback page against a stubbed OAuth + MCP server, tokens in memory.
+                let bump = bumpStub
+                check("bump starts disconnected", ask(#"{"op":"bump.status"}"#)?["connected"] as? Bool == false)
+                check("bump refuses to call a tool before signing in", ask(#"{"op":"bump.me"}"#)?["ok"] as? Bool == false)
+                let bumpStart = ask(#"{"op":"bump.connect_start"}"#)
+                let authURL = (bumpStart?["authorize_url"] as? String).flatMap { URLComponents(string: $0) }
+                let q = Dictionary(uniqueKeysWithValues: (authURL?.queryItems ?? []).compactMap { i in i.value.map { (i.name, $0) } })
+                check("bump connect_start builds a PKCE sign-in link with a loopback redirect and the MCP resource", q["code_challenge_method"] == "S256" && (q["code_challenge"]?.count ?? 0) >= 40 && q["redirect_uri"]?.hasPrefix("http://127.0.0.1:") == true && q["resource"]?.hasSuffix("/mcp") == true && q["client_id"] == "CLIENT-1")
+                check("bump registered the loopback address as a public client", (bump.registered["redirect_uris"] as? [String])?.first == q["redirect_uri"] && bump.registered["token_endpoint_auth_method"] as? String == "none")
+                check("bump is pending until the browser comes back", ask(#"{"op":"bump.connect_poll"}"#)?["status"] as? String == "pending")
+                if let redirect = q["redirect_uri"], let url = URL(string: redirect + "?code=CODE-1&state=" + (q["state"] ?? "")) { _ = try? await URLSession.shared.data(from: url) }
+                check("bump connects once the browser delivers the code, and the token exchange carried the PKCE verifier", ask(#"{"op":"bump.connect_poll"}"#)?["status"] as? String == "connected" && bump.tokenForm["code"] == "CODE-1" && (bump.tokenForm["code_verifier"]?.count ?? 0) >= 43 && bump.tokenForm["client_id"] == "CLIENT-1")
+                check("bump status never carries a token", ask(#"{"op":"bump.status"}"#)?["connected"] as? Bool == true && !"\(ask(#"{"op":"bump.status"}"#) ?? [:])".contains("ACCESS-1"))
+                let who = ask(#"{"op":"bump.me"}"#)
+                check("bump me initializes the MCP session, then reads your profile with the bearer token", who?["first_name"] as? String == "Ada" && who?["home_country"] as? String == "Freedonia" && bump.sawInitialize && bump.sawInitialized && bump.lastAuth == "Bearer ACCESS-1")
+                check("bump tools lists names from a streamed reply", (ask(#"{"op":"bump.tools"}"#)?["tools"] as? [String]) == ["bump_friends_places", "bump_watch"])
+                check("bump call answers read-only tools", (ask(#"{"op":"bump.call","name":"bump_friends_places","arguments":{"limit":5}}"#)?["result"] as? [String: Any])?["total_count"] as? Int == 74 && (bump.lastToolArgs["limit"] as? Int) == 5)
+                check("bump call refuses tools that change things", ask(#"{"op":"bump.call","name":"bump_watch","arguments":{}}"#)?["ok"] as? Bool == false)
+                bump.expireAccess = true
+                check("bump refreshes an expired token on its own and keeps going", ask(#"{"op":"bump.me"}"#)?["first_name"] as? String == "Ada" && bump.refreshForm["refresh_token"] == "REFRESH-1" && bump.lastAuth == "Bearer ACCESS-2")
+                bump.revokeRefresh = true; bump.expireAccess = true
+                check("bump forgets the sign-in when it can no longer be refreshed", ask(#"{"op":"bump.me"}"#)?["ok"] as? Bool == false && ask(#"{"op":"bump.status"}"#)?["connected"] as? Bool == false)
                 check("providers.models lists models and providers.select refuses an unknown provider", (ask(#"{"op":"providers.models","id":"openai"}"#)?["models"] as? [String]) == ["m-a", "m-b"] && ask(#"{"op":"providers.select","id":"nope"}"#)?["ok"] as? Bool == false)
                 check("the provider rules trim and tidy", (try? ProviderRules.baseURL(" https://a.b/v1// ")) == "https://a.b/v1" && (try? ProviderRules.key("  k  ")) == "k")
             }
