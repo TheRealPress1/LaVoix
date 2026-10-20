@@ -70,6 +70,8 @@ import Foundation
 ///   {"op":"bump.me"}                                        -> {"ok":true,"first_name"?,"home_country"?,"current_city"?,"is_traveling"?,"location_shared"?}
 ///   {"op":"bump.tools"}                                     -> {"ok":true,"tools":[names]}
 ///   {"op":"bump.call","name","arguments"?}                  -> {"ok":true,"result":{...}}   (read-only Bump tools only)
+///   {"op":"photos.status"} / {"op":"photos.request"}        -> {"ok":true,"authorization":"authorized|limited|denied|restricted|not_determined"}   (request shows macOS's Photos prompt once)
+///   {"op":"photos.summary"}                                 -> {"ok":true,"total","located","located_days","first_day"?,"last_day"?,"by_year":{...}}   (counts only: dates and locations are read, never images)
 ///   {"op":"providers.list"}                              -> {"ok":true,"providers":[{id,name,base_url,has_key,local,built_in,selected,model}]}   (a key is never sent back, only whether one is stored)
 ///   {"op":"providers.set_key","id","key"}                 -> {"ok":true}   (an empty key removes it; stored in the Keychain)
 ///   {"op":"providers.add","name","base_url","key"?} / {"op":"providers.remove","id"}  -> {"ok":true,"provider":{...}} / {"ok":true}   (your own OpenAI-compatible server; built-ins can't be removed)
@@ -119,6 +121,7 @@ nonisolated enum EngineSocket {
         var providers: (any EngineProvidersProviding)?
         var bookshelf: (any EngineBookshelfProviding)?
         var bump: (any EngineBumpProviding)?
+        var photos: (any EnginePhotosProviding)?
     }
 
     private static let lock = NSLock()
@@ -156,7 +159,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel(), providers: LiveEngineProviders(), bookshelf: LiveEngineBookshelf(), bump: LiveEngineBump(openURL: { url in DispatchQueue.main.async { NSWorkspace.shared.open(url) } }))
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel(), providers: LiveEngineProviders(), bookshelf: LiveEngineBookshelf(), bump: LiveEngineBump(openURL: { url in DispatchQueue.main.async { NSWorkspace.shared.open(url) } }), photos: LiveEnginePhotos())
     }
 
     enum EngineError: LocalizedError {
@@ -459,6 +462,15 @@ nonisolated enum EngineSocket {
                 default:
                     guard let name = object["name"] as? String, BumpRules.readOnlyTools.contains(name) else { return fail("that Bump tool can't be called from here") }
                     _ = emit(["ok": true, "result": try await bump.callTool(name: name, arguments: object["arguments"] as? [String: Any] ?? [:])])
+                }
+            } catch { fail(message(error)) }
+        case "photos.status", "photos.request", "photos.summary":
+            guard let photos = services.photos else { return fail("photos are not available") }
+            do {
+                switch op {
+                case "photos.status": var r = await photos.status(); r["ok"] = true; _ = emit(r)
+                case "photos.request": var r = await photos.request(); r["ok"] = true; _ = emit(r)
+                default: var r = try await photos.summary(); r["ok"] = true; _ = emit(r)
                 }
             } catch { fail(message(error)) }
         case "model.status", "model.enable", "model.select", "model.download":
@@ -958,6 +970,18 @@ private final class BumpStubProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
+private final class FakePhotos: EnginePhotosProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var granted = false
+    func status() async -> [String: Any] { self.lock.lock(); defer { self.lock.unlock() }; return ["authorization": self.granted ? "authorized" : "not_determined"] }
+    func request() async -> [String: Any] { self.lock.lock(); self.granted = true; self.lock.unlock(); return ["authorization": "authorized"] }
+    func summary() async throws -> [String: Any] {
+        self.lock.lock(); defer { self.lock.unlock() }
+        guard self.granted else { throw EnginePhotosError.notAllowed }
+        return ["total": 5, "located": 2, "located_days": 2, "first_day": "2025-04-30", "last_day": "2025-05-01", "by_year": ["2025": 2]]
+    }
+}
+
 private final class FakeProviders: EngineProvidersProviding, @unchecked Sendable {
     private let lock = NSLock()
     private var keys: [String: String] = [:]
@@ -1105,7 +1129,8 @@ nonisolated enum EngineSocketAutotest {
                 model: fakeModel,
                 providers: FakeProviders(),
                 bookshelf: bookshelfSession.client(capture: bookshelfCapture),
-                bump: bumpStub.client
+                bump: bumpStub.client,
+                photos: FakePhotos()
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -1356,6 +1381,8 @@ nonisolated enum EngineSocketAutotest {
                 // Bump: sign-in through a loopback page against a stubbed OAuth + MCP server, tokens in memory.
                 let bump = bumpStub
                 check("bump starts disconnected", ask(#"{"op":"bump.status"}"#)?["connected"] as? Bool == false)
+                check("photos.status reports the permission, summary refuses until it is granted and then returns counts only", ask(#"{"op":"photos.status"}"#)?["authorization"] as? String == "not_determined" && ask(#"{"op":"photos.summary"}"#)?["ok"] as? Bool == false)
+                check("photos.request grants and summary then carries counts and no file names", ask(#"{"op":"photos.request"}"#)?["authorization"] as? String == "authorized" && (ask(#"{"op":"photos.summary"}"#)?["located"] as? Int) == 2 && !"\(ask(#"{"op":"photos.summary"}"#) ?? [:])".contains("IMG_"))
                 check("bump refuses to call a tool before signing in", ask(#"{"op":"bump.me"}"#)?["ok"] as? Bool == false)
                 let bumpStart = ask(#"{"op":"bump.connect_start"}"#)
                 let authURL = (bumpStart?["authorize_url"] as? String).flatMap { URLComponents(string: $0) }
