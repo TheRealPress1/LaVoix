@@ -1107,6 +1107,15 @@ nonisolated enum EngineSocketAutotest {
                 let first = (parsed?["groups"] as? [[String: Any]])?.first
                 check("the group file has members and counts and no text, and hides the chat identifier", (first?["handles"] as? [String])?.count == 3 && first?["total"] as? Int == 40 && first?["id"] as? String == GroupChatsExport.id(for: "g1") && !String(decoding: data, as: UTF8.self).contains("g1"))
             }
+            // ambient now playing
+            do {
+                check("the strip shows while something plays and nothing else holds the notch", NotchNowPlayingAmbientSettings.shouldShow(enabled: true, playing: true, hubOpen: false, meetingLive: false))
+                check("it stays away when paused, switched off, the hub is open or a meeting is live",
+                      !NotchNowPlayingAmbientSettings.shouldShow(enabled: true, playing: false, hubOpen: false, meetingLive: false)
+                        && !NotchNowPlayingAmbientSettings.shouldShow(enabled: false, playing: true, hubOpen: false, meetingLive: false)
+                        && !NotchNowPlayingAmbientSettings.shouldShow(enabled: true, playing: true, hubOpen: true, meetingLive: false)
+                        && !NotchNowPlayingAmbientSettings.shouldShow(enabled: true, playing: true, hubOpen: false, meetingLive: true))
+            }
             // quick link logos
             do {
                 let kinds = ["https://www.linkedin.com/in/me", "https://open.spotify.com/album/abc", "https://music.apple.com/us/album/x", "https://youtu.be/abc", "https://github.com/me", "https://x.com/me", "https://twitter.com/me",
