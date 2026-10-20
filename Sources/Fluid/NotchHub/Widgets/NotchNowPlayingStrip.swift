@@ -71,11 +71,17 @@ final class NotchNowPlayingStrip {
         }
     }
 
+    /// Something is really playing: the system says so, and (for anything the system reports) sound is going out.
+    var isPlayingAudibly: Bool {
+        let track = NowPlayingStore.shared.track
+        return track?.isPlaying == true && !(track?.pid != nil && self.audibleKey == track?.key && self.audible == false)
+    }
+
     private func refresh() {
         let track = NowPlayingStore.shared.track
         // The notch is also used for a live meeting and for the dictation overlay; the strip steps aside for both.
         let meetingLive = ((NotchMeetingCardController.shared.engineLiveState()["active"] as? Bool) ?? false) || AppServices.shared.asr.isRunning
-        let show = NotchNowPlayingAmbientSettings.shouldShow(enabled: NotchNowPlayingAmbientSettings.isEnabled, playing: track?.isPlaying == true && !(track?.pid != nil && self.audibleKey == track?.key && self.audible == false),
+        let show = NotchNowPlayingAmbientSettings.shouldShow(enabled: NotchNowPlayingAmbientSettings.isEnabled, playing: self.isPlayingAudibly,
                                                              hubOpen: NotchHubController.shared.model.isOpen, meetingLive: meetingLive)
         guard show, let track, let screen = NotchGeometry.targetScreen() else {
             self.window?.orderOut(nil)

@@ -343,7 +343,9 @@ final class NotchHubController {
         guard self.isRunning, !self.recordingOverlayIsVisible, !self.isEditingText else { return }
         self.model.selectedWidgetID = widgetID
         if let chatID { MessagesStore.shared.select(chatID) }
+        self.isPeeking = true
         self.open()
+        self.isPeeking = false
         self.peekTask?.cancel()
         self.peekTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -459,8 +461,16 @@ final class NotchHubController {
         }
     }
 
+    private var isPeeking = false
+
     private func open() {
-        if !self.model.isOpen { self.openedAt = Date() }
+        if !self.model.isOpen {
+            self.openedAt = Date()
+            // Opening by hovering lands on Now Playing while something plays; a peek has already chosen its own tab.
+            if !self.isPeeking, NotchNowPlayingStrip.shared.isPlayingAudibly || BookshelfCapture.shared.now.state == .playing, self.model.widgets.contains(where: { $0.id == "nowplaying" }) {
+                self.model.selectedWidgetID = "nowplaying"
+            }
+        }
         self.releaseTask?.cancel()
         self.window?.ignoresMouseEvents = false
         self.model.open()
