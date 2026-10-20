@@ -55,6 +55,12 @@ import Foundation
 ///   {"op":"meetings.export","id","format":"text|json"}    -> {"ok":true,"file":"..."}   (the transcript)
 ///   {"op":"model.status"}                                 -> {"ok":true,"model":{enabled,selected,state,progress?,error?,models:[{id,name,detail,bytes,downloaded}]}}   (the on-device cleanup model)
 ///   {"op":"model.enable","enabled"} / {"op":"model.select","id"} / {"op":"model.download"}  -> {"ok":true}   (download starts and returns; ask model.status for progress)
+///   {"op":"bookshelf.status"}                              -> {"ok":true,"connected":false,"site":"https://bookshelf.music","pending"?:{user_code,verification_url}}
+///   {"op":"bookshelf.pair_start","provider":"spotify|apple_music","device_name"} -> {"ok":true,"user_code","verification_url","expires_at"?}   (approve the code in the browser)
+///   {"op":"bookshelf.pair_poll"}                            -> {"ok":true,"status":"pending|approved|expired|denied|none"}   (the device token goes to the Keychain and is never sent back)
+///   {"op":"bookshelf.unpair"}                               -> {"ok":true}   (forgets the token on this Mac)
+///   {"op":"bookshelf.history","limit"?}                     -> {"ok":true,"events":[{id,date,title,artist,album,artwork_url?,score?,note?,played_at,editable}]}
+///   {"op":"bookshelf.rate_history","id","score"|null,"note"?} -> {"ok":true,"event":{...}}   (grade 0-10, one decimal)
 ///   {"op":"providers.list"}                              -> {"ok":true,"providers":[{id,name,base_url,has_key,local,built_in,selected,model}]}   (a key is never sent back, only whether one is stored)
 ///   {"op":"providers.set_key","id","key"}                 -> {"ok":true}   (an empty key removes it; stored in the Keychain)
 ///   {"op":"providers.add","name","base_url","key"?} / {"op":"providers.remove","id"}  -> {"ok":true,"provider":{...}} / {"ok":true}   (your own OpenAI-compatible server; built-ins can't be removed)
@@ -102,6 +108,7 @@ nonisolated enum EngineSocket {
         var meetingEdits: (any EngineMeetingEditsProviding)?
         var model: (any EngineModelProviding)?
         var providers: (any EngineProvidersProviding)?
+        var bookshelf: (any EngineBookshelfProviding)?
     }
 
     private static let lock = NSLock()
@@ -139,7 +146,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel(), providers: LiveEngineProviders())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel(), providers: LiveEngineProviders(), bookshelf: LiveEngineBookshelf())
     }
 
     enum EngineError: LocalizedError {
@@ -403,6 +410,25 @@ nonisolated enum EngineSocket {
                     case "providers.models": _ = emit(["ok": true, "models": try await providers.models(id: id)])
                     default: try await providers.select(id: id, model: object["model"] as? String); _ = emit(["ok": true])
                     }
+                }
+            } catch { fail(message(error)) }
+        case "bookshelf.status", "bookshelf.pair_start", "bookshelf.pair_poll", "bookshelf.unpair", "bookshelf.history", "bookshelf.rate_history":
+            guard let bookshelf = services.bookshelf else { return fail("bookshelf is not available") }
+            do {
+                switch op {
+                case "bookshelf.status": var s = await bookshelf.status(); s["ok"] = true; _ = emit(s)
+                case "bookshelf.pair_start":
+                    guard let provider = object["provider"] as? String, let name = object["device_name"] as? String else { return fail("missing provider or device_name") }
+                    var r = try await bookshelf.pairStart(provider: provider, deviceName: name); r["ok"] = true; _ = emit(r)
+                case "bookshelf.pair_poll": var r = try await bookshelf.pairPoll(); r["ok"] = true; _ = emit(r)
+                case "bookshelf.unpair": try await bookshelf.unpair(); _ = emit(["ok": true])
+                case "bookshelf.history":
+                    _ = emit(["ok": true, "events": try await bookshelf.history(limit: (object["limit"] as? Int) ?? 50)])
+                default:
+                    guard let id = object["id"] as? String, !id.isEmpty else { return fail("missing id") }
+                    let score: Double?
+                    if let n = object["score"] as? NSNumber, !(object["score"] is NSNull) { score = n.doubleValue } else if object["score"] is NSNull { score = nil } else { return fail("missing score") }
+                    _ = emit(["ok": true, "event": try await bookshelf.rateHistory(id: id, score: score, note: object["note"] as? String)])
                 }
             } catch { fail(message(error)) }
         case "model.status", "model.enable", "model.select", "model.download":
@@ -709,6 +735,86 @@ private struct FakeContacts: EngineContactsProviding {
     func lookup(emails: [String], phones: [String]) async -> [String: Any] { ["found": emails.first == "a@x.com", "full_name": "Ada Example", "emails": emails, "phones": phones] }
 }
 
+private final class MemoryBookshelfCredentials: BookshelfCredentialStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String?
+    var token: String? { get { self.lock.lock(); defer { self.lock.unlock() }; return self.value } set { self.lock.lock(); self.value = newValue; self.lock.unlock() } }
+    func load() -> String? { self.token }
+    func save(_ token: String) throws { self.token = token }
+    func delete() { self.token = nil }
+}
+
+/// A stand-in for bookshelf.music: answers the pairing and history routes from memory and records what it was sent.
+private final class BookshelfAutotestSession: @unchecked Sendable {
+    let store = MemoryBookshelfCredentials()
+    private let lock = NSLock()
+    private var _approved = false, _status = 200
+    private var _lastBody: [String: Any] = [:], _lastAuth = "", _lastURL = ""
+    var approved: Bool { get { self.lock.lock(); defer { self.lock.unlock() }; return self._approved } set { self.lock.lock(); self._approved = newValue; self.lock.unlock() } }
+    var status: Int { get { self.lock.lock(); defer { self.lock.unlock() }; return self._status } set { self.lock.lock(); self._status = newValue; self.lock.unlock() } }
+    var lastBody: [String: Any] { self.lock.lock(); defer { self.lock.unlock() }; return self._lastBody }
+    var lastAuth: String { self.lock.lock(); defer { self.lock.unlock() }; return self._lastAuth }
+    var lastURL: String { self.lock.lock(); defer { self.lock.unlock() }; return self._lastURL }
+
+    fileprivate func record(_ request: URLRequest) {
+        self.lock.lock(); defer { self.lock.unlock() }
+        self._lastURL = request.url?.absoluteString ?? ""
+        self._lastAuth = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        if let body = request.bodyData, let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any] { self._lastBody = obj }
+    }
+
+    fileprivate func reply(_ request: URLRequest) -> (Int, [String: Any]) {
+        let path = request.url?.absoluteString.components(separatedBy: "?").first ?? ""
+        let code = self.status, ok = self.approved
+        if path.hasSuffix("/pairing/start/") { return (200, ["pairingId": "P1", "userCode": "ABCD-1234", "verificationUrl": "https://bookshelf.music/connect/ABCD1234/", "pairingSecret": "PAIRSECRET", "expiresAt": "2030-01-01T00:00:00Z"]) }
+        if path.hasSuffix("/pairing/status/") { return ok ? (200, ["status": "approved", "deviceToken": "DEVICE-TOKEN-1"]) : (200, ["status": "pending"]) }
+        if code != 200 { return (code, ["error": "no"]) }
+        if request.httpMethod == "GET" {
+            return (200, ["events": [
+                ["id": "e1", "listeningDate": "2026-10-19", "title": "Song A", "artist": "Guest", "albumArtist": "Album Artist", "album": "Album", "artworkUrl": "https://x/a.jpg", "score": 7.5, "lastPlayedAt": "2026-10-19T20:00:00Z", "isEditable": true],
+                ["id": "e2", "listeningDate": "2026-10-19", "title": "Song B", "artist": "Artist", "album": "Album", "lastPlayedAt": "2026-10-19T20:05:00Z", "isEditable": true],
+            ]])
+        }
+        return (200, ["event": ["id": "e2", "listeningDate": "2026-10-19", "title": "Song B", "artist": "Artist", "album": "Album", "score": 8.3, "lastPlayedAt": "2026-10-19T20:05:00Z", "isEditable": true]])
+    }
+
+    lazy var client: LiveEngineBookshelf = {
+        let config = URLSessionConfiguration.ephemeral
+        BookshelfStubProtocol.handlers[ObjectIdentifier(self)] = self
+        config.protocolClasses = [BookshelfStubProtocol.self]
+        return LiveEngineBookshelf(session: URLSession(configuration: config), store: self.store)
+    }()
+}
+
+private extension URLRequest {
+    /// URLProtocol delivers bodies as streams.
+    var bodyData: Data? {
+        if let httpBody { return httpBody }
+        guard let stream = httpBodyStream else { return nil }
+        stream.open(); defer { stream.close() }
+        var data = Data(); var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable { let n = stream.read(&buffer, maxLength: buffer.count); if n <= 0 { break }; data.append(buffer, count: n) }
+        return data
+    }
+}
+
+private final class BookshelfStubProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var handlers: [ObjectIdentifier: BookshelfAutotestSession] = [:]
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let session = Self.handlers.values.first else { self.client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost)); return }
+        session.record(self.request)
+        let (status, body) = session.reply(self.request)
+        let data = (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
+        let response = HTTPURLResponse(url: self.request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+        self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        self.client?.urlProtocol(self, didLoad: data)
+        self.client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
 private final class FakeProviders: EngineProvidersProviding, @unchecked Sendable {
     private let lock = NSLock()
     private var keys: [String: String] = [:]
@@ -819,6 +925,7 @@ nonisolated enum EngineSocketAutotest {
             let fakeSpeech = FakeSpeech()
             let fakeEdits = FakeMeetingEdits()
             let fakeModel = FakeModel()
+            let bookshelfSession = BookshelfAutotestSession()
             let services = EngineSocket.Services(
                 generator: { system, user, maxTokens in
                     if user.contains("explode") { throw NSError(domain: "t", code: 1) }
@@ -850,7 +957,8 @@ nonisolated enum EngineSocketAutotest {
                 words: FakeWords(),
                 meetingEdits: fakeEdits,
                 model: fakeModel,
-                providers: FakeProviders()
+                providers: FakeProviders(),
+                bookshelf: bookshelfSession.client
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -1062,6 +1170,30 @@ nonisolated enum EngineSocketAutotest {
                 check("a key with a line break is refused", ask(#"{"op":"providers.set_key","id":"openai","key":"a\nb"}"#)?["ok"] as? Bool == false)
                 check("providers.add needs a name and an http address", ask(#"{"op":"providers.add","name":"Mine","base_url":"ftp://x"}"#)?["ok"] as? Bool == false && ask(#"{"op":"providers.add","name":" ","base_url":"https://x"}"#)?["ok"] as? Bool == false && ask(#"{"op":"providers.add","name":"Mine","base_url":"https://my.server/v1/"}"#)?["ok"] as? Bool == true)
                 check("a built-in provider can't be removed, your own can", ask(#"{"op":"providers.remove","id":"openai"}"#)?["ok"] as? Bool == false && ask(#"{"op":"providers.remove","id":"Mine"}"#)?["ok"] as? Bool == true)
+                // Bookshelf: the real client against a stubbed site (no network), token in an in-memory store.
+                let bs = bookshelfSession
+                check("bookshelf starts disconnected", ask(#"{"op":"bookshelf.status"}"#)?["connected"] as? Bool == false)
+                check("bookshelf history refuses before pairing", ask(#"{"op":"bookshelf.history"}"#)?["ok"] as? Bool == false)
+                check("bookshelf refuses an unsupported player", ask(#"{"op":"bookshelf.pair_start","provider":"tidal","device_name":"Mac"}"#)?["ok"] as? Bool == false)
+                let started = ask(#"{"op":"bookshelf.pair_start","provider":"spotify","device_name":"myOS on a Mac"}"#)
+                check("bookshelf pair_start returns the code and link, never the secret", started?["user_code"] as? String == "ABCD-1234" && (started?["verification_url"] as? String)?.hasPrefix("https://") == true && !"\(started ?? [:])".contains("PAIRSECRET"))
+                check("bookshelf pair_start sent the device name and player", bs.lastBody["deviceName"] as? String == "myOS on a Mac" && bs.lastBody["provider"] as? String == "spotify")
+                check("bookshelf pending is reported", ask(#"{"op":"bookshelf.pair_poll"}"#)?["status"] as? String == "pending")
+                bs.approved = true
+                check("bookshelf approval stores the token and connects", ask(#"{"op":"bookshelf.pair_poll"}"#)?["status"] as? String == "approved" && bs.store.token == "DEVICE-TOKEN-1" && ask(#"{"op":"bookshelf.status"}"#)?["connected"] as? Bool == true)
+                check("bookshelf status never carries the token", !"\(ask(#"{"op":"bookshelf.status"}"#) ?? [:])".contains("DEVICE-TOKEN-1"))
+                let hist = ask(#"{"op":"bookshelf.history","limit":5}"#)?["events"] as? [[String: Any]]
+                check("bookshelf history is read with the bearer token and shaped for myOS", hist?.count == 2 && hist?.first?["title"] as? String == "Song A" && hist?.first?["score"] as? Double == 7.5 && hist?.first?["editable"] as? Bool == true && hist?.last?["score"] == nil && bs.lastAuth == "Bearer DEVICE-TOKEN-1" && bs.lastURL.contains("limit=5"))
+                check("bookshelf history uses the album artist when present", hist?.first?["artist"] as? String == "Album Artist")
+                let rated = ask(#"{"op":"bookshelf.rate_history","id":"e2","score":8.26,"note":"fire"}"#)
+                check("bookshelf rate_history rounds to one decimal and sends the note", rated?["ok"] as? Bool == true && bs.lastBody["score"] as? Double == 8.3 && bs.lastBody["note"] as? String == "fire" && bs.lastBody["dailyEventId"] as? String == "e2")
+                check("bookshelf rate_history can clear a grade", ask(#"{"op":"bookshelf.rate_history","id":"e2","score":null}"#)?["ok"] as? Bool == true && bs.lastBody["score"] is NSNull)
+                check("bookshelf refuses a grade outside 0-10", ask(#"{"op":"bookshelf.rate_history","id":"e2","score":11}"#)?["ok"] as? Bool == false)
+                bs.status = 401
+                check("bookshelf forgets a token the site no longer accepts", ask(#"{"op":"bookshelf.history"}"#)?["ok"] as? Bool == false && bs.store.token == nil && ask(#"{"op":"bookshelf.status"}"#)?["connected"] as? Bool == false)
+                bs.status = 200
+                bs.store.token = "T2"
+                check("bookshelf unpair forgets the token", ask(#"{"op":"bookshelf.unpair"}"#)?["ok"] as? Bool == true && bs.store.token == nil)
                 check("providers.models lists models and providers.select refuses an unknown provider", (ask(#"{"op":"providers.models","id":"openai"}"#)?["models"] as? [String]) == ["m-a", "m-b"] && ask(#"{"op":"providers.select","id":"nope"}"#)?["ok"] as? Bool == false)
                 check("the provider rules trim and tidy", (try? ProviderRules.baseURL(" https://a.b/v1// ")) == "https://a.b/v1" && (try? ProviderRules.key("  k  ")) == "k")
             }
