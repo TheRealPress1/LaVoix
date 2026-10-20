@@ -51,6 +51,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     func applicationDidFinishLaunching(_ notification: Notification) {
         StallRecorder.shared.start()
         if NotchHubSettings.isEnabled { NotchNowPlayingStrip.shared.start() }
+        BookshelfCapture.shared.start()
         LocalCleanupController.shared.warmUpIfEnabled()
         NotchHubController.shared.applyEnabledSetting()
         if SettingsStore.shared.shareContactsWithMyOSEnabled { ContactsInboxScheduler.shared.start() }

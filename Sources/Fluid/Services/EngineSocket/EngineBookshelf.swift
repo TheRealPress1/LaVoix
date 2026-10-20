@@ -18,6 +18,10 @@ nonisolated protocol EngineBookshelfProviding: Sendable {
     func history(limit: Int) async throws -> [[String: Any]]
     /// Sets (or clears, with nil) the grade of a past listening row; returns the saved row.
     func rateHistory(id: String, score: Double?, note: String?) async throws -> [String: Any]
+    /// What is playing as Bookshelf sees it: {connected, state, provider?, title?, artist?, album?, artwork_url?, can_rate, score?, note?, status}
+    func now() async -> [String: Any]
+    /// Grades (nil clears) the track playing now; returns what `now()` would say afterwards.
+    func rateNow(score: Double?, note: String?) async throws -> [String: Any]
 }
 
 nonisolated enum EngineBookshelfError: LocalizedError, Equatable {
@@ -107,10 +111,12 @@ actor LiveEngineBookshelf: EngineBookshelfProviding {
     private let site: URL
     private let session: URLSession
     private let store: any BookshelfCredentialStoring
+    private let capture: BookshelfCapture?
     private var pairing: (id: String, secret: String, userCode: String, url: String, tokenFromStart: String?, deviceName: String)?
 
     init(site: URL = URL(string: "https://bookshelf.music")!, session: URLSession = .shared,
-         store: any BookshelfCredentialStoring = KeychainBookshelfCredentials()) {
+         store: any BookshelfCredentialStoring = KeychainBookshelfCredentials(), capture: BookshelfCapture? = nil) {
+        self.capture = capture
         self.site = site
         self.session = session
         self.store = store
@@ -142,6 +148,7 @@ actor LiveEngineBookshelf: EngineBookshelfProviding {
             guard let token = (json["deviceToken"] as? String) ?? p.tokenFromStart, !token.isEmpty else { throw EngineBookshelfError.server("Bookshelf approved the pairing but sent no credential.") }
             try self.store.save(token)
             self.pairing = nil
+            await MainActor.run { NotificationCenter.default.post(name: BookshelfCapture.credentialsChanged, object: nil) }
             return ["status": "approved"]
         case "expired": self.pairing = nil; return ["status": "expired"]
         case "denied": self.pairing = nil; return ["status": "denied"]
@@ -152,6 +159,29 @@ actor LiveEngineBookshelf: EngineBookshelfProviding {
     func unpair() async throws {
         self.pairing = nil
         self.store.delete()
+        await MainActor.run { NotificationCenter.default.post(name: BookshelfCapture.credentialsChanged, object: nil) }
+    }
+
+    func now() async -> [String: Any] {
+        let connected = self.store.load() != nil
+        return await MainActor.run {
+            let n = (self.capture ?? BookshelfCapture.shared).now
+            var out: [String: Any] = ["connected": connected, "state": n.state.rawValue, "can_rate": connected && n.canRate, "status": n.status]
+            if let p = n.provider { out["provider"] = p.rawValue }
+            if let v = n.title { out["title"] = v }
+            if let v = n.artist { out["artist"] = v }
+            if let v = n.album { out["album"] = v }
+            if let v = n.artworkURL { out["artwork_url"] = v }
+            if let v = n.score { out["score"] = v }
+            if let v = n.note, !v.isEmpty { out["note"] = v }
+            return out
+        }
+    }
+
+    func rateNow(score: Double?, note: String?) async throws -> [String: Any] {
+        let c = await MainActor.run { self.capture ?? BookshelfCapture.shared }
+        try await c.rateNow(score: score, note: note)
+        return await self.now()
     }
 
     func history(limit: Int) async throws -> [[String: Any]] {
@@ -185,7 +215,10 @@ actor LiveEngineBookshelf: EngineBookshelfProviding {
         let json = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             // A revoked or unknown credential is the one failure worth clearing local state for.
-            if http.statusCode == 401, token != nil { self.store.delete() }
+            if http.statusCode == 401, token != nil {
+                self.store.delete()
+                await MainActor.run { NotificationCenter.default.post(name: BookshelfCapture.credentialsChanged, object: nil) }
+            }
             throw EngineBookshelfError.server(http.statusCode == 401 && token != nil
                 ? "Bookshelf no longer accepts this device; pair again."
                 : (json["error"] as? String ?? "Bookshelf answered with an error (\(http.statusCode))."))

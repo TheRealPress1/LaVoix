@@ -61,6 +61,8 @@ import Foundation
 ///   {"op":"bookshelf.unpair"}                               -> {"ok":true}   (forgets the token on this Mac)
 ///   {"op":"bookshelf.history","limit"?}                     -> {"ok":true,"events":[{id,date,title,artist,album,artwork_url?,score?,note?,played_at,editable}]}
 ///   {"op":"bookshelf.rate_history","id","score"|null,"note"?} -> {"ok":true,"event":{...}}   (grade 0-10, one decimal)
+///   {"op":"bookshelf.now"}                                  -> {"ok":true,"connected","state","provider"?,"title"?,"artist"?,"album"?,"artwork_url"?,"can_rate","score"?,"note"?,"status"}
+///   {"op":"bookshelf.rate_now","score"|null,"note"?}        -> {"ok":true,...same as now}   (grades the track playing now)
 ///   {"op":"providers.list"}                              -> {"ok":true,"providers":[{id,name,base_url,has_key,local,built_in,selected,model}]}   (a key is never sent back, only whether one is stored)
 ///   {"op":"providers.set_key","id","key"}                 -> {"ok":true}   (an empty key removes it; stored in the Keychain)
 ///   {"op":"providers.add","name","base_url","key"?} / {"op":"providers.remove","id"}  -> {"ok":true,"provider":{...}} / {"ok":true}   (your own OpenAI-compatible server; built-ins can't be removed)
@@ -412,7 +414,7 @@ nonisolated enum EngineSocket {
                     }
                 }
             } catch { fail(message(error)) }
-        case "bookshelf.status", "bookshelf.pair_start", "bookshelf.pair_poll", "bookshelf.unpair", "bookshelf.history", "bookshelf.rate_history":
+        case "bookshelf.status", "bookshelf.pair_start", "bookshelf.pair_poll", "bookshelf.unpair", "bookshelf.history", "bookshelf.rate_history", "bookshelf.now", "bookshelf.rate_now":
             guard let bookshelf = services.bookshelf else { return fail("bookshelf is not available") }
             do {
                 switch op {
@@ -422,6 +424,11 @@ nonisolated enum EngineSocket {
                     var r = try await bookshelf.pairStart(provider: provider, deviceName: name); r["ok"] = true; _ = emit(r)
                 case "bookshelf.pair_poll": var r = try await bookshelf.pairPoll(); r["ok"] = true; _ = emit(r)
                 case "bookshelf.unpair": try await bookshelf.unpair(); _ = emit(["ok": true])
+                case "bookshelf.now": var r = await bookshelf.now(); r["ok"] = true; _ = emit(r)
+                case "bookshelf.rate_now":
+                    let score: Double?
+                    if object["score"] is NSNull { score = nil } else if let n = object["score"] as? NSNumber { score = n.doubleValue } else { return fail("missing score") }
+                    var r = try await bookshelf.rateNow(score: score, note: object["note"] as? String); r["ok"] = true; _ = emit(r)
                 case "bookshelf.history":
                     _ = emit(["ok": true, "events": try await bookshelf.history(limit: (object["limit"] as? Int) ?? 50)])
                 default:
@@ -750,6 +757,10 @@ private final class BookshelfAutotestSession: @unchecked Sendable {
     private let lock = NSLock()
     private var _approved = false, _status = 200
     private var _lastBody: [String: Any] = [:], _lastAuth = "", _lastURL = ""
+    private var _np: [String: Any] = [:], _npAuth = "", _rating: [String: Any] = [:]
+    var lastNowPlayingBody: [String: Any] { self.lock.lock(); defer { self.lock.unlock() }; return self._np }
+    var lastNowPlayingAuth: String { self.lock.lock(); defer { self.lock.unlock() }; return self._npAuth }
+    var lastRatingBody: [String: Any] { self.lock.lock(); defer { self.lock.unlock() }; return self._rating }
     var approved: Bool { get { self.lock.lock(); defer { self.lock.unlock() }; return self._approved } set { self.lock.lock(); self._approved = newValue; self.lock.unlock() } }
     var status: Int { get { self.lock.lock(); defer { self.lock.unlock() }; return self._status } set { self.lock.lock(); self._status = newValue; self.lock.unlock() } }
     var lastBody: [String: Any] { self.lock.lock(); defer { self.lock.unlock() }; return self._lastBody }
@@ -760,7 +771,12 @@ private final class BookshelfAutotestSession: @unchecked Sendable {
         self.lock.lock(); defer { self.lock.unlock() }
         self._lastURL = request.url?.absoluteString ?? ""
         self._lastAuth = request.value(forHTTPHeaderField: "Authorization") ?? ""
-        if let body = request.bodyData, let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any] { self._lastBody = obj }
+        if let body = request.bodyData, let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+            let url = self._lastURL
+            if url.contains("/now-playing/") { self._np = obj; self._npAuth = self._lastAuth }
+            else if url.contains("/listening/rating/") { self._rating = obj }
+            else { self._lastBody = obj }
+        }
     }
 
     fileprivate func reply(_ request: URLRequest) -> (Int, [String: Any]) {
@@ -769,6 +785,10 @@ private final class BookshelfAutotestSession: @unchecked Sendable {
         if path.hasSuffix("/pairing/start/") { return (200, ["pairingId": "P1", "userCode": "ABCD-1234", "verificationUrl": "https://bookshelf.music/connect/ABCD1234/", "pairingSecret": "PAIRSECRET", "expiresAt": "2030-01-01T00:00:00Z"]) }
         if path.hasSuffix("/pairing/status/") { return ok ? (200, ["status": "approved", "deviceToken": "DEVICE-TOKEN-1"]) : (200, ["status": "pending"]) }
         if code != 200 { return (code, ["error": "no"]) }
+        if path.hasSuffix("/now-playing/") {
+            return (200, ["status": "session", "ratingTargetId": "TARGET-1", "currentTrack": ["title": "Live Song", "score": 6.5]])
+        }
+        if path.hasSuffix("/listening/rating/") { return (200, ["currentTrack": ["title": "Live Song", "score": 9.1]]) }
         if request.httpMethod == "GET" {
             return (200, ["events": [
                 ["id": "e1", "listeningDate": "2026-10-19", "title": "Song A", "artist": "Guest", "albumArtist": "Album Artist", "album": "Album", "artworkUrl": "https://x/a.jpg", "score": 7.5, "lastPlayedAt": "2026-10-19T20:00:00Z", "isEditable": true],
@@ -778,12 +798,21 @@ private final class BookshelfAutotestSession: @unchecked Sendable {
         return (200, ["event": ["id": "e2", "listeningDate": "2026-10-19", "title": "Song B", "artist": "Artist", "album": "Album", "score": 8.3, "lastPlayedAt": "2026-10-19T20:05:00Z", "isEditable": true]])
     }
 
-    lazy var client: LiveEngineBookshelf = {
+    lazy var config: URLSessionConfiguration = {
         let config = URLSessionConfiguration.ephemeral
         BookshelfStubProtocol.handlers[ObjectIdentifier(self)] = self
         config.protocolClasses = [BookshelfStubProtocol.self]
-        return LiveEngineBookshelf(session: URLSession(configuration: config), store: self.store)
+        return config
     }()
+
+    /// A player that says it is playing one song, for the capture loop.
+    @MainActor lazy var capture = BookshelfCapture(store: self.store, sessionConfiguration: self.config, providers: [
+        .spotify: { .success(PlaybackSnapshot(state: .playing, track: SpotifyTrack(title: "Live Song", artist: "Artist", album: "Album", durationMs: 200_000, positionMs: 30_000, spotifyUrl: "spotify:track:abc"), provider: .spotify, identityEvidence: .provider("spotify:track:abc"))) },
+    ])
+
+    func client(capture: BookshelfCapture) -> LiveEngineBookshelf {
+        LiveEngineBookshelf(session: URLSession(configuration: self.config), store: self.store, capture: capture)
+    }
 }
 
 private extension URLRequest {
@@ -926,6 +955,8 @@ nonisolated enum EngineSocketAutotest {
             let fakeEdits = FakeMeetingEdits()
             let fakeModel = FakeModel()
             let bookshelfSession = BookshelfAutotestSession()
+            let bookshelfCapture = await MainActor.run { bookshelfSession.capture }
+            await MainActor.run { bookshelfCapture.start(interval: 3600) }
             let services = EngineSocket.Services(
                 generator: { system, user, maxTokens in
                     if user.contains("explode") { throw NSError(domain: "t", code: 1) }
@@ -958,7 +989,7 @@ nonisolated enum EngineSocketAutotest {
                 meetingEdits: fakeEdits,
                 model: fakeModel,
                 providers: FakeProviders(),
-                bookshelf: bookshelfSession.client
+                bookshelf: bookshelfSession.client(capture: bookshelfCapture)
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -1189,6 +1220,18 @@ nonisolated enum EngineSocketAutotest {
                 check("bookshelf rate_history rounds to one decimal and sends the note", rated?["ok"] as? Bool == true && bs.lastBody["score"] as? Double == 8.3 && bs.lastBody["note"] as? String == "fire" && bs.lastBody["dailyEventId"] as? String == "e2")
                 check("bookshelf rate_history can clear a grade", ask(#"{"op":"bookshelf.rate_history","id":"e2","score":null}"#)?["ok"] as? Bool == true && bs.lastBody["score"] is NSNull)
                 check("bookshelf refuses a grade outside 0-10", ask(#"{"op":"bookshelf.rate_history","id":"e2","score":11}"#)?["ok"] as? Bool == false)
+                // Capture: the player says it is playing; the loop reports it and a grade is written against the target the site hands back.
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                await bookshelfCapture.tick()
+                let early = ask(#"{"op":"bookshelf.now"}"#)
+                check("bookshelf now shows the playing track, not yet gradable until the site answers a posted report", early?["title"] as? String == "Live Song" && early?["state"] as? String == "playing" && early?["provider"] as? String == "spotify")
+                await bookshelfCapture.tick()
+                let live = ask(#"{"op":"bookshelf.now"}"#)
+                check("bookshelf capture posts now-playing with the track and a playback observation", bs.lastNowPlayingBody["playerState"] as? String == "playing" && (bs.lastNowPlayingBody["track"] as? [String: Any])?["title"] as? String == "Live Song" && (bs.lastNowPlayingBody["observation"] as? [String: Any])?["playbackId"] is String && bs.lastNowPlayingAuth == "Bearer DEVICE-TOKEN-1")
+                check("bookshelf now becomes gradable and carries the grade the site already holds", live?["can_rate"] as? Bool == true && live?["score"] as? Double == 6.5 && live?["status"] as? String == "Ready to rate")
+                let gradedNow = ask(#"{"op":"bookshelf.rate_now","score":9.14,"note":"yes"}"#)
+                check("bookshelf rate_now writes against the rating target with the track title and a rounded score", gradedNow?["ok"] as? Bool == true && bs.lastRatingBody["ratingTargetId"] as? String == "TARGET-1" && bs.lastRatingBody["trackTitle"] as? String == "Live Song" && bs.lastRatingBody["score"] as? Double == 9.1 && bs.lastRatingBody["note"] as? String == "yes" && gradedNow?["score"] as? Double == 9.1)
+                check("bookshelf rate_now refuses a grade outside 0-10", ask(#"{"op":"bookshelf.rate_now","score":12}"#)?["ok"] as? Bool == false)
                 bs.status = 401
                 check("bookshelf forgets a token the site no longer accepts", ask(#"{"op":"bookshelf.history"}"#)?["ok"] as? Bool == false && bs.store.token == nil && ask(#"{"op":"bookshelf.status"}"#)?["connected"] as? Bool == false)
                 bs.status = 200
