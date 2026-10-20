@@ -3,6 +3,7 @@ import SwiftUI
 /// Left: what's playing now. Right: what you've played, each with the app or site it came from.
 struct NowPlayingWidgetView: View {
     @ObservedObject var store: NowPlayingStore
+    @ObservedObject private var bookshelf = BookshelfCapture.shared
     var staticLayout = false
 
     var body: some View {
@@ -53,6 +54,7 @@ struct NowPlayingWidgetView: View {
                     Spacer(minLength: 0)
                 }
                 self.scrubber(track)
+                if self.bookshelf.now.canRate, self.bookshelf.now.title == track.title { BookshelfGradeRow(capture: self.bookshelf) }
                 self.controls(track)
             }
             .padding(12)
@@ -278,4 +280,47 @@ private struct ElapsedFill: View {
     let duration: TimeInterval
     let width: CGFloat
     var body: some View { Capsule().fill(Color.white).frame(width: max(3, self.width * min(self.clock.elapsed / self.duration, 1))) }
+}
+
+/// Grade the playing track on Bookshelf's 0-10 scale: drag (or tap) along the bar, and it is saved when you let go.
+private struct BookshelfGradeRow: View {
+    @ObservedObject var capture: BookshelfCapture
+    @State private var draft: Double?
+    @State private var failure: String?
+
+    var body: some View {
+        let shown = self.draft ?? self.capture.now.score
+        HStack(spacing: 8) {
+            Text("Grade").frame(width: 34, alignment: .leading)
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.25))
+                    Capsule().fill(Color.white).frame(width: max(3, proxy.size.width * CGFloat((shown ?? 0) / 10)))
+                }
+                .frame(height: 6)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0)
+                    .onChanged { value in self.draft = Self.value(at: value.location.x, width: proxy.size.width) }
+                    .onEnded { value in
+                        let score = Self.value(at: value.location.x, width: proxy.size.width)
+                        self.draft = score
+                        Task {
+                            do { try await self.capture.rateNow(score: score, note: nil); self.failure = nil } catch { self.failure = (error as? LocalizedError)?.errorDescription ?? "Couldn't save" }
+                            self.draft = nil
+                        }
+                    })
+            }
+            .frame(height: 14)
+            Text(self.failure != nil ? "!" : (shown.map { String(format: "%.1f", $0) } ?? "–")).frame(width: 34, alignment: .trailing)
+        }
+        .font(.system(size: 10).monospacedDigit())
+        .foregroundStyle(.white.opacity(0.7))
+        .help(self.failure ?? "Your Bookshelf grade for this song")
+    }
+
+    private static func value(at x: CGFloat, width: CGFloat) -> Double {
+        let raw = Double(min(max(x / max(width, 1), 0), 1)) * 10
+        return (raw * 10).rounded() / 10
+    }
 }

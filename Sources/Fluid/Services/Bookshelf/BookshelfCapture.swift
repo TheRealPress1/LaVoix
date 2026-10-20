@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 
 /// What Bookshelf's Mac app does while a song plays, done here so myOS can be the paired device: read the native Spotify or Music app
@@ -6,7 +7,7 @@ import Foundation
 /// its own policy allows. The reported track gets a rating target back, which is what a grade is written against.
 /// Reading players, the tracker and the report policy are Bookshelf's code, vendored unchanged (see `Vendored/`).
 @MainActor
-final class BookshelfCapture {
+final class BookshelfCapture: ObservableObject {
     static let shared = BookshelfCapture()
 
     /// What is playing, as Bookshelf sees it, for myOS and the notch.
@@ -25,7 +26,7 @@ final class BookshelfCapture {
         var status: String
     }
 
-    private(set) var now = Now(state: .notRunning, provider: nil, title: nil, artist: nil, album: nil, artworkURL: nil, canRate: false, score: nil, note: nil, status: "Not connected")
+    @Published private(set) var now = Now(state: .notRunning, provider: nil, title: nil, artist: nil, album: nil, artworkURL: nil, canRate: false, score: nil, note: nil, status: "Not connected")
 
     private let store: any BookshelfCredentialStoring
     private let site: URL
