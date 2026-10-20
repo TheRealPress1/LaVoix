@@ -29,6 +29,11 @@ final class NotchNowPlayingStrip {
     private var lastKey: String?
     private var settleTask: Task<Void, Never>?
     private var started = false
+    private let audioProvider = CoreAudioProcessActivityProvider()
+    /// Whether the app behind the system's reported track is really sending sound out. nil until the first check for a track.
+    private var audible: Bool?
+    private var audibleKey: String?
+    private var checking = false
 
     static let wing: CGFloat = 60
     static let wide: CGFloat = 170
@@ -40,13 +45,37 @@ final class NotchNowPlayingStrip {
         NowPlayingStore.shared.$track.receive(on: RunLoop.main).sink { [weak self] _ in self?.refresh() }.store(in: &self.bag)
         NotchHubController.shared.model.$isOpen.receive(on: RunLoop.main).sink { [weak self] _ in self?.refresh() }.store(in: &self.bag)
         Timer.publish(every: 5, on: .main, in: .common).autoconnect().sink { [weak self] _ in self?.refresh() }.store(in: &self.bag)
+        Timer.publish(every: 1.5, on: .main, in: .common).autoconnect().sink { [weak self] _ in self?.checkAudibility() }.store(in: &self.bag)
+    }
+
+    /// Browsers (and others) can report a muted or silent tab as "playing". Anything the system reports, as opposed to what
+    /// Spotify or Music announce themselves, only counts while that app really has audio going out.
+    private func checkAudibility() {
+        guard !self.checking, let track = NowPlayingStore.shared.track, track.isPlaying, let pid = track.pid,
+              let bundlePath = NSRunningApplication(processIdentifier: pid)?.bundleURL?.resolvingSymlinksInPath().path else { return }
+        self.checking = true
+        let key = track.key
+        Task { [weak self] in
+            guard let self else { return }
+            let snap = await self.audioProvider.snapshot()
+            self.checking = false
+            guard snap.queryState == .valid else { return }
+            let prefix = bundlePath + "/"
+            let now = snap.processes.contains { $0.isOutputRunning && ($0.executablePath.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path.hasPrefix(prefix) } ?? false) }
+            guard NowPlayingStore.shared.track?.key == key else { return }
+            if self.audible != now || self.audibleKey != key {
+                self.audible = now
+                self.audibleKey = key
+                self.refresh()
+            }
+        }
     }
 
     private func refresh() {
         let track = NowPlayingStore.shared.track
         // The notch is also used for a live meeting and for the dictation overlay; the strip steps aside for both.
         let meetingLive = ((NotchMeetingCardController.shared.engineLiveState()["active"] as? Bool) ?? false) || AppServices.shared.asr.isRunning
-        let show = NotchNowPlayingAmbientSettings.shouldShow(enabled: NotchNowPlayingAmbientSettings.isEnabled, playing: track?.isPlaying == true,
+        let show = NotchNowPlayingAmbientSettings.shouldShow(enabled: NotchNowPlayingAmbientSettings.isEnabled, playing: track?.isPlaying == true && !(track?.pid != nil && self.audibleKey == track?.key && self.audible == false),
                                                              hubOpen: NotchHubController.shared.model.isOpen, meetingLive: meetingLive)
         guard show, let track, let screen = NotchGeometry.targetScreen() else {
             self.window?.orderOut(nil)
