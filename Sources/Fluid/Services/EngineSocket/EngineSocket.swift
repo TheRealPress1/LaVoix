@@ -1107,6 +1107,13 @@ nonisolated enum EngineSocketAutotest {
                 let first = (parsed?["groups"] as? [[String: Any]])?.first
                 check("the group file has members and counts and no text, and hides the chat identifier", (first?["handles"] as? [String])?.count == 3 && first?["total"] as? Int == 40 && first?["id"] as? String == GroupChatsExport.id(for: "g1") && !String(decoding: data, as: UTF8.self).contains("g1"))
             }
+            // quick link logos
+            do {
+                let kinds = ["https://www.linkedin.com/in/me", "https://open.spotify.com/album/abc", "https://music.apple.com/us/album/x", "https://youtu.be/abc", "https://github.com/me", "https://x.com/me", "https://twitter.com/me",
+                             "https://www.instagram.com/me", "https://me.com", "ada@example.com", "+1 (415) 555-0101", "123 Main Street", "mailto:ada@example.com"].map(QuickLinkKind.of)
+                check("quick links pick the logo from where they point", kinds == [.linkedin, .spotify, .appleMusic, .youtube, .github, .x, .x, .instagram, .web, .email, .phone, .text, .email])
+                check("a look-alike address is not mistaken for a brand", QuickLinkKind.of("https://notlinkedin.com/in/me") == .web && QuickLinkKind.of("https://linkedin.com.evil.example/in/me") == .web)
+            }
             // freeze snapshots
             do {
                 check("a short stall is ignored", !StallRecorder.shouldCapture(stalledFor: 0.3, sinceLastCapture: 500))

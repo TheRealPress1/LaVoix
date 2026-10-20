@@ -123,7 +123,11 @@ private struct QuickLinkChip: View {
     var body: some View {
         Button(action: self.action) {
             HStack(spacing: 6) {
-                Image(systemName: self.copied ? "checkmark" : "doc.on.doc").font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
+                if self.copied {
+                    Image(systemName: "checkmark").font(.system(size: 12, weight: .bold)).frame(width: 18, height: 18)
+                } else {
+                    QuickLinkIcon(kind: QuickLinkKind.of(self.link.value))
+                }
                 Text(self.copied ? "Copied" : self.link.label)
                     .font(.system(size: 13, weight: .medium))
                     .lineLimit(1)
