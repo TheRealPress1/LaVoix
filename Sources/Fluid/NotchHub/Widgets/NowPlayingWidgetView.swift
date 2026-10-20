@@ -23,7 +23,9 @@ struct NowPlayingWidgetView: View {
 
     @ViewBuilder
     private var nowPlaying: some View {
-        if let track = self.store.track {
+        if self.showsBookshelfCard {
+            self.bookshelfCard
+        } else if let track = self.store.track {
             self.card(track)
         } else {
             VStack(spacing: 8) {
@@ -33,6 +35,40 @@ struct NowPlayingWidgetView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.05)))
         }
+    }
+
+    /// Bookshelf's song takes the card when there is something to grade and the system's now-playing slot is empty, paused, or someone
+    /// else's (macOS keeps naming a paused browser video while Spotify is the thing you want to grade).
+    private var showsBookshelfCard: Bool {
+        guard self.bookshelf.now.canRate, let title = self.bookshelf.now.title else { return false }
+        guard let track = self.store.track else { return true }
+        return track.title != title && !track.isPlaying
+    }
+
+    private var bookshelfCard: some View {
+        let n = self.bookshelf.now
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 11) {
+                AsyncImage(url: n.artworkURL.flatMap(URL.init(string:))) { image in
+                    image.resizable().aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    ZStack { Color.white.opacity(0.1); Image(systemName: "music.note").foregroundStyle(.white.opacity(0.5)) }
+                }
+                .frame(width: 62, height: 62)
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(n.title ?? "").font(.system(size: 13.5, weight: .semibold)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    Text([n.artist, n.provider?.displayName].compactMap { $0 }.joined(separator: " · "))
+                        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+            BookshelfGradeRow(capture: self.bookshelf)
+            Text("Drag the bar to grade this song on Bookshelf").font(.system(size: 10)).foregroundStyle(.white.opacity(0.45))
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.07)))
     }
 
     /// The card fills the whole left side. A widescreen thumbnail (a video) runs edge to edge; anything else (a square
