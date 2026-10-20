@@ -4,6 +4,9 @@ import SwiftUI
 struct NowPlayingWidgetView: View {
     @ObservedObject var store: NowPlayingStore
     @ObservedObject private var bookshelf = BookshelfCapture.shared
+    @State private var rightTab: RightTab = .grade
+
+    private enum RightTab { case grade, history }
     var staticLayout = false
 
     var body: some View {
@@ -11,7 +14,7 @@ struct NowPlayingWidgetView: View {
             self.nowPlaying
                 .frame(width: 272)
             Rectangle().fill(Color.white.opacity(0.1)).frame(width: 1).padding(.vertical, 2).padding(.horizontal, 16)
-            self.history
+            self.rightSide
                 .frame(maxWidth: .infinity)
         }
         .foregroundStyle(.white)
@@ -63,8 +66,6 @@ struct NowPlayingWidgetView: View {
                 }
             }
             Spacer(minLength: 0)
-            BookshelfGradeRow(capture: self.bookshelf)
-            Text("Drag the bar to grade this song on Bookshelf").font(.system(size: 10)).foregroundStyle(.white.opacity(0.45))
         }
         .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -90,7 +91,6 @@ struct NowPlayingWidgetView: View {
                     Spacer(minLength: 0)
                 }
                 self.scrubber(track)
-                if self.bookshelf.now.canRate, self.bookshelf.now.title == track.title { BookshelfGradeRow(capture: self.bookshelf) }
                 self.controls(track)
             }
             .padding(12)
@@ -200,6 +200,40 @@ struct NowPlayingWidgetView: View {
         .shadow(color: .black.opacity(0.4), radius: 3)
     }
 
+    // MARK: - Right side: your grade and note, or the history
+
+    /// Grade and Notes while Bookshelf has a song to grade (the default), with a switch to the history; just the history otherwise.
+    @ViewBuilder
+    private var rightSide: some View {
+        if self.bookshelf.now.canRate, !self.staticLayout {
+            VStack(alignment: .leading, spacing: 8) {
+                self.tabSwitch
+                if self.rightTab == .grade { BookshelfGradePanel(capture: self.bookshelf) } else { self.historyBody }
+            }
+        } else {
+            self.history
+        }
+    }
+
+    private var tabSwitch: some View {
+        HStack(spacing: 4) {
+            ForEach([(RightTab.grade, "Grade"), (RightTab.history, "History")], id: \.1) { tab, label in
+                Button { self.rightTab = tab } label: {
+                    Text(label).font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(self.rightTab == tab ? 1 : 0.5))
+                        .padding(.horizontal, 10).padding(.vertical, 4)
+                        .background(Capsule().fill(Color.white.opacity(self.rightTab == tab ? 0.16 : 0)))
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+            if self.rightTab == .history, !self.store.history.isEmpty {
+                Button("Clear") { self.store.clearHistory() }
+                    .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+            }
+        }
+    }
+
     // MARK: - History
 
     private var history: some View {
@@ -215,7 +249,13 @@ struct NowPlayingWidgetView: View {
                         .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
                 }
             }
-            if self.store.history.isEmpty {
+            self.historyBody
+        }
+    }
+
+    @ViewBuilder
+    private var historyBody: some View {
+        if self.store.history.isEmpty {
                 VStack(spacing: 6) {
                     Image(systemName: "clock.arrow.circlepath").font(.system(size: 22, weight: .light)).foregroundStyle(.white.opacity(0.35))
                     Text(NotchNowPlayingSettings.keepsHistory ? "What you play will be listed here" : "History is turned off in settings")
@@ -227,7 +267,6 @@ struct NowPlayingWidgetView: View {
             } else {
                 ScrollView(.vertical, showsIndicators: false) { self.rows(self.store.history) }
             }
-        }
     }
 
     private func rows(_ items: [NowPlayingStore.HistoryItem]) -> some View {
@@ -318,22 +357,32 @@ private struct ElapsedFill: View {
     var body: some View { Capsule().fill(Color.white).frame(width: max(3, self.width * min(self.clock.elapsed / self.duration, 1))) }
 }
 
-/// Grade the playing track on Bookshelf's 0-10 scale: drag (or tap) along the bar, and it is saved when you let go.
-private struct BookshelfGradeRow: View {
+/// Your Bookshelf grade and note for the song playing: a big number, a bar to drag (saved when you let go), and a note that saves
+/// after you stop typing (or on Return).
+private struct BookshelfGradePanel: View {
     @ObservedObject var capture: BookshelfCapture
     @State private var draft: Double?
+    @State private var note = ""
     @State private var failure: String?
+    @State private var saveTask: Task<Void, Never>?
+    @FocusState private var noteFocused: Bool
 
     var body: some View {
-        let shown = self.draft ?? self.capture.now.score
-        HStack(spacing: 8) {
-            Text("Grade").frame(width: 34, alignment: .leading)
+        let now = self.capture.now
+        let shown = self.draft ?? now.score
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(shown.map { String(format: "%.1f", $0) } ?? "–").font(.system(size: 34, weight: .semibold).monospacedDigit())
+                Text("/ 10").font(.system(size: 12)).foregroundStyle(.white.opacity(0.45))
+                Spacer()
+                Text(self.failure ?? now.status).font(.system(size: 10)).foregroundStyle(.white.opacity(self.failure == nil ? 0.45 : 0.8)).lineLimit(1)
+            }
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.25))
-                    Capsule().fill(Color.white).frame(width: max(3, proxy.size.width * CGFloat((shown ?? 0) / 10)))
+                    Capsule().fill(Color.white.opacity(0.22))
+                    Capsule().fill(Color.white).frame(width: max(4, proxy.size.width * CGFloat((shown ?? 0) / 10)))
                 }
-                .frame(height: 6)
+                .frame(height: 8)
                 .frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 0)
@@ -341,18 +390,63 @@ private struct BookshelfGradeRow: View {
                     .onEnded { value in
                         let score = Self.value(at: value.location.x, width: proxy.size.width)
                         self.draft = score
-                        Task {
-                            do { try await self.capture.rateNow(score: score, note: nil); self.failure = nil } catch { self.failure = (error as? LocalizedError)?.errorDescription ?? "Couldn't save" }
-                            self.draft = nil
-                        }
+                        self.save(score: score, note: nil)
                     })
             }
-            .frame(height: 14)
-            Text(self.failure != nil ? "!" : (shown.map { String(format: "%.1f", $0) } ?? "–")).frame(width: 34, alignment: .trailing)
+            .frame(height: 20)
+            Text("Notes").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.5)).textCase(.uppercase)
+            TextField("", text: self.$note, prompt: Text("What did you think?").foregroundStyle(.white.opacity(0.4)), axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(3...5)
+                .font(.system(size: 12))
+                .foregroundStyle(.white)
+                .tint(.white)
+                .focused(self.$noteFocused)
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.07)))
+                .onSubmit { self.saveNote() }
+                .onExitCommand { self.noteFocused = false; self.saveNote(); NotchHubController.shared.endTextEntry() }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    NotchHubController.shared.beginTextEntry()
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 120_000_000)
+                        self.noteFocused = true
+                    }
+                }
+                .onChange(of: self.note) { _, _ in self.scheduleNoteSave() }
+                .onChange(of: self.noteFocused) { _, focused in
+                    if focused { NotchHubController.shared.beginTextEntry() } else { self.saveNote() }
+                }
+            Spacer(minLength: 0)
         }
-        .font(.system(size: 10).monospacedDigit())
-        .foregroundStyle(.white.opacity(0.7))
-        .help(self.failure ?? "Your Bookshelf grade for this song")
+        .onAppear { self.note = now.note ?? "" }
+        .onChange(of: now.title) { _, _ in self.draft = nil; self.note = self.capture.now.note ?? ""; self.failure = nil }
+        .onChange(of: now.note) { _, new in if !self.noteFocused { self.note = new ?? "" } }
+        .onDisappear { self.saveNote(); NotchHubController.shared.endTextEntry() }
+    }
+
+    private func scheduleNoteSave() {
+        guard self.noteFocused else { return }
+        self.saveTask?.cancel()
+        self.saveTask = Task {
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            if !Task.isCancelled { self.saveNote() }
+        }
+    }
+
+    private func saveNote() {
+        self.saveTask?.cancel()
+        guard self.note != (self.capture.now.note ?? "") else { return }
+        self.save(score: self.capture.now.score, note: self.note)
+    }
+
+    private func save(score: Double?, note: String?) {
+        Task {
+            do { try await self.capture.rateNow(score: score, note: note); self.failure = nil } catch { self.failure = (error as? LocalizedError)?.errorDescription ?? "Couldn't save" }
+            self.draft = nil
+        }
     }
 
     private static func value(at x: CGFloat, width: CGFloat) -> Double {
