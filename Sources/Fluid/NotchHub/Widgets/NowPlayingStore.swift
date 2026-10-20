@@ -216,20 +216,49 @@ final class NowPlayingStore: ObservableObject {
                 let artist = info?["Artist"] as? String
                 let album = info?["Album"] as? String
                 let ms = (info?["Duration"] as? Double) ?? (info?["Total Time"] as? Double)
-                Task { @MainActor in self?.announce(bundleID: a.bundleID, app: a.app, state: state, title: title, artist: artist, album: album, durationMs: ms) }
+                let trackID = info?["Track ID"] as? String
+                Task { @MainActor in self?.announce(bundleID: a.bundleID, app: a.app, state: state, title: title, artist: artist, album: album, durationMs: ms, trackID: trackID) }
             }
             self.playerObservers.append(token)
         }
     }
 
-    private func announce(bundleID: String, app: String, state: String?, title: String?, artist: String?, album: String?, durationMs: Double?) {
+    private func announce(bundleID: String, app: String, state: String?, title: String?, artist: String?, album: String?, durationMs: Double?, trackID: String?) {
         if state == "Playing", let title, !title.isEmpty {
             self.announced = Track(title: title, artist: artist, album: album, appName: app, bundleID: bundleID, isPlaying: true,
                                    duration: durationMs.map { $0 / 1000 }, artwork: nil, pid: nil)
+            self.announcedTrackID = trackID
+            if bundleID == "com.spotify.client", let trackID, trackID.hasPrefix("spotify:track:") {
+                if let cached = self.spotifyCovers[trackID] {
+                    self.announced?.artwork = cached
+                } else {
+                    Task { [weak self] in await self?.fetchSpotifyCover(trackID: trackID) }
+                }
+            }
         } else if self.announced?.bundleID == bundleID {
             self.announced = nil
         }
         self.reconcile()
+    }
+
+    private var announcedTrackID: String?
+    private var spotifyCovers: [String: NSImage] = [:]
+
+    /// Spotify's announcements carry no cover; its public oEmbed page gives the cover for a track ID (no sign-in needed).
+    private func fetchSpotifyCover(trackID: String) async {
+        guard let query = trackID.addingPercentEncoding(withAllowedCharacters: .alphanumerics),
+              let url = URL(string: "https://open.spotify.com/oembed?url=\(query)"),
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let thumb = (json["thumbnail_url"] as? String).flatMap(URL.init(string:)),
+              let (img, _) = try? await URLSession.shared.data(from: thumb),
+              let image = NSImage(data: img) else { return }
+        self.spotifyCovers[trackID] = image
+        if self.spotifyCovers.count > 20 { self.spotifyCovers = [trackID: image] }
+        if self.announcedTrackID == trackID, self.announced?.bundleID == "com.spotify.client", self.announced?.artwork == nil {
+            self.announced?.artwork = image
+            self.reconcile()
+        }
     }
 
     /// The system's report wins whenever it is actually playing; otherwise a player that announced itself as playing does.
