@@ -47,6 +47,11 @@ final class MessagesStore: ObservableObject {
         try await MessagesSender.send(text, toChat: chatGUID)
     }
     private var refreshFailures = 0
+    /// One read of the Messages database at a time, on its own queue. The read is synchronous and can take seconds on a big database; started
+    /// again on every change and every 20 seconds with no limit, they piled up, filled Swift's worker threads and froze the whole engine.
+    private var refreshInFlight = false
+    private var pendingAnnounce: Bool?
+    private static let readQueue = DispatchQueue(label: "com.myos.messages-read", qos: .utility)
     private var retryTask: Task<Void, Never>?
     private var lastSeenRowID: Int64 = 0
     private var watcher: DispatchSourceFileSystemObject?
@@ -134,8 +139,16 @@ final class MessagesStore: ObservableObject {
         let after = self.lastSeenRowID
         let chatID = self.selectedChatID
         let stamps = self.cacheStamps
+        if self.refreshInFlight {
+            // Fold into one more read once the current one lands, remembering whether any asker wanted new-message announcements.
+            self.pendingAnnounce = (self.pendingAnnounce ?? false) || announce
+            return
+        }
+        self.refreshInFlight = true
         Task {
-            let result = await Task.detached(priority: .utility) { () -> ([MessageConversation], [Int64: [ThreadMessage]], [IncomingMessage])? in
+            let result = await withCheckedContinuation { (continuation: CheckedContinuation<([MessageConversation], [Int64: [ThreadMessage]], [IncomingMessage])?, Never>) in
+                Self.readQueue.async {
+                    let value = { () -> ([MessageConversation], [Int64: [ThreadMessage]], [IncomingMessage])? in
                 // A failed read (the Messages app can hold the database locked for a moment) is not "no conversations":
                 // report it so the screen keeps what it has and tries again.
                 guard let conversations = database.conversations(limit: 12) else { return nil }
@@ -148,7 +161,18 @@ final class MessagesStore: ObservableObject {
                 }
                 let incoming = announce ? database.incomingMessages(after: after) : []
                 return (conversations, threads, incoming)
-            }.value
+                    }()
+                    continuation.resume(returning: value)
+                }
+            }
+            self.refreshInFlight = false
+            // Applied first, so the follow-up read starts from the newest row seen and announces nothing twice.
+            defer {
+                if let again = self.pendingAnnounce {
+                    self.pendingAnnounce = nil
+                    self.refresh(announce: again)
+                }
+            }
             guard let result else {
                 self.retryRefresh(announce: announce)
                 return
