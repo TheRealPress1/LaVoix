@@ -99,6 +99,11 @@ final class NowPlayingStore: ObservableObject {
     /// The widget and the history logger can both want the listener; it runs while anyone does.
     private var listenerUsers = 0
     private var artworkCache: (key: String, image: NSImage)?
+    /// What the system's now-playing slot last said, and what Spotify or Music last announced for themselves. macOS keeps
+    /// reporting a paused browser video as "the" player while Spotify plays on, so the announcements fill that gap.
+    private var reported: Track?
+    private var announced: Track?
+    private var playerObservers: [NSObjectProtocol] = []
     private let directory: URL
     private var thumbnailCache: [UUID: NSImage] = [:]
 
@@ -193,6 +198,52 @@ final class NowPlayingStore: ObservableObject {
         }
         self.controller.startListening()
         #endif
+        self.observePlayerAnnouncements()
+    }
+
+    private static let announcers: [(name: String, bundleID: String, app: String)] = [
+        ("com.spotify.client.PlaybackStateChanged", "com.spotify.client", "Spotify"),
+        ("com.apple.Music.playerInfo", "com.apple.Music", "Music"),
+    ]
+
+    private func observePlayerAnnouncements() {
+        guard self.playerObservers.isEmpty else { return }
+        for a in Self.announcers {
+            let token = DistributedNotificationCenter.default().addObserver(forName: Notification.Name(a.name), object: nil, queue: .main) { [weak self] note in
+                let info = note.userInfo
+                let state = info?["Player State"] as? String
+                let title = info?["Name"] as? String
+                let artist = info?["Artist"] as? String
+                let album = info?["Album"] as? String
+                let ms = (info?["Duration"] as? Double) ?? (info?["Total Time"] as? Double)
+                Task { @MainActor in self?.announce(bundleID: a.bundleID, app: a.app, state: state, title: title, artist: artist, album: album, durationMs: ms) }
+            }
+            self.playerObservers.append(token)
+        }
+    }
+
+    private func announce(bundleID: String, app: String, state: String?, title: String?, artist: String?, album: String?, durationMs: Double?) {
+        if state == "Playing", let title, !title.isEmpty {
+            self.announced = Track(title: title, artist: artist, album: album, appName: app, bundleID: bundleID, isPlaying: true,
+                                   duration: durationMs.map { $0 / 1000 }, artwork: nil, pid: nil)
+        } else if self.announced?.bundleID == bundleID {
+            self.announced = nil
+        }
+        self.reconcile()
+    }
+
+    /// The system's report wins whenever it is actually playing; otherwise a player that announced itself as playing does.
+    private func reconcile() {
+        if let reported, reported.isPlaying { self.trackChanged(reported); return }
+        if let announced, announced.isPlaying,
+           !NSRunningApplication.runningApplications(withBundleIdentifier: announced.bundleID ?? "").isEmpty
+        {
+            var t = announced
+            if let current = self.track, current.key == t.key { t.artwork = current.artwork; t.site = current.site }
+            self.trackChanged(t)
+            return
+        }
+        self.trackChanged(reported)
     }
 
     private func stopListening() {
@@ -202,6 +253,9 @@ final class NowPlayingStore: ObservableObject {
         self.controller.onListenerTerminated = nil
         self.controller.stopListening()
         #endif
+        self.playerObservers.forEach { DistributedNotificationCenter.default().removeObserver($0) }
+        self.playerObservers = []
+        self.announced = nil
     }
 
     func togglePlayPause() {
@@ -235,7 +289,8 @@ final class NowPlayingStore: ObservableObject {
     #if arch(arm64)
     private func apply(_ info: TrackInfo?) {
         guard let p = info?.payload, let title = p.title, !title.isEmpty else {
-            self.trackChanged(nil)
+            self.reported = nil
+            self.reconcile()
             return
         }
         let key = "\(p.bundleIdentifier ?? "")|\(title)"
@@ -245,11 +300,12 @@ final class NowPlayingStore: ObservableObject {
             self.artworkCache = (key, fresh)
         }
         if let current = p.currentElapsedTime { self.elapsed = max(0, current) }
-        self.trackChanged(Track(
+        self.reported = Track(
             title: title, artist: p.artist, album: p.album, appName: p.applicationName,
             bundleID: p.bundleIdentifier, isPlaying: p.isPlaying ?? false,
             duration: p.durationMicros.map { $0 / 1_000_000 }, artwork: art, pid: p.PID
-        ))
+        )
+        self.reconcile()
     }
     #endif
 
