@@ -3,7 +3,7 @@ import SwiftUI
 /// What a quick link points at, so its chip can wear the right logo: LinkedIn's mark for a LinkedIn link, Spotify's for a Spotify
 /// link, and so on. Anything else gets a generic link, mail or phone symbol, or a note for plain text.
 enum QuickLinkKind: Equatable {
-    case linkedin, spotify, appleMusic, youtube, soundcloud, github, x, instagram, tiktok, facebook, netflix, twitch, vimeo
+    case linkedin, spotify, appleMusic, youtube, soundcloud, github, calcom, x, instagram, tiktok, facebook, netflix, twitch, vimeo
     case email, phone, web, text
 
     nonisolated static func of(_ value: String) -> QuickLinkKind {
@@ -17,6 +17,7 @@ enum QuickLinkKind: Equatable {
             if on("youtube.com") || on("youtu.be") { return .youtube }
             if on("soundcloud.com") { return .soundcloud }
             if on("github.com") { return .github }
+            if on("cal.com") { return .calcom }
             if on("x.com") || on("twitter.com") { return .x }
             if on("instagram.com") { return .instagram }
             if on("tiktok.com") { return .tiktok }
@@ -56,10 +57,11 @@ struct QuickLinkIcon: View {
             case .youtube, .soundcloud, .netflix, .twitch, .vimeo:
                 NowPlayingSourceLogo(source: NowPlayingSource.site(forHost: self.host) ?? NowPlayingSource(kind: .other, name: ""), bundleID: nil, size: self.size)
             case .github:
-                ZStack {
-                    Circle().fill(Color(red: 0.14, green: 0.16, blue: 0.18))
-                    Image(systemName: "chevron.left.forwardslash.chevron.right").font(.system(size: self.size * 0.42, weight: .bold)).foregroundStyle(.white)
-                }
+                SVGPathShape(d: BrandMarks.github).fill(Color.white)
+            case .calcom:
+                // The wordmark is wide, so its icon is wider than the others and the chip makes room for it.
+                SVGPathShape(d: BrandMarks.calcom, box: BrandMarks.calcomBox).fill(Color.white)
+                    .frame(width: self.size * 2.2, height: self.size * 2.2 * BrandMarks.calcomBox.height / BrandMarks.calcomBox.width)
             case .x:
                 self.tile(Color.black) { Text("X").font(.system(size: self.size * 0.62, weight: .black)).foregroundStyle(.white) }
                     .overlay(RoundedRectangle(cornerRadius: self.size * 0.28, style: .continuous).strokeBorder(Color.white.opacity(0.35), lineWidth: 0.8))
@@ -85,7 +87,7 @@ struct QuickLinkIcon: View {
                 Image(systemName: "text.alignleft").font(.system(size: self.size * 0.75)).foregroundStyle(.white.opacity(0.7))
             }
         }
-        .frame(width: self.size, height: self.size)
+        .frame(width: self.kind == .calcom ? self.size * 2.2 : self.size, height: self.size)
     }
 
     /// The host for kinds that reuse the Now Playing logos, which choose by address.

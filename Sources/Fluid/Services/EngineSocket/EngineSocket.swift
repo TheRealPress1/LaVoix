@@ -1471,6 +1471,12 @@ nonisolated enum EngineSocketAutotest {
                 let kinds = ["https://www.linkedin.com/in/me", "https://open.spotify.com/album/abc", "https://music.apple.com/us/album/x", "https://youtu.be/abc", "https://github.com/me", "https://x.com/me", "https://twitter.com/me",
                              "https://www.instagram.com/me", "https://me.com", "ada@example.com", "+1 (415) 555-0101", "123 Main Street", "mailto:ada@example.com"].map(QuickLinkKind.of)
                 check("quick links pick the logo from where they point", kinds == [.linkedin, .spotify, .appleMusic, .youtube, .github, .x, .x, .instagram, .web, .email, .phone, .text, .email])
+                check("GitHub and Cal.com links get their own marks", QuickLinkKind.of("https://github.com/me") == .github && QuickLinkKind.of("https://cal.com/me/15min") == .calcom && QuickLinkKind.of("https://app.cal.com/me") == .calcom && QuickLinkKind.of("https://notcal.com/me") == .web)
+                check("the brand outlines draw inside their boxes", {
+                    let gh = BrandMarks.bounds(of: BrandMarks.github), cal = BrandMarks.bounds(of: BrandMarks.calcom)
+                    return gh.minX >= -0.01 && gh.maxX <= 24.01 && gh.minY >= -0.01 && gh.maxY <= 24.01 && gh.width > 23.9
+                        && abs(cal.minY - BrandMarks.calcomBox.minY) < 0.1 && abs(cal.maxY - BrandMarks.calcomBox.maxY) < 0.1 && cal.width > 23.9
+                }())
                 check("a look-alike address is not mistaken for a brand", QuickLinkKind.of("https://notlinkedin.com/in/me") == .web && QuickLinkKind.of("https://linkedin.com.evil.example/in/me") == .web)
             }
             // freeze snapshots
