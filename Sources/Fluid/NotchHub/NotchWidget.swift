@@ -58,6 +58,11 @@ enum NotchWidgetRegistry {
                 AnyView(PeopleWidgetView(store: PeopleStore.shared))
             })
         }
+        if PeopleDatabase.isAvailable {
+            widgets.append(NotchWidget(id: "facetime", title: "FaceTime", systemImage: "video.fill") {
+                AnyView(FaceTimeWidgetView(store: FaceTimeStore.shared))
+            })
+        }
         if NotchMessagesSettings.isEnabled {
             widgets.append(NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") {
                 AnyView(MessagesWidgetView(store: MessagesStore.shared))

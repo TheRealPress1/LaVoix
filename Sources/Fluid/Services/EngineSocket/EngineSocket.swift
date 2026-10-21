@@ -1500,6 +1500,13 @@ nonisolated enum EngineSocketAutotest {
                 check("a link suggests a name from its address", QuickLinksWidgetView.nameGuess(for: "https://www.linkedin.com/in/me") == "Linkedin" && QuickLinksWidgetView.nameGuess(for: "just text") == nil)
                 check("a file that isn't ours gives no links", QuickLinksStore.parse(Data("not json".utf8)).isEmpty && QuickLinksStore.parse(Data(#"{"other":1}"#.utf8)).isEmpty)
             }
+            // FaceTime from the notch
+            do {
+                check("a number keeps its plus and an email its at sign in the call address", FaceTimeDatabase.callURL(address: "+14155550101", audio: false)?.absoluteString == "facetime://+14155550101" && FaceTimeDatabase.callURL(address: "ada@example.com", audio: true)?.absoluteString == "facetime-audio://ada@example.com")
+                check("an empty address starts no call", FaceTimeDatabase.callURL(address: "  ", audio: false) == nil)
+                check("a search takes percent and underscore literally", FaceTimeDatabase.pattern(for: " a%b_c ") == "%a\\%b\\_c%")
+                check("a missing people file reads as unavailable, not as no one", FaceTimeDatabase.read(query: "", url: URL(fileURLWithPath: "/nonexistent/people.db")) == nil)
+            }
             // boost words and dictionary files
             do {
                 check("words.add keeps a word with its other spellings", ((ask(#"{"op":"words.add","text":"  Qwen ","aliases":["quen","QUEN","  ","qwen"]}"#)?["word"] as? [String: Any])?["aliases"] as? [String]) == ["quen"])
