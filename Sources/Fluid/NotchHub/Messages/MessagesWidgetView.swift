@@ -281,6 +281,7 @@ private struct ThreadView: View {
 private struct Bubble: View {
     let message: ThreadMessage
     var label: String? = nil
+    @State private var pressing = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -302,6 +303,16 @@ private struct Bubble: View {
                 .environment(\.openURL, NotchLinkText.openAction)
                 .font(.system(size: 12.5))
                 .foregroundStyle(.white)
+                // Drag to highlight words, double-click for a word, ⌘C or the right-click menu to copy. Pressing on a message takes the keyboard
+                // (the notch stays open until you click away or press Esc, as when typing a reply), which is what lets ⌘C reach it.
+                .textSelection(.enabled)
+                .simultaneousGesture(DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        guard !self.pressing else { return }
+                        self.pressing = true
+                        NotchHubController.shared.beginTextEntry()
+                    }
+                    .onEnded { _ in self.pressing = false })
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
                 .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
