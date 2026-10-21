@@ -11,11 +11,15 @@ struct NowPlayingWidgetView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            // Narrower than the full side and kept off the left and bottom edges, so its rounded corners clear the notch's own.
-            self.nowPlaying
-                .frame(width: 236)
-                .padding(.leading, 8)
-                .padding(.bottom, 12)
+            // Narrower than the full side and kept off the left edge, and 12 points shorter than the space it is given, so its rounded corners
+            // clear the notch's own. Shorter by measuring, not by padding: padding makes the column taller than the room and pushes the tab icons
+            // down into the notch's bottom edge.
+            GeometryReader { geometry in
+                self.nowPlaying
+                    .frame(width: 236, height: max(0, geometry.size.height - 12))
+                    .padding(.leading, 8)
+            }
+            .frame(width: 244)
             Rectangle().fill(Color.white.opacity(0.1)).frame(width: 1).padding(.vertical, 2).padding(.horizontal, 16)
             self.rightSide
                 .frame(maxWidth: .infinity)
