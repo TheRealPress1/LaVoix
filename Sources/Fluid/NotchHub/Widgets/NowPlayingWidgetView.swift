@@ -377,9 +377,9 @@ private struct BookshelfGradePanel: View {
     var body: some View {
         let now = self.capture.now
         let shown = self.draft ?? now.score
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                Text(shown.map { String(format: "%.1f", $0) } ?? "–").font(.system(size: 34, weight: .semibold).monospacedDigit())
+                Text(shown.map { String(format: "%.1f", $0) } ?? "–").font(.system(size: 28, weight: .semibold).monospacedDigit())
                 Text("/ 10").font(.system(size: 12)).foregroundStyle(.white.opacity(0.45))
                 Spacer()
                 Text(self.failure ?? now.status).font(.system(size: 10)).foregroundStyle(.white.opacity(self.failure == nil ? 0.45 : 0.8)).lineLimit(1)
@@ -400,16 +400,16 @@ private struct BookshelfGradePanel: View {
                         self.save(score: score, note: nil)
                     })
             }
-            .frame(height: 20)
+            .frame(height: 16)
             Text("Notes").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.5)).textCase(.uppercase)
             TextField("", text: self.$note, prompt: Text("What did you think?").foregroundStyle(.white.opacity(0.4)), axis: .vertical)
                 .textFieldStyle(.plain)
-                .lineLimit(3...5)
+                .lineLimit(2...4)
                 .font(.system(size: 12))
                 .foregroundStyle(.white)
                 .tint(.white)
                 .focused(self.$noteFocused)
-                .padding(8)
+                .padding(7)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.07)))
                 .onSubmit { self.saveNote() }

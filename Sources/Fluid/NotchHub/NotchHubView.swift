@@ -58,7 +58,9 @@ struct NotchHubView: View {
                 .frame(height: max(self.model.closedSize.height, 28))
             // Widgets stay mounted once shown (and the rest are warmed up just after opening), so switching tabs is a
             // quick crossfade instead of rebuilding a view and restarting its data source every time.
-            ZStack(alignment: .top) {
+            // The area is always exactly the room left over (a clear box that content is drawn over), so a tab that wants more height than
+            // that is clipped instead of pushing the tab row down into the notch's bottom edge.
+            Color.clear.overlay(alignment: .top) { ZStack(alignment: .top) {
                 ForEach(self.model.widgets) { widget in
                     if self.mounted.contains(widget.id) || widget.id == selectedID {
                         let active = widget.id == selectedID
@@ -73,8 +75,9 @@ struct NotchHubView: View {
                             .environment(\.notchWidgetActive, active)
                     }
                 }
-            }
+            } }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .clipped()
             .animation(.easeInOut(duration: 0.16), value: selectedID)
             // The tab icons unfold along the bottom edge when the title's arrow is clicked. ImageRenderer can't draw a
             // ScrollView, so previews get the plain row.
