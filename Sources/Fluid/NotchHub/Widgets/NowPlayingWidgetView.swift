@@ -11,8 +11,11 @@ struct NowPlayingWidgetView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
+            // Narrower than the full side and kept off the left and bottom edges, so its rounded corners clear the notch's own.
             self.nowPlaying
-                .frame(width: 272)
+                .frame(width: 236)
+                .padding(.leading, 8)
+                .padding(.bottom, 12)
             Rectangle().fill(Color.white.opacity(0.1)).frame(width: 1).padding(.vertical, 2).padding(.horizontal, 16)
             self.rightSide
                 .frame(maxWidth: .infinity)
