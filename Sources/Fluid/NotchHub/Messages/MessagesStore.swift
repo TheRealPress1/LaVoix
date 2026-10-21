@@ -16,6 +16,10 @@ final class MessagesStore: ObservableObject {
 
     @Published private(set) var access: AccessState = .unknown
     @Published private(set) var conversations: [MessageConversation] = []
+    /// True once the conversations have been read at least once. Until then the screen says it is loading instead of drawing an empty thread.
+    @Published private(set) var hasLoaded = false
+    /// True when the first read keeps failing, so the screen can say so and offer to try again.
+    @Published private(set) var loadFailed = false
     @Published private(set) var thread: [ThreadMessage] = []
     @Published private(set) var unreadTotal = 0
     @Published private(set) var selectedChatID: Int64?
@@ -68,6 +72,7 @@ final class MessagesStore: ObservableObject {
         let store = MessagesStore()
         let now = Date()
         store.access = access
+        store.hasLoaded = true
         store.conversations = [
             MessageConversation(id: 1, guid: "g1", title: "Maya Chen", handles: ["+15551230001"], isGroup: false, lastText: "see you at the place 🍕", lastDate: now.addingTimeInterval(-120), lastIsFromMe: false, unreadCount: 2),
             MessageConversation(id: 2, guid: "g2", title: "Launch crew", handles: ["+15551230004", "+15551230005"], isGroup: true, lastText: "shipping at 5", lastDate: now.addingTimeInterval(-1800), lastIsFromMe: false, unreadCount: 0, hasGroupName: true),
@@ -178,6 +183,7 @@ final class MessagesStore: ObservableObject {
                 return
             }
             self.refreshFailures = 0
+            self.loadFailed = false
             self.apply(conversations: result.0, threads: result.1, incoming: result.2, announce: announce)
         }
     }
@@ -186,8 +192,10 @@ final class MessagesStore: ObservableObject {
     private func retryRefresh(announce: Bool) {
         self.refreshFailures += 1
         DebugLogger.shared.info("Messages database read failed (attempt \(self.refreshFailures)); keeping what is shown", source: "MessagesStore")
-        guard self.refreshFailures <= 6, self.retryTask == nil else { return }
-        let delay = 0.6 * Double(self.refreshFailures)
+        if !self.hasLoaded, self.refreshFailures >= 3 { self.loadFailed = true }
+        // Never gives up: a few quick retries, then one every 15 seconds for as long as the notch is running.
+        guard self.retryTask == nil else { return }
+        let delay = self.refreshFailures <= 6 ? 0.6 * Double(self.refreshFailures) : 15
         self.retryTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard let self, !Task.isCancelled else { return }
@@ -204,6 +212,7 @@ final class MessagesStore: ObservableObject {
             }
         }
         self.resolvePending()
+        self.hasLoaded = true
         self.conversations = self.withPendingPreviews(conversations)
         self.unreadTotal = conversations.reduce(0) { $0 + $1.unreadCount }
         // Forget chats that fell out of the list so the cache stays small.

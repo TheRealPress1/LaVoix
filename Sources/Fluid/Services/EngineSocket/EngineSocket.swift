@@ -1500,6 +1500,18 @@ nonisolated enum EngineSocketAutotest {
                 check("a link suggests a name from its address", QuickLinksWidgetView.nameGuess(for: "https://www.linkedin.com/in/me") == "Linkedin" && QuickLinksWidgetView.nameGuess(for: "just text") == nil)
                 check("a file that isn't ours gives no links", QuickLinksStore.parse(Data("not json".utf8)).isEmpty && QuickLinksStore.parse(Data(#"{"other":1}"#.utf8)).isEmpty)
             }
+            // the Messages tab never shows an empty thread while it loads
+            do {
+                let (fresh, filled, afterRead) = await MainActor.run { () -> ((Bool, Bool), Bool, (Bool, Int)) in
+                    let store = MessagesStore()
+                    let before = (store.hasLoaded, store.loadFailed)
+                    let sample = MessagesStore.sample()
+                    store.apply(conversations: sample.conversations, threads: [:], incoming: [], announce: false)
+                    return (before, sample.hasLoaded, (store.hasLoaded, store.conversations.count))
+                }
+                check("a new Messages store has not loaded and has not failed", fresh == (false, false))
+                check("sample data counts as loaded, and so does a first read", filled && afterRead == (true, 5))
+            }
             // FaceTime from the notch
             do {
                 check("a number keeps its plus and an email its at sign in the call address", FaceTimeDatabase.callURL(address: "+14155550101", audio: false)?.absoluteString == "facetime://+14155550101" && FaceTimeDatabase.callURL(address: "ada@example.com", audio: true)?.absoluteString == "facetime-audio://ada@example.com")

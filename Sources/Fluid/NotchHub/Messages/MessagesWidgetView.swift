@@ -22,7 +22,30 @@ struct MessagesWidgetView: View {
 
     // MARK: - Main layout
 
+    @ViewBuilder
     private var conversationsAndThread: some View {
+        if !self.store.hasLoaded {
+            // Reading the Messages database takes a few seconds the first time. Say so, never draw an empty thread with a send box.
+            if self.store.loadFailed {
+                VStack(spacing: 8) {
+                    self.infoCard(icon: "exclamationmark.bubble", title: "Couldn't read your messages yet", detail: "Messages may be busy. myOS keeps trying.")
+                    self.pill("Try again", prominent: false) { self.store.recheckAccess() }
+                }
+            } else {
+                VStack(spacing: 8) {
+                    ProgressView().controlSize(.small).colorScheme(.dark)
+                    Text("Loading your messages…").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        } else if self.store.conversations.isEmpty || self.store.selectedChatID == nil {
+            self.infoCard(icon: "message", title: "No conversations yet", detail: "Messages you send and receive will show up here.")
+        } else {
+            self.loadedLayout
+        }
+    }
+
+    private var loadedLayout: some View {
         HStack(alignment: .top, spacing: 16) {
             Group {
                 if self.staticLayout {
