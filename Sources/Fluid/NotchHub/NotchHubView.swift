@@ -151,7 +151,6 @@ struct NotchHubView: View {
                 Button {
                     NotchHubController.shared.verifyTabSwitch(to: widget.id)
                     self.model.selectedWidgetID = widget.id
-                    self.model.tabsExpanded = false
                 } label: {
                     Image(systemName: widget.systemImage)
                         .font(.system(size: 13, weight: .medium))

@@ -69,8 +69,8 @@ final class NotchHubModel: ObservableObject {
         self.isOpen = true
     }
 
+    /// The tab icons stay unfolded when the notch closes or a tab is picked: only the arrow in the header folds them.
     func close() {
-        self.tabsExpanded = false
         guard self.isOpen else { return }
         self.isOpen = false
     }
