@@ -75,6 +75,8 @@ struct SystemStatsWidgetView: View {
                 }
             }
             .frame(width: 210)
+            // The Swap line sits at the bottom; keep it clear of the notch's rounded corner.
+            .padding(.bottom, 16)
         }
         .foregroundStyle(.white)
         .onChange(of: self.active, initial: true) { _, active in
