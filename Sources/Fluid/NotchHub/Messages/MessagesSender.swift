@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Sends a reply through the Messages app with AppleScript. macOS asks you to allow LaVoix to control Messages
@@ -24,6 +25,33 @@ enum MessagesSender {
             .map { "\"\(escaped($0))\"" }
             .joined(separator: " & linefeed & ")
         return "tell application \"Messages\"\n    send (\(body)) to chat id \"\(escaped(chatGUID))\"\nend tell"
+    }
+
+    /// The address that opens a one-to-one conversation in Messages (a phone number keeps its +, an email its @), or nil for a group chat,
+    /// which has no such address.
+    nonisolated static func conversationURL(handles: [String], isGroup: Bool) -> URL? {
+        guard !isGroup, handles.count == 1, let handle = handles.first?.trimmingCharacters(in: .whitespaces), !handle.isEmpty else { return nil }
+        var allowed = CharacterSet.urlHostAllowed
+        allowed.insert(charactersIn: "+@")
+        guard let encoded = handle.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
+        return URL(string: "imessage://" + encoded)
+    }
+
+    /// Messages only counts a conversation as seen when it is on screen, and it has no way to be told otherwise, so this puts the conversation on
+    /// screen for a moment and then hands the front back to whatever you were using. Returns false for a group chat (no address opens one).
+    @MainActor @discardableResult
+    static func showInMessages(handles: [String], isGroup: Bool) -> Bool {
+        guard let url = self.conversationURL(handles: handles, isGroup: isGroup) else { return false }
+        let previous = NSWorkspace.shared.frontmostApplication
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.open(url, configuration: configuration) { _, error in
+            guard error == nil else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                if let previous, !previous.isTerminated { previous.activate() }
+            }
+        }
+        return true
     }
 
     static func compiles(_ source: String) -> Bool {

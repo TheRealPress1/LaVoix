@@ -50,6 +50,10 @@ final class MessagesStore: ObservableObject {
     var sendHandler: (String, String) async throws -> Void = { text, chatGUID in
         try await MessagesSender.send(text, toChat: chatGUID)
     }
+    /// What happens after a reply is sent: the conversation is shown in Messages for a moment so it counts as seen. Tests replace this.
+    var markSeenHandler: (MessageConversation) -> Void = { chat in
+        MessagesSender.showInMessages(handles: chat.handles, isGroup: chat.isGroup)
+    }
     private var refreshFailures = 0
     /// One read of the Messages database at a time, on its own queue. The read is synchronous and can take seconds on a big database; started
     /// again on every change and every 20 seconds with no limit, they piled up, filled Swift's worker threads and froze the whole engine.
@@ -323,6 +327,10 @@ final class MessagesStore: ObservableObject {
         Task {
             do {
                 try await self.sendHandler(text, chatGUID)
+                // Replying means you have seen it: let Messages know too, so its badge clears and the other person sees it was read.
+                if NotchMessagesSettings.marksSeenOnReply, let chat = self.conversations.first(where: { $0.guid == chatGUID }) {
+                    self.markSeenHandler(chat)
+                }
                 // The database lags the send by a moment; check a few times, quickly at first, until the real message shows.
                 for delay in [0.3, 0.6, 1.2, 2.5, 5.0] as [Double] {
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))

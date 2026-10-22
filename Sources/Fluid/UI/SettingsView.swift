@@ -443,6 +443,16 @@ struct SettingsView: View {
                             }
 
                             self.settingsToggleRow(
+                                title: "Mark a chat as read when you reply in the notch",
+                                description: "Replying also shows that conversation in Messages for a moment, so its unread badge clears and the other person sees it was read. Works for one-to-one chats; group chats can't be opened this way.",
+                                isOn: Binding(
+                                    get: { NotchMessagesSettings.marksSeenOnReply },
+                                    set: { NotchMessagesSettings.marksSeenOnReply = $0; SettingsStore.shared.objectWillChange.send() }
+                                )
+                            )
+                            Divider().opacity(0.2)
+
+                            self.settingsToggleRow(
                                 title: "Show message text in the notch",
                                 description: "Turn off to show who messaged without showing what they said.",
                                 isOn: Binding(

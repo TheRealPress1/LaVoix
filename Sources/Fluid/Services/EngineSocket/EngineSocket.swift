@@ -1518,6 +1518,12 @@ nonisolated enum EngineSocketAutotest {
                 check("a new Messages store has not loaded and has not failed", fresh == (false, false))
                 check("sample data counts as loaded, and so does a first read", filled && afterRead == (true, 5))
             }
+            // marking a chat seen after a reply
+            do {
+                check("a one-to-one chat has an address that opens it, a group does not", MessagesSender.conversationURL(handles: ["+15551230001"], isGroup: false)?.absoluteString == "imessage://+15551230001"
+                        && MessagesSender.conversationURL(handles: ["sam@example.com"], isGroup: false)?.absoluteString == "imessage://sam@example.com"
+                        && MessagesSender.conversationURL(handles: ["+1", "+2"], isGroup: true) == nil && MessagesSender.conversationURL(handles: [], isGroup: false) == nil)
+            }
             // FaceTime from the notch
             do {
                 check("a number keeps its plus and an email its at sign in the call address", FaceTimeDatabase.callURL(address: "+14155550101", audio: false)?.absoluteString == "facetime://+14155550101" && FaceTimeDatabase.callURL(address: "ada@example.com", audio: true)?.absoluteString == "facetime-audio://ada@example.com")
