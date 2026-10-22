@@ -544,6 +544,41 @@ enum NotchHubDebug {
             check("the file carries schema 1 and source imessage", body.contains("\"schema\":1") && body.contains("\"source\":\"imessage\""))
             check("an unchanged snapshot is not written again", ((try? MessageActivity.write(conversations: conversations, dataDirectory: out, defaults: defaults, now: now.addingTimeInterval(5))) ?? nil) == nil)
             check("no temp files left", ((try? FileManager.default.contentsOfDirectory(atPath: written?.deletingLastPathComponent().path ?? "")) ?? []).allSatisfy { !$0.hasSuffix(".tmp") })
+            // Calls and FaceTime: a database laid out like the call history macOS keeps.
+            let callsURL = base.appendingPathComponent("CallHistory.storedata")
+            try? FileManager.default.removeItem(at: callsURL)
+            var cdb: OpaquePointer?
+            sqlite3_open(callsURL.path, &cdb)
+            sqlite3_exec(cdb, "CREATE TABLE ZCALLRECORD (Z_PK INTEGER PRIMARY KEY, ZANSWERED INTEGER, ZCALLTYPE INTEGER, ZDATE REAL, ZDURATION REAL, ZORIGINATED INTEGER, ZADDRESS BLOB, ZSERVICE_PROVIDER TEXT, ZNAME TEXT)", nil, nil, nil)
+            func call(_ handle: String, daysAgo: Double, seconds: Double, mine: Bool, answered: Bool, type: Int = 1) {
+                let when = startOfToday.addingTimeInterval(-86400 * daysAgo - 3600).timeIntervalSinceReferenceDate
+                sqlite3_exec(cdb, "INSERT INTO ZCALLRECORD (ZANSWERED, ZCALLTYPE, ZDATE, ZDURATION, ZORIGINATED, ZADDRESS, ZSERVICE_PROVIDER, ZNAME) VALUES (\(answered ? 1 : 0), \(type), \(when), \(seconds), \(mine ? 1 : 0), CAST('\(handle)' AS BLOB), '\(type == 1 ? "com.apple.Telephony" : "com.apple.FaceTime")', 'SECRET-NAME')", nil, nil, nil)
+            }
+            for i in 1...4 { call("+14155551234", daysAgo: Double(i * 5), seconds: 420, mine: i % 2 == 0, answered: true) }   // 28 min talked
+            call("+1 (415) 555-1234", daysAgo: 30, seconds: 0, mine: false, answered: false)                                  // same number written differently: a missed call
+            call("+14155551234", daysAgo: 2, seconds: 900, mine: true, answered: true, type: 8)                                  // FaceTime video
+            call("+14155557777", daysAgo: 3, seconds: 20, mine: true, answered: true)                                           // too little to qualify
+            call("+14155558888", daysAgo: 4, seconds: 700, mine: false, answered: true)                                         // excluded below
+            call("12345", daysAgo: 1, seconds: 60, mine: true, answered: true)                                                  // not a usable handle
+            sqlite3_close(cdb)
+            var callRows: [CallActivity.Row] = []
+            if case .rows(let r) = CallActivity.read(url: callsURL) { callRows = r }
+            check("reads call records laid out like Apple's", callRows.count == 9)
+            let callConversations = CallActivity.aggregate(rows: callRows, excluded: [MessageActivity.normalizedForExclusion("+14155558888")], now: now, calendar: calendar)
+            check("one record per person: an excluded number and a bad handle are dropped", callConversations.map { CallActivity.key(for: $0.hint_value) }.sorted() == ["4155551234", "4155557777"])
+            let caller = callConversations.first { CallActivity.key(for: $0.hint_value) == "4155551234" }
+            check("the same number written two ways is one person (6 calls: 4+1 missed+1 video)", caller?.total == 6)
+            check("direction, answered, missed and FaceTime are counted", caller?.from_me == 3 && caller?.answered == 5 && caller?.missed == 1 && caller?.facetime == 1 && caller?.video == 1)
+            check("talk time adds up (4 x 7 min + 15 min)", caller?.talk_minutes == 43)
+            check("several answered calls and real talk time qualify, a short one does not", caller?.qualifies == true && callConversations.first { CallActivity.key(for: $0.hint_value) == "4155557777" }?.qualifies == false)
+            check("call type 8 is video, 16 audio, FaceTime service audio, otherwise phone", CallActivity.kind(callType: 8, provider: "") == .facetimeVideo && CallActivity.kind(callType: 16, provider: "") == .facetimeAudio && CallActivity.kind(callType: 0, provider: "com.apple.FaceTime") == .facetimeAudio && CallActivity.kind(callType: 1, provider: "com.apple.Telephony") == .phone)
+            check("a missing database is reported, not an empty list", CallActivity.read(url: base.appendingPathComponent("nope.storedata")) == .missing)
+            let callDefaults = UserDefaults(suiteName: "lavoix.calls.autotest.\(UUID().uuidString)")!
+            let callFile = (try? CallActivity.write(conversations: callConversations, dataDirectory: out, defaults: callDefaults, now: now)) ?? nil
+            let callBody = callFile.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+            check("writes inbox/calls/calls-<UTC>.json with schema 1 and source calls", callFile?.deletingLastPathComponent().lastPathComponent == "calls" && callBody.contains("\"schema\":1") && callBody.contains("\"source\":\"calls\""))
+            check("the calls file holds no name", !callBody.isEmpty && !callBody.contains("SECRET-NAME"))
+            check("an unchanged calls snapshot is not written again", ((try? CallActivity.write(conversations: callConversations, dataDirectory: out, defaults: callDefaults, now: now.addingTimeInterval(5))) ?? nil) == nil)
             // The private text store.
             let storeURL = base.appendingPathComponent("private/messages.db")
             let everyone = MessageActivity.aggregate(rows: rows ?? [], excluded: [], now: now, calendar: calendar)

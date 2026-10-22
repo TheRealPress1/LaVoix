@@ -213,6 +213,8 @@ final class MessagesInboxScheduler {
             .filter { !$0.isEmpty })
         let keepText = settings.keepMessageTextForMyOSEnabled
         Task.detached(priority: .utility) {
+            // Calls and FaceTime come from their own database, so they do not wait on Messages being readable.
+            CallActivity.exportNow(dataDirectory: data, excluded: excluded)
             let database = MessagesDatabase()
             let access = database.checkAccess()
             guard access == .granted else {
