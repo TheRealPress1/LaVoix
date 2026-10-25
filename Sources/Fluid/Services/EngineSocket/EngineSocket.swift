@@ -71,6 +71,8 @@ import Foundation
 ///   {"op":"bump.tools"}                                     -> {"ok":true,"tools":[names]}
 ///   {"op":"bump.call","name","arguments"?}                  -> {"ok":true,"result":{...}}   (read-only Bump tools only)
 ///   {"op":"photos.status"} / {"op":"photos.request"}        -> {"ok":true,"authorization":"authorized|limited|denied|restricted|not_determined"}   (request shows macOS's Photos prompt once)
+///   {"op":"reminders.status"} / {"op":"reminders.request"}   -> {"ok":true,"authorization":"authorized|write_only|denied|restricted|not_determined"}   (request shows macOS's Reminders prompt once)
+///   {"op":"reminders.today"}                                -> {"ok":true,"items":[{id,title,list,due?,due_has_time,priority,completed}]}   (read-only: due today or overdue, then completed today)
 ///   {"op":"photos.summary"}                                 -> {"ok":true,"total","located","located_days","first_day"?,"last_day"?,"by_year":{...}}   (counts only: dates and locations are read, never images)
 ///   {"op":"photos.locations","since"?}                      -> {"ok":true,"clusters":[{t0,t1,lat,lon,n}],"scanned","used","screenshots","shared"}   (camera photos only, grouped by UTC day and ~5 km cell; no single photo's position is returned)
 ///   {"op":"providers.list"}                              -> {"ok":true,"providers":[{id,name,base_url,has_key,local,built_in,selected,model}]}   (a key is never sent back, only whether one is stored)
@@ -123,6 +125,7 @@ nonisolated enum EngineSocket {
         var bookshelf: (any EngineBookshelfProviding)?
         var bump: (any EngineBumpProviding)?
         var photos: (any EnginePhotosProviding)?
+        var reminders: (any EngineRemindersProviding)?
     }
 
     private static let lock = NSLock()
@@ -160,7 +163,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel(), providers: LiveEngineProviders(), bookshelf: LiveEngineBookshelf(), bump: LiveEngineBump(openURL: { url in DispatchQueue.main.async { NSWorkspace.shared.open(url) } }), photos: LiveEnginePhotos())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel(), providers: LiveEngineProviders(), bookshelf: LiveEngineBookshelf(), bump: LiveEngineBump(openURL: { url in DispatchQueue.main.async { NSWorkspace.shared.open(url) } }), photos: LiveEnginePhotos(), reminders: LiveEngineReminders())
     }
 
     enum EngineError: LocalizedError {
@@ -463,6 +466,15 @@ nonisolated enum EngineSocket {
                 default:
                     guard let name = object["name"] as? String, BumpRules.readOnlyTools.contains(name) else { return fail("that Bump tool can't be called from here") }
                     _ = emit(["ok": true, "result": try await bump.callTool(name: name, arguments: object["arguments"] as? [String: Any] ?? [:])])
+                }
+            } catch { fail(message(error)) }
+        case "reminders.status", "reminders.request", "reminders.today":
+            guard let reminders = services.reminders else { return fail("reminders are not available") }
+            do {
+                switch op {
+                case "reminders.status": var r = await reminders.status(); r["ok"] = true; _ = emit(r)
+                case "reminders.request": var r = await reminders.request(); r["ok"] = true; _ = emit(r)
+                default: var r = try await reminders.today(); r["ok"] = true; _ = emit(r)
                 }
             } catch { fail(message(error)) }
         case "photos.status", "photos.request", "photos.summary", "photos.locations":
@@ -989,6 +1001,18 @@ private final class FakePhotos: EnginePhotosProviding, @unchecked Sendable {
     }
 }
 
+private final class FakeReminders: EngineRemindersProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var granted = false
+    func status() async -> [String: Any] { self.lock.lock(); defer { self.lock.unlock() }; return ["authorization": self.granted ? "authorized" : "not_determined"] }
+    func request() async -> [String: Any] { self.lock.lock(); self.granted = true; self.lock.unlock(); return ["authorization": "authorized"] }
+    func today() async throws -> [String: Any] {
+        self.lock.lock(); defer { self.lock.unlock() }
+        guard self.granted else { throw EngineRemindersError.notAllowed }
+        return ["items": [["id": "r1", "title": "Pay rent", "list": "Home", "due": "2026-10-25", "due_has_time": false, "priority": 0, "completed": false]]]
+    }
+}
+
 private final class FakeProviders: EngineProvidersProviding, @unchecked Sendable {
     private let lock = NSLock()
     private var keys: [String: String] = [:]
@@ -1137,7 +1161,8 @@ nonisolated enum EngineSocketAutotest {
                 providers: FakeProviders(),
                 bookshelf: bookshelfSession.client(capture: bookshelfCapture),
                 bump: bumpStub.client,
-                photos: FakePhotos()
+                photos: FakePhotos(),
+                reminders: FakeReminders()
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -1388,6 +1413,8 @@ nonisolated enum EngineSocketAutotest {
                 // Bump: sign-in through a loopback page against a stubbed OAuth + MCP server, tokens in memory.
                 let bump = bumpStub
                 check("bump starts disconnected", ask(#"{"op":"bump.status"}"#)?["connected"] as? Bool == false)
+                check("reminders.today refuses until the permission is granted", ask(#"{"op":"reminders.status"}"#)?["authorization"] as? String == "not_determined" && ask(#"{"op":"reminders.today"}"#)?["ok"] as? Bool == false)
+                check("reminders.request grants and reminders.today then lists the items read-only", ask(#"{"op":"reminders.request"}"#)?["authorization"] as? String == "authorized" && ((ask(#"{"op":"reminders.today"}"#)?["items"] as? [[String: Any]])?.first?["title"] as? String) == "Pay rent")
                 check("photos.status reports the permission, summary refuses until it is granted and then returns counts only", ask(#"{"op":"photos.status"}"#)?["authorization"] as? String == "not_determined" && ask(#"{"op":"photos.summary"}"#)?["ok"] as? Bool == false)
                 check("photos.request grants and summary then carries counts and no file names", ask(#"{"op":"photos.request"}"#)?["authorization"] as? String == "authorized" && (ask(#"{"op":"photos.summary"}"#)?["located"] as? Int) == 2 && !"\(ask(#"{"op":"photos.summary"}"#) ?? [:])".contains("IMG_"))
                 let photoClusters = ask(#"{"op":"photos.locations"}"#)?["clusters"] as? [[String: Any]]

@@ -36,6 +36,8 @@
 	<string>LaVoix needs permission to manage launch at startup, to send the replies you type in the notch through the Messages app, and, when Bookshelf is connected, to read what Spotify or Music is playing so you can grade it.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>LaVoix uses your contacts to show names instead of phone numbers in the notch's Messages widget. Contacts stay on this Mac.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>myOS shows the reminders due today in its to-do card. They are read on this Mac and never leave it.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>LaVoix shows your next meeting in the notch and can offer to record it when it starts. Events are read on this Mac and never leave it.</string>
 	<key>POSTHOG_API_KEY</key>
