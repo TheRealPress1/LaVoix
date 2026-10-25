@@ -3,11 +3,23 @@ import SwiftUI
 /// RAM, swap, CPU, storage, battery and the apps using the most memory.
 struct SystemStatsWidgetView: View {
     @StateObject private var sampler = SystemStatsSampler()
+    @StateObject private var agent = SystemFixAgent.shared
     @Environment(\.notchWidgetActive) private var active
 
     var body: some View {
+        if case .idle = self.agent.phase {
+            self.stats
+        } else {
+            SystemFixPanel(agent: self.agent)
+        }
+    }
+
+    private var stats: some View {
         let s = self.sampler.snapshot
-        HStack(alignment: .top, spacing: 18) {
+        let memoryTight = s.pressure != .normal || Self.fraction(s.memoryUsed, s.memoryTotal) > 0.9 || Self.swapIsHigh(s)
+        let storageTight = s.diskTotal > 0 && Self.fraction(s.diskFree, s.diskTotal) < 0.1
+        let cpuTight = s.cpu > 0.85
+        return HStack(alignment: .top, spacing: 18) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
                     StatTile(
@@ -15,14 +27,16 @@ struct SystemStatsWidgetView: View {
                         value: Self.gigabytes(s.memoryUsed),
                         detail: "of \(Self.gigabytes(s.memoryTotal))",
                         fraction: Self.fraction(s.memoryUsed, s.memoryTotal),
-                        tint: Self.tint(for: s.pressure)
+                        tint: Self.tint(for: s.pressure),
+                        onFix: memoryTight ? { self.agent.investigate(.memory, snapshot: s) } : nil
                     )
                     StatTile(
                         title: "CPU",
                         value: "\(Int((s.cpu * 100).rounded()))%",
                         detail: "in use",
                         fraction: s.cpu,
-                        tint: s.cpu > 0.85 ? .orange : .white
+                        tint: s.cpu > 0.85 ? .orange : .white,
+                        onFix: cpuTight ? { self.agent.investigate(.cpu, snapshot: s) } : nil
                     )
                 }
                 HStack(spacing: 10) {
@@ -31,7 +45,8 @@ struct SystemStatsWidgetView: View {
                         value: Self.gigabytes(s.diskFree),
                         detail: "free",
                         fraction: 1 - Self.fraction(s.diskFree, s.diskTotal),
-                        tint: Self.fraction(s.diskFree, s.diskTotal) < 0.1 ? .orange : .white
+                        tint: Self.fraction(s.diskFree, s.diskTotal) < 0.1 ? .orange : .white,
+                        onFix: storageTight ? { self.agent.investigate(.storage, snapshot: s) } : nil
                     )
                     self.batteryTile(s.battery)
                 }
@@ -128,13 +143,30 @@ private struct StatTile: View {
     let detail: String
     let fraction: Double
     let tint: Color
+    /// Set when the tile is close to its limit: shows a Fix button that sends an agent to look into it.
+    var onFix: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(self.title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.5))
-                .textCase(.uppercase)
+            HStack {
+                Text(self.title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .textCase(.uppercase)
+                Spacer(minLength: 0)
+                if let onFix = self.onFix {
+                    Button(action: onFix) {
+                        Label("Fix", systemImage: "wand.and.stars")
+                            .font(.system(size: 10, weight: .semibold))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.orange.opacity(0.9)))
+                            .foregroundStyle(.black)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Send an agent to find what can be freed. Nothing changes until you approve.")
+                }
+            }
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text(self.value)
                     .font(.system(size: 21, weight: .semibold, design: .rounded))

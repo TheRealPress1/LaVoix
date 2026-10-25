@@ -211,7 +211,7 @@ final class SystemStatsSampler: ObservableObject {
 
     // MARK: - Top apps by memory
 
-    private nonisolated static func readTopApps(limit: Int) -> [AppUse] {
+    nonisolated static func readTopApps(limit: Int) -> [AppUse] {
         let capacity = Int(proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)) / MemoryLayout<pid_t>.size + 32
         var pids = [pid_t](repeating: 0, count: capacity)
         let bytes = proc_listpids(UInt32(PROC_ALL_PIDS), 0, &pids, Int32(capacity * MemoryLayout<pid_t>.size))
