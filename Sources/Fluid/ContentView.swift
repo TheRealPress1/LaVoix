@@ -4623,6 +4623,20 @@ struct ContentView: View {
                 message: "overlay_phase phase=connecting",
                 source: "AppBenchmark"
             )
+            // Right after the engine starts, the speech model is still loading (up to about half a minute). Say so, instead of
+            // leaving the text to arrive late with no explanation. What you say is kept and typed once the model is ready.
+            if !self.asr.isAsrReady {
+                let startingLabel = "Voice is starting…"
+                NotchContentState.shared.stopSnapshotLabel = startingLabel
+                let lifecycle = self.overlayLifecycleID
+                Task { @MainActor in
+                    for _ in 0..<240 {
+                        if self.asr.isAsrReady || self.overlayLifecycleID != lifecycle { break }
+                        try? await Task.sleep(nanoseconds: 250_000_000)
+                    }
+                    if NotchContentState.shared.stopSnapshotLabel == startingLabel { NotchContentState.shared.stopSnapshotLabel = nil }
+                }
+            }
         }
 
         let captureOverlayLifecycleID = self.overlayLifecycleID
