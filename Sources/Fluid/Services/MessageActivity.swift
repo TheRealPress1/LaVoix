@@ -213,8 +213,11 @@ final class MessagesInboxScheduler {
             .filter { !$0.isEmpty })
         let keepText = settings.keepMessageTextForMyOSEnabled
         Task.detached(priority: .utility) {
-            // Calls and FaceTime come from their own database, so they do not wait on Messages being readable.
-            CallActivity.exportNow(dataDirectory: data, excluded: excluded)
+            // Calls and FaceTime come from their own database, so they do not wait on Messages being readable. Its own switch
+            // (`defaults write com.myos.engine ShareCallsWithMyOSEnabled -bool false`) so it can be turned off without Messages.
+            if UserDefaults.standard.object(forKey: "ShareCallsWithMyOSEnabled") as? Bool ?? true {
+                CallActivity.exportNow(dataDirectory: data, excluded: excluded)
+            }
             let database = MessagesDatabase()
             let access = database.checkAccess()
             guard access == .granted else {
