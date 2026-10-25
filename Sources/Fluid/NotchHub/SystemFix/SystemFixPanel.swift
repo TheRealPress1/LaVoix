@@ -6,29 +6,30 @@ struct SystemFixPanel: View {
     @ObservedObject private var hub = NotchHubController.shared.model
     @Environment(\.notchWidgetActive) private var active
     @State private var deselected: Set<String> = []
-    @State private var naturalHeight: CGFloat = 0
-
     var body: some View {
         self.content
-            .fixedSize(horizontal: false, vertical: true)
-            .background(GeometryReader { proxy in Color.clear.preference(key: NaturalHeightKey.self, value: proxy.size.height) })
-            .onPreferenceChange(NaturalHeightKey.self) { height in
-                self.naturalHeight = height
-                // Not inside the layout pass: publishing from here can be dropped, which left the notch too short.
-                DispatchQueue.main.async { self.growNotch() }
-            }
+            .onAppear { self.growNotch() }
+            .onChange(of: self.agent.phase) { _, _ in self.growNotch() }
             .onChange(of: self.active) { _, _ in self.growNotch() }
             .onChange(of: self.hub.tabsExpanded) { _, _ in self.growNotch() }
             .onDisappear { self.hub.setExtraHeight(0) }
     }
 
-    /// A long list makes the notch taller instead of scrolling: ask for what the content needs beyond the room there is.
+    /// How tall the proposal is (worked out from what it holds: measuring it kept reading zero). Row, header, footer and
+    /// spacing sizes are the ones used below; the summary wraps at about 80 characters a line, three lines at most.
+    private var neededHeight: CGFloat {
+        guard case let .proposal(_, plan) = self.agent.phase, !plan.actions.isEmpty else { return 0 }
+        let lines = min(3, max(1, (plan.summary.count + 79) / 80))
+        return 94 + 15 * CGFloat(lines) + 37 * CGFloat(plan.actions.count) + 12
+    }
+
+    /// A long list makes the notch taller instead of scrolling.
     private func growNotch() {
         guard self.active else { self.hub.setExtraHeight(0); return }
         let base = self.hub.tabsExpanded ? NotchGeometry.openSize.height : NotchGeometry.openSizeCollapsed.height
         let room = base - max(self.hub.closedSize.height, 28) - 14 // the tab's own top and bottom padding
-        let extra = self.naturalHeight - room
-        SystemFixDebugLog.write("natural=\(Int(self.naturalHeight)) room=\(Int(room)) extra=\(Int(extra)) active=\(self.active) tabs=\(self.hub.tabsExpanded)")
+        let extra = self.neededHeight - room
+        SystemFixDebugLog.write("needed=\(Int(self.neededHeight)) room=\(Int(room)) extra=\(Int(extra)) active=\(self.active)")
         self.hub.setExtraHeight(extra)
     }
 
@@ -61,7 +62,7 @@ struct SystemFixPanel: View {
             }
         }
         .foregroundStyle(.white)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(.bottom, 16)
         .onChange(of: self.agent.phase) { _, _ in self.deselected = [] }
     }
@@ -90,7 +91,6 @@ struct SystemFixPanel: View {
             .font(.system(size: 12))
             .foregroundStyle(.white.opacity(0.6))
             .lineLimit(3)
-            .fixedSize(horizontal: false, vertical: true)
         if !plan.actions.isEmpty {
             VStack(spacing: 6) {
                 ForEach(plan.actions) { action in self.row(action) }
@@ -192,10 +192,6 @@ struct SystemFixPanel: View {
     }
 }
 
-private struct NaturalHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
 
 /// One line per measurement in ~/Library/Logs/myos-system-fix.log (sizes only), to see why the notch is the height it is.
 enum SystemFixDebugLog {

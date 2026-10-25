@@ -13,7 +13,7 @@ final class SystemFixStrip {
     private var bag = Set<AnyCancellable>()
     private var started = false
 
-    static let width: CGFloat = 36
+    static let width: CGFloat = 46
 
     func start() {
         guard !self.started else { return }
@@ -83,14 +83,14 @@ private struct SystemFixStripView: View {
                 HStack(spacing: 0) {
                     Color.clear.frame(width: SystemFixStrip.width)
                     Color.clear.frame(width: self.model.notch.width)
-                    self.icon.frame(width: SystemFixStrip.width)
+                    self.icon.padding(.trailing, 10).frame(width: SystemFixStrip.width)
                 }
                 .frame(height: self.model.notch.height)
                 .background(NotchHubShape(topCornerRadius: 6, bottomCornerRadius: 14).fill(Color.black))
             } else {
                 ZStack {
                     UnevenRoundedRectangle(bottomTrailingRadius: 12, topTrailingRadius: 4).fill(Color.black)
-                    self.icon
+                    self.icon.padding(.trailing, 6)
                 }
             }
         }
