@@ -523,6 +523,11 @@ enum NotchHubDebug {
             let excluded: Set<String> = [MessageActivity.normalizedForExclusion("+1 (415) 555-9999")]
             let conversations = MessageActivity.aggregate(rows: rows ?? [], excluded: excluded, now: now, calendar: calendar)
             check("one record per kept 1:1 chat, excluded chat dropped", conversations.map(\.external_id) == ["imessage:iMessage;-;+14155551234", "imessage:iMessage;-;+14155550000", "imessage:iMessage;-;friend@icloud.com"].sorted())
+            var streamedRows: [MessageActivity.Row] = []
+            check("streaming reads exactly the rows the list does", reader.streamActivityRows { streamedRows.append($0) } && streamedRows == (rows ?? []))
+            var streamingAggregator = MessageActivity.Aggregator(excluded: excluded, now: now, calendar: calendar)
+            streamedRows.forEach { streamingAggregator.feed($0) }
+            check("counting as rows arrive gives the same conversations as counting the list", streamingAggregator.finish() == conversations)
             let real = conversations.first { $0.hint_value == "+14155551234" }
             check("totals count real messages only (15x2 theirs + 15 mine + 1 today)", real?.total == 46 && real?.from_me == 15)
             check("median reply latency is measured from their first unanswered message", real?.median_reply_seconds == expectedLatencies.sorted()[expectedLatencies.count / 2])

@@ -133,6 +133,33 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
         }
     }
 
+    /// The same rows as `activityRows`, handed over one at a time instead of collected into a list, so a Mac with half a million
+    /// messages never holds them all at once. False if the database couldn't be read (the rows seen so far may be incomplete).
+    func streamActivityRows(_ body: (MessageActivity.Row) -> Void) -> Bool {
+        var database: OpaquePointer?
+        guard sqlite3_open_v2(self.url.path, &database, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let database else {
+            sqlite3_close(database)
+            return false
+        }
+        defer { sqlite3_close(database) }
+        sqlite3_busy_timeout(database, 800)
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, Self.activitySQL, -1, &statement, nil) == SQLITE_OK, let statement else {
+            sqlite3_finalize(statement)
+            return false
+        }
+        defer { sqlite3_finalize(statement) }
+        var code = sqlite3_step(statement)
+        while code == SQLITE_ROW {
+            body(MessageActivity.Row(
+                chat: Self.string(statement, 0), handle: Self.string(statement, 1),
+                fromMe: sqlite3_column_int(statement, 2) != 0, date: Self.date(sqlite3_column_int64(statement, 3))
+            ))
+            code = sqlite3_step(statement)
+        }
+        return code == SQLITE_DONE
+    }
+
     /// Group chats with who is in them and how active they are. Counts and dates only, never text. nil when the database couldn't be read.
     func groupChats() -> [GroupChatsExport.Group]? {
         let count = "(SELECT COUNT(*) FROM chat_message_join j JOIN message m ON m.ROWID = j.message_id WHERE j.chat_id = c.ROWID AND m.item_type = 0 AND m.associated_message_type = 0"

@@ -51,82 +51,133 @@ nonisolated enum MessageActivity {
         return lowered
     }
 
-    /// `rows` must be ordered by chat, then date.
-    static func aggregate(
-        rows: [Row], excluded: Set<String> = [], now: Date, calendar: Calendar, maxDays: Int = 7300
-    ) -> [Conversation] {
-        let iso = ISO8601DateFormatter()
-        let dayFormatter = DateFormatter()
-        dayFormatter.calendar = calendar
-        dayFormatter.timeZone = calendar.timeZone
-        dayFormatter.locale = Locale(identifier: "en_US_POSIX")
-        dayFormatter.dateFormat = "yyyy-MM-dd"
-        let today = dayFormatter.string(from: now)
-        let oldest = calendar.date(byAdding: .day, value: -maxDays, to: now) ?? .distantPast
+    /// Counts one chat at a time as the rows arrive, so only the chat being read is held in memory (not every message on the Mac).
+    /// `rows` must arrive ordered by chat, then date.
+    struct Aggregator {
+        private let excluded: Set<String>
+        private let now: Date
+        private let calendar: Calendar
+        private let iso = ISO8601DateFormatter()
+        private let dayFormatter: DateFormatter
+        private let today: String
+        private let oldest: Date
 
-        var result: [Conversation] = []
-        var index = 0
-        while index < rows.count {
-            let chat = rows[index].chat
-            var end = index
-            while end < rows.count, rows[end].chat == chat { end += 1 }
-            defer { index = end }
-            let group = rows[index..<end]
-            guard let handle = group.first?.handle, let kind = hintKind(for: handle) else { continue }
-            if excluded.contains(normalizedForExclusion(handle)) { continue }
+        private var result: [Conversation] = []
+        private var chat: String?
+        private var skipping = false
+        private var handle = ""
+        private var kind = ""
+        private var count = 0, fromMe = 0
+        private var lastMe: Date?, lastThem: Date?
+        private var first: Date?, last: Date?
+        private var activeDays = Set<String>()
+        private var perDay: [String: (sent: Int, received: Int)] = [:]
+        private var latencies: [TimeInterval] = []
+        private var pendingTheirs: Date?
 
-            var fromMe = 0
-            var lastMe: Date?, lastThem: Date?
-            var activeDays = Set<String>()
-            var perDay: [String: (sent: Int, received: Int)] = [:]
-            var latencies: [TimeInterval] = []
-            var pendingTheirs: Date?
-            for row in group {
-                let day = dayFormatter.string(from: row.date)
-                activeDays.insert(day)
-                if row.fromMe {
-                    fromMe += 1
-                    lastMe = row.date
-                    if let pending = pendingTheirs {
-                        let latency = row.date.timeIntervalSince(pending)
-                        if latency >= 0, latency <= maxReplySeconds { latencies.append(latency) }
-                        pendingTheirs = nil
-                    }
+        init(excluded: Set<String> = [], now: Date, calendar: Calendar, maxDays: Int = 7300) {
+            self.excluded = excluded
+            self.now = now
+            self.calendar = calendar
+            let f = DateFormatter()
+            f.calendar = calendar
+            f.timeZone = calendar.timeZone
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "yyyy-MM-dd"
+            self.dayFormatter = f
+            self.today = f.string(from: now)
+            self.oldest = calendar.date(byAdding: .day, value: -maxDays, to: now) ?? .distantPast
+        }
+
+        mutating func feed(_ row: Row) {
+            if row.chat != self.chat {
+                self.finishChat()
+                self.chat = row.chat
+                self.handle = row.handle
+                if let k = MessageActivity.hintKind(for: row.handle), !self.excluded.contains(MessageActivity.normalizedForExclusion(row.handle)) {
+                    self.kind = k
+                    self.skipping = false
                 } else {
-                    lastThem = row.date
-                    if pendingTheirs == nil { pendingTheirs = row.date }
-                }
-                if row.date >= oldest, day != today {
-                    var entry = perDay[day] ?? (0, 0)
-                    if row.fromMe { entry.sent += 1 } else { entry.received += 1 }
-                    perDay[day] = entry
+                    self.skipping = true
                 }
             }
-            let first = group.first!.date, last = group.last!.date
+            if self.skipping { return }
+            let day = self.dayFormatter.string(from: row.date)
+            self.count += 1
+            self.activeDays.insert(day)
+            if self.first == nil { self.first = row.date }
+            self.last = row.date
+            if row.fromMe {
+                self.fromMe += 1
+                self.lastMe = row.date
+                if let pending = self.pendingTheirs {
+                    let latency = row.date.timeIntervalSince(pending)
+                    if latency >= 0, latency <= MessageActivity.maxReplySeconds { self.latencies.append(latency) }
+                    self.pendingTheirs = nil
+                }
+            } else {
+                self.lastThem = row.date
+                if self.pendingTheirs == nil { self.pendingTheirs = row.date }
+            }
+            if row.date >= self.oldest, day != self.today {
+                var entry = self.perDay[day] ?? (0, 0)
+                if row.fromMe { entry.sent += 1 } else { entry.received += 1 }
+                self.perDay[day] = entry
+            }
+        }
+
+        private mutating func finishChat() {
+            defer {
+                self.chat = nil
+                self.count = 0
+                self.fromMe = 0
+                self.lastMe = nil
+                self.lastThem = nil
+                self.first = nil
+                self.last = nil
+                self.activeDays.removeAll(keepingCapacity: true)
+                self.perDay.removeAll(keepingCapacity: true)
+                self.latencies.removeAll(keepingCapacity: true)
+                self.pendingTheirs = nil
+            }
+            guard let chat = self.chat, !self.skipping, self.count > 0, let first = self.first, let last = self.last else { return }
             let spanDays = last.timeIntervalSince(first) / 86400
-            let median: Int? = latencies.isEmpty ? nil : {
-                let sorted = latencies.sorted()
+            let median: Int? = self.latencies.isEmpty ? nil : {
+                let sorted = self.latencies.sorted()
                 let mid = sorted.count / 2
                 let value = sorted.count % 2 == 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
                 return Int(value.rounded())
             }()
-            result.append(Conversation(
+            self.result.append(Conversation(
                 external_id: "imessage:\(chat)",
-                hint_kind: kind,
-                hint_value: handle,
-                qualifies: group.count >= minTotal && fromMe >= minFromMe && spanDays >= Double(minSpanDays),
-                first_at: iso.string(from: first),
-                last_at: iso.string(from: last),
-                last_from_me_at: lastMe.map(iso.string(from:)),
-                last_from_them_at: lastThem.map(iso.string(from:)),
-                total: group.count,
-                from_me: fromMe,
-                active_days: activeDays.count,
+                hint_kind: self.kind,
+                hint_value: self.handle,
+                qualifies: self.count >= MessageActivity.minTotal && self.fromMe >= MessageActivity.minFromMe && spanDays >= Double(MessageActivity.minSpanDays),
+                first_at: self.iso.string(from: first),
+                last_at: self.iso.string(from: last),
+                last_from_me_at: self.lastMe.map(self.iso.string(from:)),
+                last_from_them_at: self.lastThem.map(self.iso.string(from:)),
+                total: self.count,
+                from_me: self.fromMe,
+                active_days: self.activeDays.count,
                 median_reply_seconds: median,
-                days: perDay.keys.sorted().map { Day(day: $0, sent: perDay[$0]!.sent, received: perDay[$0]!.received) }
+                days: self.perDay.keys.sorted().map { Day(day: $0, sent: self.perDay[$0]!.sent, received: self.perDay[$0]!.received) }
             ))
         }
-        return result.sorted { $0.external_id < $1.external_id }
+
+        mutating func finish() -> [Conversation] {
+            self.finishChat()
+            return self.result.sorted { $0.external_id < $1.external_id }
+        }
+    }
+
+    /// `rows` must be ordered by chat, then date. (The same counting as `Aggregator`, for a list that is already in memory.)
+    static func aggregate(
+        rows: [Row], excluded: Set<String> = [], now: Date, calendar: Calendar, maxDays: Int = 7300
+    ) -> [Conversation] {
+        var aggregator = Aggregator(excluded: excluded, now: now, calendar: calendar, maxDays: maxDays)
+        for row in rows { aggregator.feed(row) }
+        return aggregator.finish()
     }
 
     // MARK: - Snapshot file
@@ -181,6 +232,21 @@ nonisolated enum MessageActivity {
     }
 }
 
+/// How much memory this process holds, in megabytes (what Activity Monitor calls Memory), for the log.
+nonisolated enum MemoryProbe {
+    private static func info() -> task_vm_info_data_t? {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+        }
+        return result == KERN_SUCCESS ? info : nil
+    }
+
+    static func footprintMB() -> Int { Int((info()?.phys_footprint ?? 0) / 1_048_576) }
+    static func peakMB() -> Int { Int((info()?.ledger_phys_footprint_peak ?? 0) / 1_048_576) }
+}
+
 /// Keeps the Messages snapshot current while sharing is on: shortly after launch, then every ten minutes.
 @MainActor
 final class MessagesInboxScheduler {
@@ -225,12 +291,28 @@ final class MessagesInboxScheduler {
                 return
             }
             let started = Date()
-            guard let rows = database.activityRows() else {
-                DebugLogger.shared.warning("Messages export skipped: the Messages database could not be read right now", source: "MessagesInbox")
-                return
+            let before = MemoryProbe.footprintMB()
+            // Counted as the rows arrive. (`defaults write com.myos.engine MessagesActivityLegacyRead -bool true` reads them all into a list
+            // first, the old way, to compare the memory.)
+            var rowCount = 0
+            let conversations: [MessageActivity.Conversation]
+            if UserDefaults.standard.bool(forKey: "MessagesActivityLegacyRead") {
+                guard let rows = database.activityRows() else {
+                    DebugLogger.shared.warning("Messages export skipped: the Messages database could not be read right now", source: "MessagesInbox")
+                    return
+                }
+                rowCount = rows.count
+                conversations = MessageActivity.aggregate(rows: rows, excluded: excluded, now: Date(), calendar: .current)
+            } else {
+                var aggregator = MessageActivity.Aggregator(excluded: excluded, now: Date(), calendar: .current)
+                guard database.streamActivityRows({ rowCount += 1; aggregator.feed($0) }) else {
+                    DebugLogger.shared.warning("Messages export skipped: the Messages database could not be read right now", source: "MessagesInbox")
+                    return
+                }
+                conversations = aggregator.finish()
             }
-            let conversations = MessageActivity.aggregate(rows: rows, excluded: excluded, now: Date(), calendar: .current)
-            DebugLogger.shared.info("Read \(rows.count) message records into \(conversations.count) conversations in \(Int(Date().timeIntervalSince(started) * 1000)) ms", source: "MessagesInbox")
+            let after = MemoryProbe.footprintMB()
+            DebugLogger.shared.info("Read \(rowCount) message records into \(conversations.count) conversations in \(Int(Date().timeIntervalSince(started) * 1000)) ms (memory \(before) -> \(after) MB, peak \(MemoryProbe.peakMB()) MB)", source: "MessagesInbox")
             // Message text stays on this Mac, in a private database outside the synced myOS folder.
             if keepText {
                 let qualified = Set(conversations.filter(\.qualifies).map { String($0.external_id.dropFirst("imessage:".count)) })
