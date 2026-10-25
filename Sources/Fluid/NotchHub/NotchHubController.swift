@@ -50,6 +50,7 @@ final class NotchHubController {
     func start() {
         guard self.window == nil, let screen = NotchGeometry.targetScreen() else { return }
         self.model.setClosedSize(NotchGeometry.closedSize(for: screen))
+        self.model.onExtraHeightChange = { [weak self] in self?.repositionWindow() }
 
         let window = NotchHubWindow(frame: NotchGeometry.windowFrame(for: screen))
         let hosting = NSHostingView(rootView: NotchHubView(model: self.model))

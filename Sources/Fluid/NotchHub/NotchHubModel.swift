@@ -8,6 +8,9 @@ final class NotchHubModel: ObservableObject {
     @Published var selectedWidgetID: String
     /// The row of tab icons is folded away until the title's arrow is clicked.
     @Published var tabsExpanded = false
+    /// Height added to the open notch on request (see `NotchGeometry.extraHeight`); the controller resizes the window.
+    @Published private(set) var extraHeight: CGFloat = 0
+    var onExtraHeightChange: (() -> Void)?
     @Published private(set) var closedSize: CGSize = .init(width: 190, height: 32)
 
     @Published private(set) var widgets: [NotchWidget]
@@ -17,6 +20,14 @@ final class NotchHubModel: ObservableObject {
         let resolved = widgets ?? NotchWidgetRegistry.all()
         self.widgets = resolved
         self.selectedWidgetID = resolved.first?.id ?? ""
+    }
+
+    func setExtraHeight(_ height: CGFloat) {
+        let clamped = min(max(height.rounded(), 0), 340)
+        guard clamped != self.extraHeight else { return }
+        NotchGeometry.extraHeight = clamped
+        self.onExtraHeightChange?()
+        self.extraHeight = clamped
     }
 
     var selectedWidget: NotchWidget? {

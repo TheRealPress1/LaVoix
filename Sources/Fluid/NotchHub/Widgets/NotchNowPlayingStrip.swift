@@ -35,6 +35,9 @@ final class NotchNowPlayingStrip {
     private var audibleKey: String?
     private var checking = false
 
+    /// Whether the strip is on screen right now (other ambient badges sit beyond it).
+    var isVisible: Bool { self.window?.isVisible == true }
+
     static let wing: CGFloat = 60
     static let wide: CGFloat = 170
 

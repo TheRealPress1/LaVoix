@@ -10,6 +10,9 @@ enum NotchGeometry {
     static var tabRowTotal: CGFloat { self.tabRowHeight + self.tabRowBottomInset }
     /// The open notch with the tab row folded away.
     static var openSizeCollapsed: CGSize { CGSize(width: self.openSize.width, height: self.openSize.height - self.tabRowTotal) }
+    /// Extra height the open notch has been asked for (set through `NotchHubModel.setExtraHeight`): a tab with a long list
+    /// makes the notch taller instead of scrolling.
+    nonisolated(unsafe) static var extraHeight: CGFloat = 0
     /// Extra transparent room around the open notch for the drop shadow.
     static let shadowPadding: CGFloat = 24
 
@@ -69,7 +72,7 @@ enum NotchGeometry {
     }
 
     static var windowSize: CGSize {
-        CGSize(width: self.openSize.width + self.shadowPadding * 2, height: self.openSize.height + self.shadowPadding)
+        CGSize(width: self.openSize.width + self.shadowPadding * 2, height: self.openSize.height + self.extraHeight + self.shadowPadding)
     }
 
     /// Window frame in screen coordinates: centred horizontally, flush with the top edge.
@@ -95,9 +98,9 @@ enum NotchGeometry {
     @MainActor static func openRect(for screen: NSScreen) -> NSRect {
         NSRect(
             x: screen.frame.midX - self.openSize.width / 2 - 10,
-            y: screen.frame.maxY - self.openSize.height - 10,
+            y: screen.frame.maxY - self.openSize.height - self.extraHeight - 10,
             width: self.openSize.width + 20,
-            height: self.openSize.height + 10 + 40
+            height: self.openSize.height + self.extraHeight + 10 + 40
         )
     }
 }

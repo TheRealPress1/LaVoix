@@ -3,9 +3,30 @@ import SwiftUI
 /// Replaces the System tiles while an agent is looking into a resource: working, then a list to approve, then what was done.
 struct SystemFixPanel: View {
     @ObservedObject var agent: SystemFixAgent
+    @ObservedObject private var hub = NotchHubController.shared.model
+    @Environment(\.notchWidgetActive) private var active
     @State private var deselected: Set<String> = []
+    @State private var naturalHeight: CGFloat = 0
 
     var body: some View {
+        self.content
+            .fixedSize(horizontal: false, vertical: true)
+            .background(GeometryReader { proxy in Color.clear.preference(key: NaturalHeightKey.self, value: proxy.size.height) })
+            .onPreferenceChange(NaturalHeightKey.self) { self.naturalHeight = $0; self.growNotch() }
+            .onChange(of: self.active) { _, _ in self.growNotch() }
+            .onChange(of: self.hub.tabsExpanded) { _, _ in self.growNotch() }
+            .onDisappear { self.hub.setExtraHeight(0) }
+    }
+
+    /// A long list makes the notch taller instead of scrolling: ask for what the content needs beyond the room there is.
+    private func growNotch() {
+        guard self.active else { self.hub.setExtraHeight(0); return }
+        let base = self.hub.tabsExpanded ? NotchGeometry.openSize.height : NotchGeometry.openSizeCollapsed.height
+        let room = base - max(self.hub.closedSize.height, 28) - 14 // the tab's own top and bottom padding
+        self.hub.setExtraHeight(self.naturalHeight - room)
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 10) {
             switch self.agent.phase {
             case .idle:
@@ -32,7 +53,6 @@ struct SystemFixPanel: View {
                     .foregroundStyle(.white.opacity(0.6))
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 0)
         }
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -63,14 +83,12 @@ struct SystemFixPanel: View {
         Text(plan.summary)
             .font(.system(size: 12))
             .foregroundStyle(.white.opacity(0.6))
-            .lineLimit(2)
+            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
         if !plan.actions.isEmpty {
-            ScrollView {
-                VStack(spacing: 6) {
-                    ForEach(plan.actions) { action in self.row(action) }
-                }
+            VStack(spacing: 6) {
+                ForEach(plan.actions) { action in self.row(action) }
             }
-            .frame(maxHeight: 96)
             HStack {
                 let bytes = chosen.reduce(UInt64(0)) { $0 + ($1.kind == .trashPath ? ($1.bytes ?? 0) : 0) }
                 Text(bytes > 0 ? "Moves \(Self.size(bytes)) to the Trash" : "Nothing is deleted")
@@ -166,4 +184,9 @@ struct SystemFixPanel: View {
         if gb >= 1 { return String(format: "%.1f GB", gb) }
         return String(format: "%.0f MB", Double(bytes) / 1_048_576)
     }
+}
+
+private struct NaturalHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }

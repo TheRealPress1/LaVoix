@@ -19,11 +19,12 @@ struct NotchHubView: View {
     var body: some View {
         let open = self.isOpen
         let banner = open ? nil : self.model.banner
-        let size: CGSize = open
+        let baseSize: CGSize = open
             ? (self.model.tabsExpanded ? NotchGeometry.openSize : NotchGeometry.openSizeCollapsed)
             : (banner != nil
                 ? NotchGeometry.bannerSize(content: banner, expanded: self.model.bannerExpanded, notchHeight: self.model.closedSize.height)
                 : self.model.closedSize)
+        let size = open ? CGSize(width: baseSize.width, height: baseSize.height + self.model.extraHeight) : baseSize
         let raised = open || banner != nil
         ZStack(alignment: .top) {
             NotchHubShape(topCornerRadius: open ? 19 : (banner != nil ? 10 : 6), bottomCornerRadius: open ? 26 : (banner != nil ? 30 : 14))
@@ -47,6 +48,7 @@ struct NotchHubView: View {
         .frame(width: NotchGeometry.windowSize.width, height: NotchGeometry.windowSize.height, alignment: .top)
         .animation(.spring(response: 0.42, dampingFraction: 0.82), value: open)
         .animation(.spring(response: 0.36, dampingFraction: 0.86), value: self.model.tabsExpanded)
+        .animation(.spring(response: 0.36, dampingFraction: 0.86), value: self.model.extraHeight)
         .animation(.spring(response: 0.42, dampingFraction: 0.82), value: self.model.banner?.id)
         .animation(.spring(response: 0.38, dampingFraction: 0.85), value: self.model.bannerExpanded)
     }
