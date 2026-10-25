@@ -1,8 +1,8 @@
 import EventKit
 import Foundation
 
-/// Your Apple Reminders, for myOS's to-do card. Read-only: it lists what is due today or overdue, and what you finished today. Nothing is
-/// written back and nothing here is logged. macOS asks once (Reminders permission), credited to myOS.
+/// Your Apple Reminders, for myOS's to-do card: what is due today or overdue and what you finished today, and ticking one off (or back on)
+/// from the card. That is the only change it ever makes; nothing is created or deleted, and nothing here is logged. macOS asks once (Reminders permission), credited to myOS.
 nonisolated protocol EngineRemindersProviding: Sendable {
     /// {authorization: "authorized"|"write_only"|"denied"|"restricted"|"not_determined"}
     func status() async -> [String: Any]
@@ -11,11 +11,19 @@ nonisolated protocol EngineRemindersProviding: Sendable {
     /// {items: [{id, title, list, due?, due_has_time, priority, completed}]}: incomplete reminders due by the end of today (overdue included),
     /// then ones completed since the start of today. Undated reminders are left out, as in Reminders' own Today list.
     func today() async throws -> [String: Any]
+    /// Marks one reminder (by its `id` from `today`) done or not done, the same as ticking it in Reminders.
+    func setCompleted(id: String, completed: Bool) async throws
 }
 
 nonisolated enum EngineRemindersError: LocalizedError, Equatable {
     case notAllowed
-    var errorDescription: String? { "Allow Reminders for the myOS engine first (macOS asks once)." }
+    case notFound
+    var errorDescription: String? {
+        switch self {
+        case .notAllowed: "Allow Reminders for the myOS engine first (macOS asks once)."
+        case .notFound: "That reminder isn't in Reminders any more."
+        }
+    }
 }
 
 nonisolated enum RemindersRules {
@@ -88,5 +96,13 @@ nonisolated struct LiveEngineReminders: EngineRemindersProviding {
         let open = await fetch(store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: endOfToday, calendars: nil))
         let done = await fetch(store.predicateForCompletedReminders(withCompletionDateStarting: startOfToday, ending: Date(), calendars: nil))
         return ["items": RemindersRules.sort(open) + RemindersRules.sort(done)]
+    }
+
+    func setCompleted(id: String, completed: Bool) async throws {
+        guard EKEventStore.authorizationStatus(for: .reminder) == .fullAccess else { throw EngineRemindersError.notAllowed }
+        let store = EKEventStore()
+        guard let reminder = store.calendarItem(withIdentifier: id) as? EKReminder else { throw EngineRemindersError.notFound }
+        reminder.isCompleted = completed
+        try store.save(reminder, commit: true)
     }
 }
