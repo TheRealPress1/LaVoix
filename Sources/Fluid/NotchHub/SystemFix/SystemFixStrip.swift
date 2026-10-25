@@ -31,9 +31,12 @@ final class SystemFixStrip {
             return
         }
         let notch = NotchGeometry.closedSize(for: screen)
-        // Right of the notch; beyond the Now Playing wing when that is showing.
-        let offset = NotchNowPlayingStrip.shared.isVisible ? NotchNowPlayingStrip.wing : 0
-        let frame = NSRect(x: screen.frame.midX + notch.width / 2 + offset, y: screen.frame.maxY - notch.height, width: Self.width, height: notch.height)
+        // Normally the notch itself widens (one black shape with the wand in its right wing). While the music strip is
+        // showing, the badge continues past its right wing instead so the two don't draw over each other.
+        let beside = NotchNowPlayingStrip.shared.isVisible
+        let frame = beside
+            ? NSRect(x: screen.frame.midX + notch.width / 2 + NotchNowPlayingStrip.wing, y: screen.frame.maxY - notch.height, width: Self.width, height: notch.height)
+            : NSRect(x: screen.frame.midX - notch.width / 2 - Self.width, y: screen.frame.maxY - notch.height, width: notch.width + Self.width * 2, height: notch.height)
         if self.window == nil {
             let w = NotchHubWindow(frame: frame)
             let model = SystemFixStripModel()
@@ -43,6 +46,8 @@ final class SystemFixStrip {
         }
         self.window?.setFrame(frame, display: false)
         self.model?.state = state
+        self.model?.widened = !beside
+        self.model?.notch = notch
         self.window?.orderFrontRegardless()
     }
 }
@@ -64,17 +69,32 @@ final class SystemFixStripModel: ObservableObject {
     }
 
     @Published var state: State = .hidden
+    /// True when this window spans the notch with a wing on each side; false when it is only the badge past the music strip.
+    @Published var widened = true
+    @Published var notch = CGSize(width: 190, height: 32)
 }
 
 private struct SystemFixStripView: View {
     @ObservedObject var model: SystemFixStripModel
 
     var body: some View {
-        ZStack {
-            UnevenRoundedRectangle(bottomTrailingRadius: 12, topTrailingRadius: 4).fill(Color.black)
-            self.icon
+        Group {
+            if self.model.widened {
+                HStack(spacing: 0) {
+                    Color.clear.frame(width: SystemFixStrip.width)
+                    Color.clear.frame(width: self.model.notch.width)
+                    self.icon.frame(width: SystemFixStrip.width)
+                }
+                .frame(height: self.model.notch.height)
+                .background(NotchHubShape(topCornerRadius: 6, bottomCornerRadius: 14).fill(Color.black))
+            } else {
+                ZStack {
+                    UnevenRoundedRectangle(bottomTrailingRadius: 12, topTrailingRadius: 4).fill(Color.black)
+                    self.icon
+                }
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .allowsHitTesting(false)
     }
 

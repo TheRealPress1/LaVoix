@@ -12,7 +12,11 @@ struct SystemFixPanel: View {
         self.content
             .fixedSize(horizontal: false, vertical: true)
             .background(GeometryReader { proxy in Color.clear.preference(key: NaturalHeightKey.self, value: proxy.size.height) })
-            .onPreferenceChange(NaturalHeightKey.self) { self.naturalHeight = $0; self.growNotch() }
+            .onPreferenceChange(NaturalHeightKey.self) { height in
+                self.naturalHeight = height
+                // Not inside the layout pass: publishing from here can be dropped, which left the notch too short.
+                DispatchQueue.main.async { self.growNotch() }
+            }
             .onChange(of: self.active) { _, _ in self.growNotch() }
             .onChange(of: self.hub.tabsExpanded) { _, _ in self.growNotch() }
             .onDisappear { self.hub.setExtraHeight(0) }
@@ -23,7 +27,9 @@ struct SystemFixPanel: View {
         guard self.active else { self.hub.setExtraHeight(0); return }
         let base = self.hub.tabsExpanded ? NotchGeometry.openSize.height : NotchGeometry.openSizeCollapsed.height
         let room = base - max(self.hub.closedSize.height, 28) - 14 // the tab's own top and bottom padding
-        self.hub.setExtraHeight(self.naturalHeight - room)
+        let extra = self.naturalHeight - room
+        SystemFixDebugLog.write("natural=\(Int(self.naturalHeight)) room=\(Int(room)) extra=\(Int(extra)) active=\(self.active) tabs=\(self.hub.tabsExpanded)")
+        self.hub.setExtraHeight(extra)
     }
 
     private var content: some View {
@@ -189,4 +195,13 @@ struct SystemFixPanel: View {
 private struct NaturalHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// One line per measurement in ~/Library/Logs/myos-system-fix.log (sizes only), to see why the notch is the height it is.
+enum SystemFixDebugLog {
+    static func write(_ line: String) {
+        let url = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/myos-system-fix.log")
+        let data = Data((ISO8601DateFormatter().string(from: Date()) + " " + line + "\n").utf8)
+        if let handle = try? FileHandle(forWritingTo: url) { handle.seekToEndOfFile(); handle.write(data); try? handle.close() } else { try? data.write(to: url) }
+    }
 }
