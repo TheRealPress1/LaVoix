@@ -263,6 +263,10 @@ final class NotchHubController {
                 date: message.date
             ))
         }
+        store.onConnectionAlert = { [weak self] title, text, symbol in
+            self?.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: title, subtitle: nil, text: text, date: Date(), alertSymbol: symbol))
+        }
+        store.isBusy = { [weak self] in self?.recordingOverlayIsVisible ?? false }
         self.unreadObserver = store.$unreadTotal.sink { [weak self] count in
             self?.model.setBadge("messages", count)
         }
@@ -290,7 +294,7 @@ final class NotchHubController {
         self.window?.ignoresMouseEvents = false
         self.bannerHovered = false
         self.model.showBanner(content)
-        self.scheduleBannerDismiss(after: 6)
+        self.scheduleBannerDismiss(after: content.alertSymbol == nil ? 6 : 12)
     }
 
     func dismissBanner() {
@@ -309,6 +313,11 @@ final class NotchHubController {
         self.bannerHovered = false
         self.endTextEntry()
         self.model.hideBanner()
+        if banner.alertSymbol != nil {
+            // A connection alert: take the user to where it is fixed.
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
+            return
+        }
         self.model.selectedWidgetID = "messages"
         MessagesStore.shared.select(banner.chatID)
         self.open()

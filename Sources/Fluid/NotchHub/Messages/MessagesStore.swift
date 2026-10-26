@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 
@@ -55,6 +56,17 @@ final class MessagesStore: ObservableObject {
         MessagesSender.showInMessages(handles: chat.handles, isGroup: chat.isGroup)
     }
     private var refreshFailures = 0
+    /// Watches for reads that keep failing: re-checks access, tells the user, and relaunches the app once if that is what cures it.
+    private var watch: ConnectionWatch = {
+        var w = ConnectionWatch()
+        let last = UserDefaults.standard.double(forKey: "messages.lastAutoRestart")
+        if last > 0 { w.lastRestart = Date(timeIntervalSince1970: last) }
+        return w
+    }()
+    /// Title, text and symbol of a connection alert for the notch to show.
+    var onConnectionAlert: ((String, String, String) -> Void)?
+    /// True while the user is dictating or recording, so the app never relaunches itself then.
+    var isBusy: () -> Bool = { false }
     /// One read of the Messages database at a time, on its own queue. The read is synchronous and can take seconds on a big database; started
     /// again on every change and every 20 seconds with no limit, they piled up, filled Swift's worker threads and froze the whole engine.
     private var refreshInFlight = false
@@ -188,8 +200,43 @@ final class MessagesStore: ObservableObject {
             }
             self.refreshFailures = 0
             self.loadFailed = false
+            if self.watch.succeeded() == .recovered {
+                DebugLogger.shared.info("Messages connection recovered", source: "MessagesStore")
+                self.onConnectionAlert?("Messages reconnected", "Your messages are being read again.", "checkmark.circle.fill")
+            }
             self.apply(conversations: result.0, threads: result.1, incoming: result.2, announce: announce)
         }
+    }
+
+    private func handle(_ step: ConnectionWatch.Step) {
+        switch step {
+        case .none, .recovered:
+            break
+        case .recheck:
+            // Also flips the screen to the Full Disk Access card when the system really has taken access away.
+            self.recheckAccess()
+        case .alert:
+            DebugLogger.shared.info("Messages connection lost: alerting", source: "MessagesStore")
+            self.onConnectionAlert?("Messages disconnected", "myOS can't read your messages right now. It is trying to reconnect.", "exclamationmark.triangle.fill")
+        case .restart:
+            DebugLogger.shared.info("Messages still unreadable: relaunching to reconnect", source: "MessagesStore")
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "messages.lastAutoRestart")
+            self.onConnectionAlert?("Reconnecting Messages", "Restarting to fix the connection. This takes a few seconds.", "arrow.clockwise.circle.fill")
+            Self.relaunchApp()
+        case .stillBroken:
+            DebugLogger.shared.info("Messages still unreadable after a restart", source: "MessagesStore")
+            self.onConnectionAlert?("Messages is still disconnected", "A restart didn't fix it. Click here to open Full Disk Access and make sure myOS Engine is switched on.", "exclamationmark.triangle.fill")
+        }
+    }
+
+    /// Quits and starts the app again a moment later (the same bundle, in the background as it was).
+    private static func relaunchApp() {
+        let path = Bundle.main.bundlePath
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "sleep 4; /usr/bin/open -a \"$0\" --args --background", path]
+        try? process.run()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { NSApp.terminate(nil) }
     }
 
     /// Tries again shortly after a failed read, backing off a little each time, for up to a few attempts.
@@ -197,6 +244,7 @@ final class MessagesStore: ObservableObject {
         self.refreshFailures += 1
         DebugLogger.shared.info("Messages database read failed (attempt \(self.refreshFailures)); keeping what is shown", source: "MessagesStore")
         if !self.hasLoaded, self.refreshFailures >= 3 { self.loadFailed = true }
+        self.handle(self.watch.failed(now: Date(), busy: self.isBusy()))
         // Never gives up: a few quick retries, then one every 15 seconds for as long as the notch is running.
         guard self.retryTask == nil else { return }
         let delay = self.refreshFailures <= 6 ? 0.6 * Double(self.refreshFailures) : 15

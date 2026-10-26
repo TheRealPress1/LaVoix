@@ -15,6 +15,8 @@ struct NotchBannerContent: Equatable, Identifiable {
     let subtitle: String?
     let text: String
     let date: Date
+    /// Set for a connection alert (not a message): the card shows this symbol instead of an avatar and has no reply box.
+    var alertSymbol: String? = nil
 
     /// Width left for the message text inside the card: card width minus side padding, avatar and spacing.
     static let textWidth: CGFloat = NotchGeometry.bannerWidth - 44 - 40 - 12
@@ -40,7 +42,7 @@ struct NotchBannerContent: Equatable, Identifiable {
     /// Everything in the card that sits under the notch band, with the reply row only when expanded.
     func contentHeight(expanded: Bool) -> CGFloat {
         let header: CGFloat = 8 + 19 + (self.subtitle == nil ? 0 : 16) + 2
-        return header + self.textHeight + 18 + (expanded ? 12 + 34 : 0)
+        return header + self.textHeight + 18 + (expanded && self.alertSymbol == nil ? 12 + 34 : 0)
     }
 }
 
@@ -60,7 +62,13 @@ struct NotchBannerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
-                if self.content.groupHandles.isEmpty {
+                if let symbol = self.content.alertSymbol {
+                    Image(systemName: symbol)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 40, height: 40)
+                        .background(Circle().fill(Color.orange.opacity(0.9)))
+                } else if self.content.groupHandles.isEmpty {
                     NotchAvatar(name: self.content.title, handle: self.content.avatarHandle)
                 } else {
                     NotchGroupAvatar(handles: self.content.groupHandles)
@@ -95,7 +103,7 @@ struct NotchBannerView: View {
             .contentShape(Rectangle())
             .onTapGesture { NotchHubController.shared.openConversationFromBanner() }
 
-            if self.expanded { self.replyRow.transition(.opacity.combined(with: .move(edge: .top))) }
+            if self.expanded, self.content.alertSymbol == nil { self.replyRow.transition(.opacity.combined(with: .move(edge: .top))) }
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 22)
