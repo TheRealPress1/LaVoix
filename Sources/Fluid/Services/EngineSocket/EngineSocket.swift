@@ -520,6 +520,20 @@ nonisolated enum EngineSocket {
                     _ = emit(["ok": true])
                 }
             } catch { fail(message(error)) }
+        case "nowplaying.sessions":
+            // Every stretch of something playing that was still going after `since` (seconds since 1970), the one in progress as of now.
+            let since = (object["since"] as? NSNumber)?.doubleValue
+            let rows: [[String: Any]] = await MainActor.run {
+                NowPlayingStore.shared.watchLog.sessions(since: since).map { s in
+                    var d: [String: Any] = ["id": s.id, "key": s.key, "title": s.title, "music": s.music, "start": s.start, "end": s.end]
+                    if let a = s.artist { d["artist"] = a }
+                    if let a = s.app { d["app"] = a }
+                    if let b = s.bundle { d["bundle"] = b }
+                    if let w = s.site { d["site"] = w }
+                    return d
+                }
+            }
+            _ = emit(["ok": true, "sessions": rows])
         case "photos.status", "photos.request", "photos.summary", "photos.locations":
             guard let photos = services.photos else { return fail("photos are not available") }
             do {

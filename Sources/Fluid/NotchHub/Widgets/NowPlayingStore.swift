@@ -346,6 +346,7 @@ final class NowPlayingStore: ObservableObject {
     func trackChanged(_ new: Track?) {
         guard var track = new else {
             self.track = nil
+            self.logWatch(nil)
             self.cancelSettle()
             return
         }
@@ -359,6 +360,7 @@ final class NowPlayingStore: ObservableObject {
             if track.artwork == nil { track.artwork = previous.artwork }
         }
         self.track = track
+        self.logWatch(track)
 
         guard track.isPlaying else { self.cancelSettle(); return }
         if track.site == nil, previous?.key != track.key { self.resolveSiteNow(for: track) }
@@ -380,6 +382,21 @@ final class NowPlayingStore: ObservableObject {
             self.record(current)
             if let id = current.videoID { await self.enrich(videoID: id, key: current.key) }
         }
+    }
+
+    /// Every stretch of something playing is kept with its start and end, so time spent can be added up later (the screen time page).
+    private(set) lazy var watchLog = WatchSessionLog(directory: self.directory)
+
+    private func logWatch(_ track: Track?) {
+        guard !self.isSample else { return }
+        guard let track, track.isPlaying else { self.watchLog.observe(nil); return }
+        let source = track.site ?? NowPlayingSource.native(bundleID: track.bundleID, appName: track.appName)
+        let musicKinds: Set<NowPlayingSource.Kind> = [.spotify, .appleMusic, .youtubeMusic, .soundcloud]
+        let music = musicKinds.contains(source.kind) || track.bundleID == "com.spotify.client" || track.bundleID == "com.apple.Music"
+        self.watchLog.observe(WatchSession(
+            id: UUID().uuidString, key: track.key, title: track.title, artist: track.artist, app: track.appName, bundle: track.bundleID,
+            site: source.name, music: music, start: 0, end: 0
+        ))
     }
 
     private func cancelSettle() {
