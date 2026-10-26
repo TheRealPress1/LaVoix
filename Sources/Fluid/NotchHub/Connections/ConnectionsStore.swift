@@ -130,6 +130,11 @@ struct ConnectionsWidgetView: View {
     }
 
     @State private var hovered: String?
+    /// A connection you'd like later: typed here, saved as a line on the "Connection ideas" page in the Brain (myOS does the saving).
+    @State private var adding = false
+    @State private var idea = ""
+    @State private var saved = false
+    @FocusState private var ideaFocused: Bool
 
     var body: some View {
         let rows = self.rows
@@ -147,12 +152,15 @@ struct ConnectionsWidgetView: View {
                 // are logos in a wrapping line, and the name and detail of the one under the pointer appear in a strip of fixed height below.
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(broken) { item in self.brokenRow(item) }
-                    if !healthy.isEmpty {
-                        ConnectionsFlow(spacing: 8) {
-                            ForEach(healthy) { item in self.logo(item) }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        self.detail(healthy.first { $0.id == self.hovered })
+                    ConnectionsFlow(spacing: 8) {
+                        ForEach(healthy) { item in self.logo(item) }
+                        self.addChip
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if self.adding {
+                        self.ideaField
+                    } else if !healthy.isEmpty || self.saved {
+                        self.detail(self.saved ? nil : healthy.first { $0.id == self.hovered })
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -186,11 +194,75 @@ struct ConnectionsWidgetView: View {
             .help(self.displayName(item))
     }
 
+    /// The + at the end of the line: opens a field to note down a connection to add later.
+    private var addChip: some View {
+        Image(systemName: "plus")
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(.white.opacity(self.adding ? 0.9 : 0.55))
+            .frame(width: 36, height: 36)
+            .padding(6)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.white.opacity(self.adding ? 0.4 : 0.22), style: StrokeStyle(lineWidth: 1, dash: [3, 3])))
+            .contentShape(Rectangle())
+            .onTapGesture { self.toggleAdding() }
+            .help("Save an idea for a new connection")
+    }
+
+    private func toggleAdding() {
+        if self.adding {
+            self.adding = false
+            self.idea = ""
+            NotchHubController.shared.endTextEntry()
+        } else {
+            self.adding = true
+            self.saved = false
+            NotchHubController.shared.beginTextEntry()
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                self.ideaFocused = true
+            }
+        }
+    }
+
+    private func saveIdea() {
+        let text = self.idea.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        Task { await ConnectionActions.shared.push("idea:" + text) }
+        self.idea = ""
+        self.adding = false
+        self.saved = true
+        NotchHubController.shared.endTextEntry()
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            self.saved = false
+        }
+    }
+
+    private var ideaField: some View {
+        HStack(spacing: 8) {
+            TextField("", text: self.$idea, prompt: Text("A connection to add later…").foregroundStyle(.white.opacity(0.4)))
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(.white)
+                .tint(.white)
+                .focused(self.$ideaFocused)
+                .onSubmit { self.saveIdea() }
+                .onExitCommand { self.toggleAdding() }
+                .padding(.horizontal, 10).padding(.vertical, 7)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.08)))
+            Button { self.saveIdea() } label: {
+                Text("Save").font(.system(size: 12, weight: .semibold)).padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(Capsule().fill(Color.white.opacity(0.9))).foregroundStyle(.black)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 6)
+    }
+
     /// The line under the logos: always the same height, so showing or hiding a name moves nothing.
     private func detail(_ item: ConnectorItem?) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(item.map(self.displayName) ?? " ").font(.system(size: 13, weight: .semibold)).lineLimit(1)
-            Text(item?.detail ?? " ").font(.system(size: 11)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+            Text(item.map(self.displayName) ?? (self.saved ? "Saved to your Brain" : " ")).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+            Text(item?.detail ?? (self.saved ? "On the Connection ideas page." : " ")).font(.system(size: 11)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
         }
         .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
         .padding(.horizontal, 6)
