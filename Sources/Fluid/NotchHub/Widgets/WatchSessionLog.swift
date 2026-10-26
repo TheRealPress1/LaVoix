@@ -24,13 +24,18 @@ struct WatchSession: Codable, Equatable {
 final class WatchSessionLog {
     private(set) var sessions: [WatchSession] = []
     private var open: WatchSession?
+    /// A session that has just stopped and is held for a moment: if the same thing starts again within `resumeWithin` it is one watch.
+    private var lingering: (session: WatchSession, stoppedAt: Date)?
     private var lastBeat: Date?
     private var timer: Timer?
+    private var lingerTimer: Timer?
     private let closedURL: URL
     private let openURL: URL
 
     /// A flicker shorter than this is not a session.
     static let minSeconds: Double = 5
+    /// A pause, a buffering stall or a title that blinks for less than this does not split one watch into two.
+    static let resumeWithin: TimeInterval = 45
     /// A minute-beat this late means the Mac slept: the session ended when the last beat did.
     static let sleepGap: TimeInterval = 150
 
@@ -62,6 +67,22 @@ final class WatchSessionLog {
         }
         self.closeOpen(at: date)
         guard var next = now else { return }
+        if let held = self.lingering {
+            if held.session.key == next.key, date.timeIntervalSince(held.stoppedAt) <= Self.resumeWithin {
+                // The same thing again after a short break: the watch carries on as one session.
+                self.lingering = nil
+                self.lingerTimer?.invalidate()
+                var resumed = held.session
+                resumed.site = next.site ?? resumed.site
+                resumed.artist = next.artist ?? resumed.artist
+                self.open = resumed
+                self.lastBeat = date
+                self.saveOpen()
+                self.startTimer()
+                return
+            }
+            self.finishLingering()
+        }
         next.start = date.timeIntervalSince1970
         next.end = next.start
         self.open = next
@@ -77,6 +98,7 @@ final class WatchSessionLog {
             // The Mac slept: what was playing ended at the last beat. If it is still playing, a new session begins now.
             let resume = current
             self.closeOpen(at: last)
+            self.finishLingering()
             var next = resume
             next.id = UUID().uuidString
             next.start = date.timeIntervalSince1970
@@ -95,11 +117,12 @@ final class WatchSessionLog {
     /// The sessions that were still going after `since` (seconds since 1970), the one in progress included as of now.
     func sessions(since: Double?) -> [WatchSession] {
         self.beat()
-        let all = self.sessions + (self.open.map { [$0] } ?? [])
+        let all = self.sessions + (self.lingering.map { [$0.session] } ?? []) + (self.open.map { [$0] } ?? [])
         guard let since else { return all }
         return all.filter { $0.end > since }
     }
 
+    /// Stops the session in progress, but holds it for `resumeWithin` before it is written down for good.
     private func closeOpen(at date: Date) {
         self.timer?.invalidate()
         self.timer = nil
@@ -107,8 +130,23 @@ final class WatchSessionLog {
         self.open = nil
         self.lastBeat = nil
         current.end = max(current.end, date.timeIntervalSince1970)
-        try? FileManager.default.removeItem(at: self.openURL)
-        self.finish(current)
+        if self.lingering != nil { self.finishLingering() }
+        self.lingering = (current, date)
+        // The held session stays in open.json (with its final end), so a quit or a crash still keeps it.
+        if let data = try? JSONEncoder().encode(current) { try? data.write(to: self.openURL, options: .atomic) }
+        self.lingerTimer?.invalidate()
+        self.lingerTimer = Timer.scheduledTimer(withTimeInterval: Self.resumeWithin + 1, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.finishLingering() }
+        }
+    }
+
+    private func finishLingering() {
+        self.lingerTimer?.invalidate()
+        self.lingerTimer = nil
+        guard let held = self.lingering else { return }
+        self.lingering = nil
+        if self.open == nil { try? FileManager.default.removeItem(at: self.openURL) }
+        self.finish(held.session)
     }
 
     private func finish(_ session: WatchSession) {
