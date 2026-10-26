@@ -100,6 +100,7 @@ final class NotchHubController {
             return event
         }
         self.startMessagesIfEnabled()
+        ConnectionsStore.shared.restoreBadge()
         NotchMeetingCardController.shared.hubStateChanged()
         if NotchClipboardSettings.isEnabled { ClipboardStore.shared.start() }
         self.startCalendarIfEnabled()

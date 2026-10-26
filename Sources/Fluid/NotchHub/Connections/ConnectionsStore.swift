@@ -30,11 +30,32 @@ struct ConnectorItem: Identifiable, Equatable {
 final class ConnectionsStore: ObservableObject {
     static let shared = ConnectionsStore()
     @Published private(set) var items: [ConnectorItem] = []
+    private static let savedKey = "connections.lastItems"
+
+    /// The last list myOS sent is kept, so the tab is full the moment the engine starts, before myOS has had a chance to send a fresh one.
+    init() {
+        if let data = UserDefaults.standard.data(forKey: Self.savedKey),
+           let raw = try? JSONSerialization.jsonObject(with: data) {
+            self.items = ConnectorItem.parse(raw)
+        }
+    }
 
     func set(_ items: [ConnectorItem]) {
         guard items != self.items else { return }
         self.items = items
+        let raw: [[String: Any]] = items.map { i in
+            var d: [String: Any] = ["id": i.id, "title": i.title, "detail": i.detail, "broken": i.broken]
+            if let a = i.actionID { d["action_id"] = a }
+            if let l = i.actionLabel { d["action_label"] = l }
+            return d
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: raw) { UserDefaults.standard.set(data, forKey: Self.savedKey) }
         NotchHubController.shared.model.setBadge("connections", items.filter(\.broken).count)
+    }
+
+    /// Badge for a list restored at launch.
+    func restoreBadge() {
+        NotchHubController.shared.model.setBadge("connections", self.items.filter(\.broken).count)
     }
 }
 
