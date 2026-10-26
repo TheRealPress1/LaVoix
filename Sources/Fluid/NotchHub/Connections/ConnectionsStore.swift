@@ -129,6 +129,8 @@ struct ConnectionsWidgetView: View {
         return all.sorted { ($0.broken ? 0 : 1, $0.title) < ($1.broken ? 0 : 1, $1.title) }
     }
 
+    @State private var hovered: String?
+
     var body: some View {
         let rows = self.rows
         if rows.isEmpty {
@@ -139,40 +141,57 @@ struct ConnectionsWidgetView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 6) {
-                    ForEach(rows) { item in self.row(item) }
+                // Logos side by side in a wrapping line. Hovering one opens its name out to the right and the others move along; one that
+                // needs attention stays open with its button.
+                ConnectionsFlow(spacing: 8) {
+                    ForEach(rows) { item in self.chip(item) }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .animation(.spring(response: 0.32, dampingFraction: 0.82), value: self.hovered)
             }
             .foregroundStyle(.white)
         }
     }
 
-    private func row(_ item: ConnectorItem) -> some View {
-        HStack(spacing: 10) {
-            ConnectorIconView(id: item.id, title: item.title)
+    private func chip(_ item: ConnectorItem) -> some View {
+        let open = item.broken || self.hovered == item.id
+        let name = item.title.hasPrefix("Bank · ") ? String(item.title.dropFirst(7)) : item.title
+        return HStack(spacing: 10) {
+            ConnectorIconView(id: item.id, title: item.title, size: 36)
                 .overlay(alignment: .bottomTrailing) {
-                    Circle().fill(item.broken ? Color.orange : Color.green).frame(width: 9, height: 9)
+                    Circle().fill(item.broken ? Color.orange : Color.green).frame(width: 10, height: 10)
                         .overlay(Circle().strokeBorder(Color.black, lineWidth: 1.5))
                         .offset(x: 3, y: 3)
                 }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(item.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                Text(item.detail).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)).lineLimit(2)
-            }
-            Spacer(minLength: 8)
-            if let id = item.actionID, let label = item.actionLabel {
-                Button { Self.press(id) } label: {
-                    Text(label)
-                        .font(.system(size: 12, weight: .semibold))
-                        .padding(.horizontal, 12).padding(.vertical, 4)
-                        .background(Capsule().fill(Color.orange.opacity(0.95)))
-                        .foregroundStyle(.black)
+            if open {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Text(item.detail).font(.system(size: 11)).foregroundStyle(.white.opacity(0.55)).lineLimit(item.broken ? 2 : 1)
                 }
-                .buttonStyle(.plain)
+                .frame(maxWidth: 300, alignment: .leading)
+                .fixedSize(horizontal: true, vertical: false)
+                .transition(.opacity)
+                if let id = item.actionID, let label = item.actionLabel {
+                    Button { Self.press(id) } label: {
+                        Text(label)
+                            .font(.system(size: 12, weight: .semibold))
+                            .padding(.horizontal, 12).padding(.vertical, 4)
+                            .background(Capsule().fill(Color.orange.opacity(0.95)))
+                            .foregroundStyle(.black)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.06)))
+        .padding(.vertical, 6)
+        .padding(.leading, 6)
+        .padding(.trailing, open ? 12 : 6)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(open ? 0.1 : 0.06)))
+        .contentShape(Rectangle())
+        .onHover { inside in
+            if inside { self.hovered = item.id } else if self.hovered == item.id { self.hovered = nil }
+        }
+        .help(name)
     }
 
     /// A button: the Full Disk Access one opens System Settings here; every other is handed to myOS.
@@ -182,5 +201,40 @@ struct ConnectionsWidgetView: View {
         } else {
             Task { await ConnectionActions.shared.push(id) }
         }
+    }
+}
+
+/// Lays its children out left to right and wraps to a new line when the next one would not fit, so a child that grows pushes the ones after it along.
+struct ConnectionsFlow: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        return self.arrange(width: width, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+        let result = self.arrange(width: bounds.width, subviews: subviews)
+        for (index, frame) in result.frames.enumerated() {
+            subviews[index].place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    private func arrange(width: CGFloat, subviews: Subviews) -> (size: CGSize, frames: [CGRect]) {
+        var frames: [CGRect] = []
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, maxX: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width {
+                x = 0
+                y += rowHeight + self.spacing
+                rowHeight = 0
+            }
+            frames.append(CGRect(origin: CGPoint(x: x, y: y), size: size))
+            x += size.width + self.spacing
+            rowHeight = max(rowHeight, size.height)
+            maxX = max(maxX, x - self.spacing)
+        }
+        return (CGSize(width: width.isFinite ? width : maxX, height: y + rowHeight), frames)
     }
 }
