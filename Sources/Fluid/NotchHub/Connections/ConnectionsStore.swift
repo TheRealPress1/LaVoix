@@ -140,58 +140,85 @@ struct ConnectionsWidgetView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
+            let broken = rows.filter(\.broken)
+            let healthy = rows.filter { !$0.broken }
             ScrollView(.vertical, showsIndicators: false) {
-                // Logos side by side in a wrapping line. Hovering one opens its name out to the right and the others move along; one that
-                // needs attention stays open with its button.
-                ConnectionsFlow(spacing: 8) {
-                    ForEach(rows) { item in self.chip(item) }
+                // Nothing moves when you point at a logo: a connector that needs attention is a full-width row with its button, the working ones
+                // are logos in a wrapping line, and the name and detail of the one under the pointer appear in a strip of fixed height below.
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(broken) { item in self.brokenRow(item) }
+                    if !healthy.isEmpty {
+                        ConnectionsFlow(spacing: 8) {
+                            ForEach(healthy) { item in self.logo(item) }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        self.detail(healthy.first { $0.id == self.hovered })
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .animation(.spring(response: 0.32, dampingFraction: 0.82), value: self.hovered)
             }
             .foregroundStyle(.white)
         }
     }
 
-    private func chip(_ item: ConnectorItem) -> some View {
-        let open = item.broken || self.hovered == item.id
-        let name = item.title.hasPrefix("Bank · ") ? String(item.title.dropFirst(7)) : item.title
-        return HStack(spacing: 10) {
-            ConnectorIconView(id: item.id, title: item.title, size: 36)
-                .overlay(alignment: .bottomTrailing) {
-                    Circle().fill(item.broken ? Color.orange : Color.green).frame(width: 10, height: 10)
-                        .overlay(Circle().strokeBorder(Color.black, lineWidth: 1.5))
-                        .offset(x: 3, y: 3)
+    private func displayName(_ item: ConnectorItem) -> String {
+        item.title.hasPrefix("Bank · ") ? String(item.title.dropFirst(7)) : item.title
+    }
+
+    private func badge(_ item: ConnectorItem) -> some View {
+        ConnectorIconView(id: item.id, title: item.title, size: 36)
+            .overlay(alignment: .bottomTrailing) {
+                Circle().fill(item.broken ? Color.orange : Color.green).frame(width: 10, height: 10)
+                    .overlay(Circle().strokeBorder(Color.black, lineWidth: 1.5))
+                    .offset(x: 3, y: 3)
+            }
+    }
+
+    /// A working connector: just its logo, lit while the pointer is on it.
+    private func logo(_ item: ConnectorItem) -> some View {
+        self.badge(item)
+            .padding(6)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(self.hovered == item.id ? 0.12 : 0.06)))
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside { self.hovered = item.id } else if self.hovered == item.id { self.hovered = nil }
+            }
+            .help(self.displayName(item))
+    }
+
+    /// The line under the logos: always the same height, so showing or hiding a name moves nothing.
+    private func detail(_ item: ConnectorItem?) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(item.map(self.displayName) ?? " ").font(.system(size: 13, weight: .semibold)).lineLimit(1)
+            Text(item?.detail ?? " ").font(.system(size: 11)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+        .padding(.horizontal, 6)
+    }
+
+    /// A connector that needs attention: always open, with its button.
+    private func brokenRow(_ item: ConnectorItem) -> some View {
+        HStack(spacing: 10) {
+            self.badge(item)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(self.displayName(item)).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                Text(item.detail).font(.system(size: 11)).foregroundStyle(.white.opacity(0.55)).lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            if let id = item.actionID, let label = item.actionLabel {
+                Button { Self.press(id) } label: {
+                    Text(label)
+                        .font(.system(size: 12, weight: .semibold))
+                        .padding(.horizontal, 12).padding(.vertical, 4)
+                        .background(Capsule().fill(Color.orange.opacity(0.95)))
+                        .foregroundStyle(.black)
                 }
-            if open {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                    Text(item.detail).font(.system(size: 11)).foregroundStyle(.white.opacity(0.55)).lineLimit(item.broken ? 2 : 1)
-                }
-                .frame(maxWidth: 300, alignment: .leading)
-                .fixedSize(horizontal: true, vertical: false)
-                .transition(.opacity)
-                if let id = item.actionID, let label = item.actionLabel {
-                    Button { Self.press(id) } label: {
-                        Text(label)
-                            .font(.system(size: 12, weight: .semibold))
-                            .padding(.horizontal, 12).padding(.vertical, 4)
-                            .background(Capsule().fill(Color.orange.opacity(0.95)))
-                            .foregroundStyle(.black)
-                    }
-                    .buttonStyle(.plain)
-                }
+                .buttonStyle(.plain)
             }
         }
-        .padding(.vertical, 6)
-        .padding(.leading, 6)
-        .padding(.trailing, open ? 12 : 6)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(open ? 0.1 : 0.06)))
-        .contentShape(Rectangle())
-        .onHover { inside in
-            if inside { self.hovered = item.id } else if self.hovered == item.id { self.hovered = nil }
-        }
-        .help(name)
+        .padding(.vertical, 6).padding(.horizontal, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(0.1)))
     }
 
     /// A button: the Full Disk Access one opens System Settings here; every other is handed to myOS.
