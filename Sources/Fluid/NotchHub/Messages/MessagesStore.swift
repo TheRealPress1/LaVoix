@@ -27,6 +27,27 @@ final class MessagesStore: ObservableObject {
     @Published private(set) var sendError: String?
     @Published private(set) var isSending = false
 
+    /// "New message": the search for someone (or a named group) to write to, beyond the latest chats.
+    struct ComposeResult: Identifiable, Equatable {
+        let id: String
+        let name: String
+        let detail: String
+        /// Who to send to; nil for a group (which is opened as the chat it is).
+        let handle: String?
+        let group: MessageConversation?
+    }
+    /// A conversation with someone you have no chat with yet: it exists once the first message is sent.
+    struct NewChat: Equatable {
+        let name: String
+        let handle: String
+    }
+    @Published private(set) var composing = false
+    @Published private(set) var composeResults: [ComposeResult] = []
+    @Published private(set) var newChat: NewChat?
+    /// A chat opened from the search that is not among the latest ones, kept in the list so it stays on screen.
+    private var pinned: MessageConversation?
+    private var composeQuery = ""
+
     /// Called for a fresh incoming message: (message, sender's display name).
     var onIncoming: ((IncomingMessage, String) -> Void)?
 
@@ -50,6 +71,10 @@ final class MessagesStore: ObservableObject {
     /// How a message is actually sent. Tests replace this so no real message is ever sent.
     var sendHandler: (String, String) async throws -> Void = { text, chatGUID in
         try await MessagesSender.send(text, toChat: chatGUID)
+    }
+    /// How a first message to someone with no chat is sent. Tests replace this too.
+    var sendNewHandler: (String, String) async throws -> Void = { text, handle in
+        try await MessagesSender.sendNew(text, toHandle: handle)
     }
     /// What happens after a reply is sent: the conversation is shown in Messages for a moment so it counts as seen. Tests replace this.
     var markSeenHandler: (MessageConversation) -> Void = { chat in
@@ -180,6 +205,10 @@ final class MessagesStore: ObservableObject {
                 for conversation in conversations where conversation.id == selected || stamps[conversation.id] != conversation.lastDate {
                     if let messages = database.messages(chatID: conversation.id, limit: 12) { threads[conversation.id] = messages }
                 }
+                // A chat opened from the search is not in the latest list, so its thread is read on its own.
+                if let selected, threads[selected] == nil, !conversations.contains(where: { $0.id == selected }), let own = database.messages(chatID: selected, limit: 12) {
+                    threads[selected] = own
+                }
                 let incoming = announce ? database.incomingMessages(after: after) : []
                 return (conversations, threads, incoming)
                     }()
@@ -256,7 +285,12 @@ final class MessagesStore: ObservableObject {
         }
     }
 
-    func apply(conversations: [MessageConversation], threads: [Int64: [ThreadMessage]], incoming: [IncomingMessage], announce: Bool) {
+    func apply(conversations latest: [MessageConversation], threads: [Int64: [ThreadMessage]], incoming: [IncomingMessage], announce: Bool) {
+        var conversations = latest
+        if let pinned = self.pinned {
+            if let index = conversations.firstIndex(where: { $0.id == pinned.id }) { self.pinned = conversations[index] }
+            else { conversations.append(pinned) }
+        }
         for conversation in conversations {
             if let fresh = threads[conversation.id] {
                 self.threadCache[conversation.id] = fresh
@@ -266,7 +300,7 @@ final class MessagesStore: ObservableObject {
         self.resolvePending()
         self.hasLoaded = true
         self.conversations = self.withPendingPreviews(conversations)
-        self.unreadTotal = conversations.reduce(0) { $0 + $1.unreadCount }
+        self.unreadTotal = latest.reduce(0) { $0 + $1.unreadCount }
         // Forget chats that fell out of the list so the cache stays small.
         let visible = Set(conversations.map(\.id))
         self.threadCache = self.threadCache.filter { visible.contains($0.key) }
@@ -287,6 +321,7 @@ final class MessagesStore: ObservableObject {
     }
 
     func select(_ chatID: Int64) {
+        if self.newChat != nil { self.newChat = nil; self.thread = [] }
         guard chatID != self.selectedChatID else { return }
         self.selectedChatID = chatID
         self.sendError = nil
@@ -357,6 +392,10 @@ final class MessagesStore: ObservableObject {
 
     func send(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let draft = self.newChat, !trimmed.isEmpty {
+            self.deliverNew(trimmed, to: draft)
+            return
+        }
         guard !trimmed.isEmpty,
               let chat = self.conversations.first(where: { $0.id == self.selectedChatID }) else { return }
         self.deliver(trimmed, chatID: chat.id, chatGUID: chat.guid)
@@ -389,6 +428,102 @@ final class MessagesStore: ObservableObject {
             } catch {
                 self.sendError = error.localizedDescription
                 if let tempID { self.removePending(tempID) }
+            }
+        }
+    }
+
+    // MARK: - New message
+
+    func startCompose() {
+        self.composing = true
+        self.composeResults = []
+        self.composeQuery = ""
+        self.contacts.loadIfNeeded()
+    }
+
+    func cancelCompose() {
+        self.composing = false
+        self.composeResults = []
+    }
+
+    /// Looks for who was typed: contacts by name or number, named groups, and the number or email itself if that is what it looks like.
+    func updateCompose(query: String) {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.composeQuery = q
+        guard !q.isEmpty else { self.composeResults = []; return }
+        var results = self.contacts.search(q).map {
+            ComposeResult(id: "h:" + $0.handle, name: $0.name, detail: $0.handle, handle: $0.handle, group: nil)
+        }
+        if let handle = ContactResolver.sendableHandle(q), !results.contains(where: { $0.handle == handle }) {
+            results.append(ComposeResult(id: "h:" + handle, name: handle, detail: "Send to this number or email", handle: handle, group: nil))
+        }
+        self.composeResults = results
+        let database = self.database
+        Task {
+            let groups = await withCheckedContinuation { (continuation: CheckedContinuation<[MessageConversation], Never>) in
+                Self.readQueue.async { continuation.resume(returning: database.groupChats(matching: q) ?? []) }
+            }
+            guard self.composeQuery == q, !groups.isEmpty else { return }
+            let more = groups.map { ComposeResult(id: "g:\($0.id)", name: self.title(for: $0), detail: "Group", handle: nil, group: $0) }
+            self.composeResults += more.filter { m in !self.composeResults.contains { $0.id == m.id } }
+        }
+    }
+
+    /// Opens the chat with that person (or group). With no chat yet, it opens an empty one that is created by the first message.
+    func openResult(_ result: ComposeResult) {
+        if let group = result.group {
+            self.show(group)
+            return
+        }
+        guard let handle = result.handle else { return }
+        let database = self.database
+        Task {
+            let found = await withCheckedContinuation { (continuation: CheckedContinuation<MessageConversation?, Never>) in
+                Self.readQueue.async {
+                    let chat = database.oneToOneChat(handles: [handle])?.first
+                    continuation.resume(returning: chat.flatMap { database.conversation(id: $0.id) })
+                }
+            }
+            if let found { self.show(found); return }
+            self.selectedChatID = nil
+            self.thread = []
+            self.sendError = nil
+            self.newChat = NewChat(name: result.name == handle ? handle : result.name, handle: handle)
+            self.composing = false
+        }
+    }
+
+    private func show(_ conversation: MessageConversation) {
+        self.newChat = nil
+        self.pinned = conversation
+        if !self.conversations.contains(where: { $0.id == conversation.id }) { self.conversations.insert(conversation, at: 0) }
+        self.composing = false
+        self.composeResults = []
+        self.select(conversation.id)
+    }
+
+    /// The first message to someone: sent through Messages, shown at once, and the real chat is picked up as soon as it exists.
+    private func deliverNew(_ text: String, to draft: NewChat) {
+        self.sendError = nil
+        self.thread.append(ThreadMessage(id: -1_000_000 - Int64(self.thread.count), text: text, date: Date(), isFromMe: true, senderHandle: ""))
+        let database = self.database
+        Task {
+            do {
+                try await self.sendNewHandler(text, draft.handle)
+                for delay in [0.5, 1.0, 2.0, 4.0, 8.0] as [Double] {
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    guard self.newChat == draft else { return }
+                    let found = await withCheckedContinuation { (continuation: CheckedContinuation<MessageConversation?, Never>) in
+                        Self.readQueue.async {
+                            let chat = database.oneToOneChat(handles: [draft.handle])?.first
+                            continuation.resume(returning: chat.flatMap { database.conversation(id: $0.id) })
+                        }
+                    }
+                    if let found { self.show(found); self.refresh(announce: false); return }
+                }
+            } catch {
+                self.sendError = error.localizedDescription
+                self.thread.removeAll { $0.id <= -1_000_000 }
             }
         }
     }

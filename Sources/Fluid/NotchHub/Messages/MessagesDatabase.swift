@@ -33,6 +33,28 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
 
     /// nil when the database couldn't be read (e.g. Messages has it locked for a moment); an empty list means no chats.
     func conversations(limit: Int) -> [MessageConversation]? {
+        self.conversationList(limit: limit, chatID: nil)
+    }
+
+    /// One chat by its id, shaped like a row of the list (for a chat found by search that is not among the latest).
+    func conversation(id: Int64) -> MessageConversation? {
+        self.conversationList(limit: 1, chatID: id)?.first
+    }
+
+    /// Named group chats whose name contains `text` (a name you gave a group, not the people in it), newest first.
+    func groupChats(matching text: String, limit: Int = 5) -> [MessageConversation]? {
+        let pattern = "%" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "%", with: "\\%").replacingOccurrences(of: "_", with: "\\_") + "%"
+        let ids = self.query("SELECT ROWID FROM chat WHERE COALESCE(display_name, '') <> '' AND display_name LIKE ?1 ESCAPE '\\' LIMIT 20", bind: {
+            let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            sqlite3_bind_text($0, 1, pattern, -1, transient)
+        }) { sqlite3_column_int64($0, 0) }
+        guard let ids else { return nil }
+        let found = ids.compactMap { self.conversation(id: $0) }.sorted { $0.lastDate > $1.lastDate }
+        return Array(found.prefix(limit))
+    }
+
+    private func conversationList(limit: Int, chatID: Int64?) -> [MessageConversation]? {
+        let only = chatID.map { "WHERE c.ROWID = \($0)" } ?? ""
         let sql = """
         SELECT c.ROWID, c.guid, COALESCE(c.display_name, ''), COALESCE(c.chat_identifier, ''), COALESCE(c.style, 45),
                m.text, m.attributedBody, m.date, m.is_from_me, COALESCE(m.cache_has_attachments, 0),
@@ -46,6 +68,7 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
             SELECT j.message_id FROM chat_message_join j JOIN message mm ON mm.ROWID = j.message_id
              WHERE j.chat_id = c.ROWID AND mm.item_type = 0 AND mm.associated_message_type = 0
              ORDER BY j.message_date DESC LIMIT 1)
+        \(only)
         ORDER BY m.date DESC
         LIMIT ?
         """

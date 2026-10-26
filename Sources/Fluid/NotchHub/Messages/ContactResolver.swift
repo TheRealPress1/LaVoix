@@ -10,6 +10,9 @@ final class ContactResolver: ObservableObject {
 
     /// Bumps when names finish loading so views refresh.
     @Published private(set) var version = 0
+    /// Every contact with a phone number or email, for finding someone to message. The handle is in the form Messages sends to.
+    struct Entry: Equatable { let name: String; let handle: String }
+    private(set) var entries: [Entry] = []
     private var names: [String: String] = [:]
     private var contactIDs: [String: String] = [:]
     private var photos: [String: NSImage] = [:]
@@ -32,8 +35,44 @@ final class ContactResolver: ObservableObject {
             let loaded = await Task.detached(priority: .utility) { Self.loadAll() }.value
             self.names = loaded.names
             self.contactIDs = loaded.ids
+            self.entries = loaded.entries
             self.loading = false
             self.version += 1
+        }
+    }
+
+    /// Contacts whose name contains every word typed, or whose number contains the digits typed (three or more), best first.
+    func search(_ query: String, limit: Int = 8) -> [Entry] {
+        let words = query.lowercased().split(separator: " ").map(String.init).filter { !$0.isEmpty }
+        let digits = query.filter(\.isNumber)
+        guard !words.isEmpty else { return [] }
+        var seen = Set<String>()
+        var scored: [(Int, Entry)] = []
+        for e in self.entries where seen.insert(e.handle).inserted {
+            let name = e.name.lowercased()
+            if words.allSatisfy({ name.contains($0) }) {
+                scored.append((name.hasPrefix(words[0]) ? 0 : 1, e))
+            } else if digits.count >= 3, e.handle.filter(\.isNumber).contains(digits) {
+                scored.append((2, e))
+            }
+        }
+        return scored.sorted { ($0.0, $0.1.name) < ($1.0, $1.1.name) }.prefix(limit).map(\.1)
+    }
+
+    /// The address Messages sends to for what was typed: a phone number as +country digits (ten digits are taken as US), an email as is.
+    nonisolated static func sendableHandle(_ text: String) -> String? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.contains("@") {
+            let parts = t.split(separator: "@", omittingEmptySubsequences: false)
+            return parts.count == 2 && !parts[0].isEmpty && parts[1].contains(".") && !t.contains(" ") ? t.lowercased() : nil
+        }
+        guard t.allSatisfy({ $0.isNumber || "+-() .".contains($0) }) else { return nil }
+        let digits = t.filter(\.isNumber)
+        switch digits.count {
+        case 10: return "+1" + digits
+        case 11 where digits.hasPrefix("1"): return "+" + digits
+        case 8...15 where t.hasPrefix("+"): return "+" + digits
+        default: return nil
         }
     }
 
@@ -78,13 +117,14 @@ final class ContactResolver: ObservableObject {
         return digits.count > 10 ? String(digits.suffix(10)) : digits
     }
 
-    private nonisolated static func loadAll() -> (names: [String: String], ids: [String: String]) {
+    private nonisolated static func loadAll() -> (names: [String: String], ids: [String: String], entries: [Entry]) {
         let keys: [CNKeyDescriptor] = [
             CNContactGivenNameKey, CNContactFamilyNameKey, CNContactNicknameKey, CNContactOrganizationNameKey,
             CNContactPhoneNumbersKey, CNContactEmailAddressesKey,
         ] as [CNKeyDescriptor]
         var result: [String: String] = [:]
         var ids: [String: String] = [:]
+        var entries: [Entry] = []
         let request = CNContactFetchRequest(keysToFetch: keys)
         try? CNContactStore().enumerateContacts(with: request) { contact, _ in
             var name = [contact.givenName, contact.familyName].filter { !$0.isEmpty }.joined(separator: " ")
@@ -92,14 +132,16 @@ final class ContactResolver: ObservableObject {
             if name.isEmpty { name = contact.organizationName }
             guard !name.isEmpty else { return }
             for phone in contact.phoneNumbers {
+                if let handle = Self.sendableHandle(phone.value.stringValue) { entries.append(Entry(name: name, handle: handle)) }
                 result[Self.key(phone.value.stringValue)] = name
                 ids[Self.key(phone.value.stringValue)] = contact.identifier
             }
             for email in contact.emailAddresses {
+                if let handle = Self.sendableHandle(email.value as String) { entries.append(Entry(name: name, handle: handle)) }
                 result[Self.key(email.value as String)] = name
                 ids[Self.key(email.value as String)] = contact.identifier
             }
         }
-        return (result, ids)
+        return (result, ids, entries)
     }
 }

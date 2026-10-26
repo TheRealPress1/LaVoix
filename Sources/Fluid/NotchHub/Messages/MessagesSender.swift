@@ -27,6 +27,37 @@ enum MessagesSender {
         return "tell application \"Messages\"\n    send (\(body)) to chat id \"\(escaped(chatGUID))\"\nend tell"
     }
 
+    /// A text to someone you have no chat with yet: Messages starts the conversation (iMessage only).
+    static func newScript(handle: String, text: String) -> String {
+        func escaped(_ value: String) -> String {
+            value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        }
+        let body = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .components(separatedBy: "\n")
+            .map { "\"\(escaped($0))\"" }
+            .joined(separator: " & linefeed & ")
+        return "tell application \"Messages\"\n    set theService to 1st service whose service type = iMessage\n    set theBuddy to buddy \"\(escaped(handle))\" of theService\n    send (\(body)) to theBuddy\nend tell"
+    }
+
+    static func sendNew(_ text: String, toHandle handle: String) async throws {
+        let source = self.newScript(handle: handle, text: text)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            self.queue.async {
+                var error: NSDictionary?
+                _ = NSAppleScript(source: source)?.executeAndReturnError(&error)
+                if let error {
+                    let number = error[NSAppleScript.errorNumber] as? Int
+                    continuation.resume(throwing: SendError.failed(number == -1743
+                        ? "Allow LaVoix to control Messages in System Settings > Privacy & Security > Automation."
+                        : "Messages couldn't start that conversation. Check the number or email, and that they use iMessage."))
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
     /// The address that opens a one-to-one conversation in Messages (a phone number keeps its +, an email its @), or nil for a group chat,
     /// which has no such address.
     nonisolated static func conversationURL(handles: [String], isGroup: Bool) -> URL? {

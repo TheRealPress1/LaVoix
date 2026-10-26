@@ -47,11 +47,16 @@ struct MessagesWidgetView: View {
 
     private var loadedLayout: some View {
         HStack(alignment: .top, spacing: 16) {
-            Group {
-                if self.staticLayout {
-                    self.rows
-                } else {
-                    ScrollView(.vertical, showsIndicators: false) { self.rows }
+            VStack(spacing: 4) {
+                if !self.staticLayout { self.newMessageBar }
+                Group {
+                    if self.store.composing {
+                        ComposeList(store: self.store)
+                    } else if self.staticLayout {
+                        self.rows
+                    } else {
+                        ScrollView(.vertical, showsIndicators: false) { self.rows }
+                    }
                 }
             }
             .frame(width: 232)
@@ -60,6 +65,25 @@ struct MessagesWidgetView: View {
                 .frame(maxWidth: .infinity)
         }
         .foregroundStyle(.white)
+    }
+
+    /// The + above the list: write to someone who is not among the latest chats.
+    private var newMessageBar: some View {
+        Button {
+            if self.store.composing { self.store.cancelCompose() } else { self.store.startCompose() }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: self.store.composing ? "xmark" : "plus").font(.system(size: 11, weight: .bold))
+                Text(self.store.composing ? "Cancel" : "New message").font(.system(size: 12, weight: .medium))
+                Spacer()
+            }
+            .foregroundStyle(.white.opacity(0.75))
+            .padding(.horizontal, 10)
+            .frame(height: 24)
+            .background(Capsule().fill(Color.white.opacity(0.1)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     private var rows: some View {
@@ -194,6 +218,9 @@ private struct ThreadView: View {
 
     var body: some View {
         VStack(spacing: 8) {
+            if let draft = self.store.newChat {
+                Text("New message to \(draft.name)").font(.system(size: 11.5, weight: .medium)).foregroundStyle(.white.opacity(0.55)).frame(maxWidth: .infinity, alignment: .leading)
+            }
             if self.staticLayout {
                 VStack(spacing: 5) {
                     ForEach(Array(self.store.thread.enumerated()), id: \.element.id) { index, message in
@@ -320,5 +347,65 @@ private struct Bubble: View {
                 .fixedSize(horizontal: false, vertical: true)
             if !self.message.isFromMe { Spacer(minLength: 40) }
         }
+    }
+}
+
+/// The "New message" search: type a name, number or email; pick a result to open its chat.
+private struct ComposeList: View {
+    @ObservedObject var store: MessagesStore
+    @State private var query = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(spacing: 6) {
+            TextField("", text: self.$query, prompt: Text("To: name, number or email").foregroundStyle(.white.opacity(0.4)))
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5))
+                .foregroundStyle(.white)
+                .tint(.white)
+                .focused(self.$focused)
+                .padding(.horizontal, 10)
+                .frame(height: 26)
+                .background(Capsule().fill(Color.white.opacity(0.1)))
+                .onChange(of: self.query) { _, text in self.store.updateCompose(query: text) }
+                .onSubmit { if let first = self.store.composeResults.first { self.store.openResult(first) } }
+                .onExitCommand { self.focused = false; NotchHubController.shared.endTextEntry(); self.store.cancelCompose() }
+                .onChange(of: self.focused) { _, on in if on { NotchHubController.shared.beginTextEntry() } }
+                .onAppear {
+                    NotchHubController.shared.beginTextEntry()
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 150_000_000)
+                        self.focused = true
+                    }
+                }
+                .onDisappear { NotchHubController.shared.endTextEntry() }
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 2) {
+                    ForEach(self.store.composeResults) { result in
+                        Button { self.store.openResult(result) } label: {
+                            HStack(spacing: 8) {
+                                if let group = result.group {
+                                    NotchGroupAvatar(handles: group.handles, size: 26)
+                                } else {
+                                    NotchAvatar(name: result.name, handle: result.handle, size: 26)
+                                }
+                                VStack(alignment: .leading, spacing: 0) {
+                                    Text(result.name).font(.system(size: 12.5, weight: .medium)).lineLimit(1)
+                                    Text(result.detail).font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if !self.query.isEmpty, self.store.composeResults.isEmpty {
+                        Text("No one found. Type a full number or email to message it.").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)).padding(.top, 6)
+                    }
+                }
+            }
+        }
+        .foregroundStyle(.white)
     }
 }
