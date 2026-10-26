@@ -149,7 +149,7 @@ struct ConnectionsWidgetView: View {
 
     private func row(_ item: ConnectorItem) -> some View {
         HStack(spacing: 10) {
-            ConnectorIconView(id: item.id)
+            ConnectorIconView(id: item.id, title: item.title)
                 .overlay(alignment: .bottomTrailing) {
                     Circle().fill(item.broken ? Color.orange : Color.green).frame(width: 9, height: 9)
                         .overlay(Circle().strokeBorder(Color.black, lineWidth: 1.5))
