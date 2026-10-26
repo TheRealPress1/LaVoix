@@ -128,7 +128,12 @@ struct ConnectionsWidgetView: View {
 
     private func row(_ item: ConnectorItem) -> some View {
         HStack(spacing: 10) {
-            Circle().fill(item.broken ? Color.orange : Color.green.opacity(0.8)).frame(width: 8, height: 8)
+            ConnectorIconView(id: item.id)
+                .overlay(alignment: .bottomTrailing) {
+                    Circle().fill(item.broken ? Color.orange : Color.green).frame(width: 9, height: 9)
+                        .overlay(Circle().strokeBorder(Color.black, lineWidth: 1.5))
+                        .offset(x: 3, y: 3)
+                }
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
                 Text(item.detail).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)).lineLimit(2)

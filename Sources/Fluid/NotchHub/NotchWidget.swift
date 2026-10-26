@@ -68,7 +68,7 @@ enum NotchWidgetRegistry {
                 AnyView(MessagesWidgetView(store: MessagesStore.shared))
             })
         }
-        widgets.append(NotchWidget(id: "connections", title: "Connections", systemImage: "antenna.radiowaves.left.and.right") {
+        widgets.append(NotchWidget(id: "connections", title: "Connections", systemImage: "gearshape.fill") {
             AnyView(ConnectionsWidgetView(store: ConnectionsStore.shared, messages: MessagesStore.shared))
         })
         return widgets
