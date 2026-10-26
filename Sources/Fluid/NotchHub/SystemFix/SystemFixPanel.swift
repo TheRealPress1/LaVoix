@@ -15,21 +15,40 @@ struct SystemFixPanel: View {
             .onDisappear { self.hub.setExtraHeight(0) }
     }
 
-    /// How tall the proposal is (worked out from what it holds: measuring it kept reading zero). Row, header, footer and
-    /// spacing sizes are the ones used below; the summary wraps at about 80 characters a line, three lines at most.
-    private var neededHeight: CGFloat {
-        guard case let .proposal(_, plan) = self.agent.phase, !plan.actions.isEmpty else { return 0 }
-        let lines = min(3, max(1, (plan.summary.count + 79) / 80))
-        return 94 + 15 * CGFloat(lines) + 37 * CGFloat(plan.actions.count) + 12
+    /// How tall the panel's content is for the current step, or nil when nothing is shown (the notch keeps its normal height). Worked out
+    /// from what it holds, because measuring it kept reading zero. Row, header, footer and spacing sizes are the ones used below; a
+    /// summary or result line wraps at about 80 characters a line.
+    private var neededHeight: CGFloat? {
+        let header: CGFloat = 16, gap: CGFloat = 10, bottom: CGFloat = 16
+        func lines(_ text: String, max cap: Int) -> CGFloat { CGFloat(min(cap, max(1, (text.count + 79) / 80))) }
+        switch self.agent.phase {
+        case .idle:
+            return nil
+        case .investigating:
+            return header + gap + 32 + bottom
+        case let .proposal(_, plan):
+            guard !plan.actions.isEmpty else { return header + gap + 15 * lines(plan.summary, max: 3) + bottom }
+            return 94 + 15 * lines(plan.summary, max: 3) + 37 * CGFloat(plan.actions.count) + 12
+        case .applying:
+            return header + gap + 20 + bottom
+        case let .finished(_, report):
+            var text: CGFloat = 0, parts: CGFloat = 0
+            if !report.quitAsked.isEmpty { text += 15 * lines("Asked to quit: " + report.quitAsked.joined(separator: ", "), max: 2); parts += 1 }
+            if !report.trashed.isEmpty { text += 15 * 2; parts += 1 } // the trash sentence is the long one
+            if !report.skipped.isEmpty { text += 15 * lines("Skipped (gone or not allowed): " + report.skipped.joined(separator: ", "), max: 2); parts += 1 }
+            return header + gap + text + max(0, parts - 1) * 3 + gap + 18 + bottom
+        case let .failed(_, message):
+            return header + gap + 15 * lines(message, max: 3) + bottom
+        }
     }
 
-    /// A long list makes the notch taller instead of scrolling.
+    /// The notch grows for a long list and shrinks for a short message, so there is never a blank gap above the tab icons.
     private func growNotch() {
-        guard self.active else { self.hub.setExtraHeight(0); return }
+        guard self.active, let needed = self.neededHeight else { self.hub.setExtraHeight(0); return }
         let base = self.hub.tabsExpanded ? NotchGeometry.openSize.height : NotchGeometry.openSizeCollapsed.height
         let room = base - max(self.hub.closedSize.height, 28) - 14 // the tab's own top and bottom padding
-        let extra = self.neededHeight - room
-        SystemFixDebugLog.write("needed=\(Int(self.neededHeight)) room=\(Int(room)) extra=\(Int(extra)) active=\(self.active)")
+        let extra = needed - room
+        SystemFixDebugLog.write("needed=\(Int(needed)) room=\(Int(room)) extra=\(Int(extra)) active=\(self.active)")
         self.hub.setExtraHeight(extra)
     }
 

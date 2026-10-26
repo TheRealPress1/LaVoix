@@ -23,7 +23,7 @@ final class NotchHubModel: ObservableObject {
     }
 
     func setExtraHeight(_ height: CGFloat) {
-        let clamped = min(max(height.rounded(), 0), 340)
+        let clamped = min(max(height.rounded(), -(NotchGeometry.maxShrink)), 340)
         guard clamped != self.extraHeight else { return }
         NotchGeometry.extraHeight = clamped
         self.onExtraHeightChange?()

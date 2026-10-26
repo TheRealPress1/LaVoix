@@ -13,6 +13,8 @@ enum NotchGeometry {
     /// Extra height the open notch has been asked for (set through `NotchHubModel.setExtraHeight`): a tab with a long list
     /// makes the notch taller instead of scrolling.
     nonisolated(unsafe) static var extraHeight: CGFloat = 0
+    /// The most a short tab may shrink the open notch by.
+    static let maxShrink: CGFloat = 130
     /// Extra transparent room around the open notch for the drop shadow.
     static let shadowPadding: CGFloat = 24
 
