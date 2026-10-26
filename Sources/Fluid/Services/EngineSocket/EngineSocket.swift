@@ -1561,6 +1561,7 @@ nonisolated enum EngineSocketAutotest {
                       !NotchNowPlayingAmbientSettings.shouldShow(enabled: true, playing: false, hubOpen: false, meetingLive: false)
                         && !NotchNowPlayingAmbientSettings.shouldShow(enabled: false, playing: true, hubOpen: false, meetingLive: false)
                         && !NotchNowPlayingAmbientSettings.shouldShow(enabled: true, playing: true, hubOpen: true, meetingLive: false)
+                      && !NotchNowPlayingAmbientSettings.shouldShow(enabled: true, playing: true, hubOpen: false, meetingLive: false, bannerShowing: true)
                         && !NotchNowPlayingAmbientSettings.shouldShow(enabled: true, playing: true, hubOpen: false, meetingLive: true))
             }
             // quick link logos

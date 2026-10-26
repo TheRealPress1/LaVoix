@@ -10,9 +10,10 @@ enum NotchNowPlayingAmbientSettings {
         set { UserDefaults.standard.set(newValue, forKey: self.key) }
     }
 
-    /// Whether the strip should be on screen: something is playing, the notch is closed, and nothing else is using the notch.
-    nonisolated static func shouldShow(enabled: Bool, playing: Bool, hubOpen: Bool, meetingLive: Bool) -> Bool {
-        enabled && playing && !hubOpen && !meetingLive
+    /// Whether the strip should be on screen: something is playing, the notch is closed, and nothing else is using the notch. A notification card
+    /// (a message, a connection alert) is temporary and more urgent than the music, so the strip steps aside while one is showing and comes back after.
+    nonisolated static func shouldShow(enabled: Bool, playing: Bool, hubOpen: Bool, meetingLive: Bool, bannerShowing: Bool = false) -> Bool {
+        enabled && playing && !hubOpen && !meetingLive && !bannerShowing
     }
 }
 
@@ -47,6 +48,7 @@ final class NotchNowPlayingStrip {
         NowPlayingStore.shared.start()
         NowPlayingStore.shared.$track.receive(on: RunLoop.main).sink { [weak self] _ in self?.refresh() }.store(in: &self.bag)
         NotchHubController.shared.model.$isOpen.receive(on: RunLoop.main).sink { [weak self] _ in self?.refresh() }.store(in: &self.bag)
+        NotchHubController.shared.model.$banner.receive(on: RunLoop.main).sink { [weak self] _ in self?.refresh() }.store(in: &self.bag)
         Timer.publish(every: 5, on: .main, in: .common).autoconnect().sink { [weak self] _ in self?.refresh() }.store(in: &self.bag)
         Timer.publish(every: 1.5, on: .main, in: .common).autoconnect().sink { [weak self] _ in self?.checkAudibility() }.store(in: &self.bag)
     }
@@ -85,7 +87,8 @@ final class NotchNowPlayingStrip {
         // The notch is also used for a live meeting and for the dictation overlay; the strip steps aside for both.
         let meetingLive = ((NotchMeetingCardController.shared.engineLiveState()["active"] as? Bool) ?? false) || AppServices.shared.asr.isRunning
         let show = NotchNowPlayingAmbientSettings.shouldShow(enabled: NotchNowPlayingAmbientSettings.isEnabled, playing: self.isPlayingAudibly,
-                                                             hubOpen: NotchHubController.shared.model.isOpen, meetingLive: meetingLive)
+                                                             hubOpen: NotchHubController.shared.model.isOpen, meetingLive: meetingLive,
+                                                             bannerShowing: NotchHubController.shared.model.banner != nil)
         guard show, let track, let screen = NotchGeometry.targetScreen() else {
             self.window?.orderOut(nil)
             return
