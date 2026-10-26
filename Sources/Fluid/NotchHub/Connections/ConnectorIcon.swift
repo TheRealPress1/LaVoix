@@ -28,6 +28,17 @@ struct ConnectorIconView: View {
                         .fill(Color(red: 0.92, green: 0.26, blue: 0.21))
                         .frame(width: self.size * 0.62, height: self.size * 0.62)
                 }
+            } else if self.id.hasPrefix("plaid:") {
+                ZStack {
+                    RoundedRectangle(cornerRadius: self.size * 0.24, style: .continuous)
+                        .fill(LinearGradient(colors: [Color(red: 0.2, green: 0.55, blue: 0.95), Color(red: 0.1, green: 0.35, blue: 0.8)], startPoint: .top, endPoint: .bottom))
+                    Image(systemName: "building.columns.fill").font(.system(size: self.size * 0.48)).foregroundStyle(.white)
+                }
+            } else if self.id.hasPrefix("perm:") {
+                ZStack {
+                    RoundedRectangle(cornerRadius: self.size * 0.24, style: .continuous).fill(Color.gray.opacity(0.5))
+                    Image(systemName: "lock.shield.fill").font(.system(size: self.size * 0.5)).foregroundStyle(.white)
+                }
             } else if self.id == "messages" {
                 ZStack {
                     RoundedRectangle(cornerRadius: self.size * 0.24, style: .continuous)
