@@ -73,6 +73,8 @@ import Foundation
 ///   {"op":"photos.status"} / {"op":"photos.request"}        -> {"ok":true,"authorization":"authorized|limited|denied|restricted|not_determined"}   (request shows macOS's Photos prompt once)
 ///   {"op":"reminders.status"} / {"op":"reminders.request"}   -> {"ok":true,"authorization":"authorized|write_only|denied|restricted|not_determined"}   (request shows macOS's Reminders prompt once)
 ///   {"op":"reminders.today"}                                -> {"ok":true,"items":[{id,title,list,due?,due_has_time,priority,completed}]}   (due today or overdue, then completed today)
+///   {"op":"messages.thread","handles":["+1555…","a@b.co"],"limit":40}   -> {"ok":true,"chat_guid":...,"items":[{id,text,at,from_me}]}   (the one-to-one chat with that person, oldest first)
+///   {"op":"messages.send","handles":[...],"text":...,"confirm":true}      -> {"ok":true}   (sends into that existing one-to-one chat; refused without confirm:true)
 ///   {"op":"reminders.complete","id":...,"completed":true}   -> {"ok":true}   (ticks one reminder off or back on; the only change this ever makes)
 ///   {"op":"photos.summary"}                                 -> {"ok":true,"total","located","located_days","first_day"?,"last_day"?,"by_year":{...}}   (counts only: dates and locations are read, never images)
 ///   {"op":"photos.locations","since"?}                      -> {"ok":true,"clusters":[{t0,t1,lat,lon,n}],"scanned","used","screenshots","shared"}   (camera photos only, grouped by UTC day and ~5 km cell; no single photo's position is returned)
@@ -127,6 +129,7 @@ nonisolated enum EngineSocket {
         var bump: (any EngineBumpProviding)?
         var photos: (any EnginePhotosProviding)?
         var reminders: (any EngineRemindersProviding)?
+        var messages: (any EngineMessagesProviding)?
     }
 
     private static let lock = NSLock()
@@ -164,7 +167,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel(), providers: LiveEngineProviders(), bookshelf: LiveEngineBookshelf(), bump: LiveEngineBump(openURL: { url in DispatchQueue.main.async { NSWorkspace.shared.open(url) } }), photos: LiveEnginePhotos(), reminders: LiveEngineReminders())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel(), providers: LiveEngineProviders(), bookshelf: LiveEngineBookshelf(), bump: LiveEngineBump(openURL: { url in DispatchQueue.main.async { NSWorkspace.shared.open(url) } }), photos: LiveEnginePhotos(), reminders: LiveEngineReminders(), messages: LiveEngineMessages())
     }
 
     enum EngineError: LocalizedError {
@@ -480,6 +483,23 @@ nonisolated enum EngineSocket {
                     try await reminders.setCompleted(id: id, completed: (object["completed"] as? Bool) ?? true)
                     _ = emit(["ok": true])
                 default: var r = try await reminders.today(); r["ok"] = true; _ = emit(r)
+                }
+            } catch { fail(message(error)) }
+        case "messages.thread", "messages.send":
+            guard let messages = services.messages else { return fail("messages are not available") }
+            let handles = MessagesRules.handles(object["handles"])
+            guard !handles.isEmpty else { return fail("handles are required") }
+            do {
+                if op == "messages.thread" {
+                    var r = try await messages.thread(handles: handles, limit: (object["limit"] as? NSNumber)?.intValue ?? 40)
+                    r["ok"] = true
+                    _ = emit(r)
+                } else {
+                    // The only thing here that sends a message: it must say so, in so many words.
+                    guard (object["confirm"] as? Bool) == true else { return fail("sending needs confirm: true") }
+                    guard let text = object["text"] as? String else { return fail("text is required") }
+                    try await messages.send(handles: handles, text: text)
+                    _ = emit(["ok": true])
                 }
             } catch { fail(message(error)) }
         case "photos.status", "photos.request", "photos.summary", "photos.locations":
@@ -1025,6 +1045,21 @@ private final class FakeReminders: EngineRemindersProviding, @unchecked Sendable
     }
 }
 
+private final class FakeMessages: EngineMessagesProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var sent: [String] = []
+    func thread(handles: [String], limit: Int) async throws -> [String: Any] {
+        guard handles.contains("+15550100") else { throw EngineMessagesError.noChat }
+        return ["chat_guid": "iMessage;-;+15550100", "items": [["id": 1, "text": "hi", "at": "2026-10-25T12:00:00Z", "from_me": false] as [String: Any]]]
+    }
+    func send(handles: [String], text: String) async throws {
+        guard let body = MessagesRules.text(text) else { throw EngineMessagesError.badText }
+        guard handles.contains("+15550100") else { throw EngineMessagesError.noChat }
+        self.lock.lock(); self.sent.append(body); self.lock.unlock()
+    }
+    var sentCount: Int { self.lock.lock(); defer { self.lock.unlock() }; return self.sent.count }
+}
+
 private final class FakeProviders: EngineProvidersProviding, @unchecked Sendable {
     private let lock = NSLock()
     private var keys: [String: String] = [:]
@@ -1136,6 +1171,7 @@ nonisolated enum EngineSocketAutotest {
             let fakeEdits = FakeMeetingEdits()
             let fakeModel = FakeModel()
             let bookshelfSession = BookshelfAutotestSession()
+            let fakeMessages = FakeMessages()
             let bumpStub = BumpAutotestServer()
             let bookshelfCapture = await MainActor.run { bookshelfSession.capture }
             await MainActor.run { bookshelfCapture.start(interval: 3600) }
@@ -1174,7 +1210,8 @@ nonisolated enum EngineSocketAutotest {
                 bookshelf: bookshelfSession.client(capture: bookshelfCapture),
                 bump: bumpStub.client,
                 photos: FakePhotos(),
-                reminders: FakeReminders()
+                reminders: FakeReminders(),
+                messages: fakeMessages
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -1428,6 +1465,8 @@ nonisolated enum EngineSocketAutotest {
                 check("reminders.today refuses until the permission is granted", ask(#"{"op":"reminders.status"}"#)?["authorization"] as? String == "not_determined" && ask(#"{"op":"reminders.today"}"#)?["ok"] as? Bool == false)
                 check("reminders.request grants and reminders.today then lists the items", ask(#"{"op":"reminders.request"}"#)?["authorization"] as? String == "authorized" && ((ask(#"{"op":"reminders.today"}"#)?["items"] as? [[String: Any]])?.first?["title"] as? String) == "Pay rent")
                 check("reminders.complete ticks one off and back, and refuses an unknown id", ask(#"{"op":"reminders.complete","id":"r1","completed":true}"#)?["ok"] as? Bool == true && (((ask(#"{"op":"reminders.today"}"#)?["items"] as? [[String: Any]])?.first?["completed"]) as? Bool) == true && ask(#"{"op":"reminders.complete","id":"r1","completed":false}"#)?["ok"] as? Bool == true && (((ask(#"{"op":"reminders.today"}"#)?["items"] as? [[String: Any]])?.first?["completed"]) as? Bool) == false && ask(#"{"op":"reminders.complete","id":"nope"}"#)?["ok"] as? Bool == false && ask(#"{"op":"reminders.complete"}"#)?["ok"] as? Bool == false)
+                check("messages.thread reads the one-to-one chat and refuses an unknown person", (ask(#"{"op":"messages.thread","handles":["+15550100"],"limit":5}"#)?["items"] as? [[String: Any]])?.first?["text"] as? String == "hi" && ask(#"{"op":"messages.thread","handles":["+15559999"]}"#)?["ok"] as? Bool == false && ask(#"{"op":"messages.thread"}"#)?["ok"] as? Bool == false)
+                check("messages.send refuses without confirm, with empty text, or to someone with no chat; sends once when confirmed", ask(#"{"op":"messages.send","handles":["+15550100"],"text":"hello"}"#)?["ok"] as? Bool == false && fakeMessages.sentCount == 0 && ask(#"{"op":"messages.send","handles":["+15550100"],"text":"   ","confirm":true}"#)?["ok"] as? Bool == false && ask(#"{"op":"messages.send","handles":["+15559999"],"text":"hello","confirm":true}"#)?["ok"] as? Bool == false && fakeMessages.sentCount == 0 && ask(#"{"op":"messages.send","handles":["+15550100"],"text":"hello","confirm":true}"#)?["ok"] as? Bool == true && fakeMessages.sentCount == 1)
                 check("photos.status reports the permission, summary refuses until it is granted and then returns counts only", ask(#"{"op":"photos.status"}"#)?["authorization"] as? String == "not_determined" && ask(#"{"op":"photos.summary"}"#)?["ok"] as? Bool == false)
                 check("photos.request grants and summary then carries counts and no file names", ask(#"{"op":"photos.request"}"#)?["authorization"] as? String == "authorized" && (ask(#"{"op":"photos.summary"}"#)?["located"] as? Int) == 2 && !"\(ask(#"{"op":"photos.summary"}"#) ?? [:])".contains("IMG_"))
                 let photoClusters = ask(#"{"op":"photos.locations"}"#)?["clusters"] as? [[String: Any]]

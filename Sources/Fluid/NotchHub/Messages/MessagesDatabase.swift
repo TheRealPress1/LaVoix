@@ -68,6 +68,28 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
         }
     }
 
+    /// The one-to-one chat (never a group) with any of these handles: the one with the newest message when there are several (an iMessage and an
+    /// SMS chat with the same person). `[]` when there is none, nil when the database couldn't be read.
+    func oneToOneChat(handles: [String]) -> [(id: Int64, guid: String)]? {
+        let wanted = handles.filter { !$0.isEmpty }
+        guard !wanted.isEmpty else { return [] }
+        let marks = wanted.map { _ in "?" }.joined(separator: ",")
+        let sql = """
+        SELECT c.ROWID, c.guid
+        FROM chat c
+        JOIN chat_handle_join cj ON cj.chat_id = c.ROWID
+        JOIN handle h ON h.ROWID = cj.handle_id
+        WHERE COALESCE(c.style, 45) = 45 AND h.id IN (\(marks))
+          AND (SELECT COUNT(*) FROM chat_handle_join x WHERE x.chat_id = c.ROWID) = 1
+        GROUP BY c.ROWID
+        ORDER BY (SELECT MAX(m.date) FROM chat_message_join j JOIN message m ON m.ROWID = j.message_id WHERE j.chat_id = c.ROWID) DESC
+        """
+        return self.query(sql, bind: { stmt in
+            let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            for (i, h) in wanted.enumerated() { sqlite3_bind_text(stmt, Int32(i + 1), h, -1, transient) }
+        }) { row in (id: sqlite3_column_int64(row, 0), guid: Self.string(row, 1)) }
+    }
+
     /// nil when the database couldn't be read right now.
     func messages(chatID: Int64, limit: Int) -> [ThreadMessage]? {
         let sql = """
