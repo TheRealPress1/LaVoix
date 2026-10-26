@@ -476,8 +476,20 @@ nonisolated enum EngineSocket {
             // A connection that broke (a mailbox signed out, Bump disconnected), told to the user from the notch. Shows a card only.
             guard let title = object["title"] as? String, !title.isEmpty, let text = object["text"] as? String else { return fail("title and text are required") }
             let symbol = (object["symbol"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "exclamationmark.triangle.fill"
-            await MainActor.run { NotchHubController.shared.showAlert(title: String(title.prefix(80)), text: String(text.prefix(300)), symbol: symbol) }
+            let label = (object["action_label"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(30)) }
+            let actionID = (object["action_id"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(160)) }
+            await MainActor.run { NotchHubController.shared.showAlert(title: String(title.prefix(80)), text: String(text.prefix(300)), symbol: symbol, actionLabel: label, actionID: actionID) }
             _ = emit(["ok": true])
+        case "notch.connections_set":
+            // The state of every connector, for the Connections tab (and its badge).
+            let items = ConnectorItem.parse(object["items"])
+            await MainActor.run { ConnectionsStore.shared.set(items) }
+            _ = emit(["ok": true])
+        case "notch.action_wait":
+            // myOS waits here for a button pressed in the notch; answers with it, or with null when nothing was pressed in time.
+            let seconds = min(max((object["timeout"] as? NSNumber)?.doubleValue ?? 25, 1), 30)
+            let action = await ConnectionActions.shared.next(timeout: seconds)
+            _ = emit(["ok": true, "action": action as Any? ?? NSNull()])
         case "reminders.status", "reminders.request", "reminders.today", "reminders.complete":
             guard let reminders = services.reminders else { return fail("reminders are not available") }
             do {

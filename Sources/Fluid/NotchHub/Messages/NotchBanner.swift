@@ -20,6 +20,9 @@ struct NotchBannerContent: Equatable, Identifiable {
     /// What clicking an alert card does.
     var alertAction: AlertAction = .fullDiskAccess
     enum AlertAction: Equatable { case fullDiskAccess, openMyOS }
+    /// A button on an alert card (and what pressing the card does): myOS runs the action, e.g. signing a mailbox in again.
+    var actionLabel: String? = nil
+    var actionID: String? = nil
 
     /// Width left for the message text inside the card: card width minus side padding, avatar and spacing.
     static let textWidth: CGFloat = NotchGeometry.bannerWidth - 44 - 40 - 12
@@ -45,7 +48,7 @@ struct NotchBannerContent: Equatable, Identifiable {
     /// Everything in the card that sits under the notch band, with the reply row only when expanded.
     func contentHeight(expanded: Bool) -> CGFloat {
         let header: CGFloat = 8 + 19 + (self.subtitle == nil ? 0 : 16) + 2
-        return header + self.textHeight + 18 + (expanded && self.alertSymbol == nil ? 12 + 34 : 0)
+        return header + self.textHeight + 18 + (expanded && self.alertSymbol == nil ? 12 + 34 : 0) + (self.actionLabel != nil ? 12 + 30 : 0)
     }
 }
 
@@ -105,6 +108,21 @@ struct NotchBannerView: View {
             }
             .contentShape(Rectangle())
             .onTapGesture { NotchHubController.shared.openConversationFromBanner() }
+
+            if let label = self.content.actionLabel, let id = self.content.actionID {
+                Button {
+                    NotchHubController.shared.dismissBanner()
+                    ConnectionsWidgetView.press(id)
+                } label: {
+                    Text(label)
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 30)
+                        .background(Capsule().fill(Color.orange.opacity(0.95)))
+                        .foregroundStyle(.black)
+                }
+                .buttonStyle(.plain)
+            }
 
             if self.expanded, self.content.alertSymbol == nil { self.replyRow.transition(.opacity.combined(with: .move(edge: .top))) }
         }

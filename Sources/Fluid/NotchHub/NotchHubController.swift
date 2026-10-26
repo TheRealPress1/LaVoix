@@ -294,12 +294,12 @@ final class NotchHubController {
         self.window?.ignoresMouseEvents = false
         self.bannerHovered = false
         self.model.showBanner(content)
-        self.scheduleBannerDismiss(after: content.alertSymbol == nil ? 6 : 12)
+        self.scheduleBannerDismiss(after: content.alertSymbol == nil ? 6 : (content.actionID == nil ? 12 : 30))
     }
 
     /// A card about a connection that broke (from the engine socket's `notch.alert`, sent by myOS). Clicking it opens myOS.
-    func showAlert(title: String, text: String, symbol: String) {
-        self.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: title, subtitle: nil, text: text, date: Date(), alertSymbol: symbol, alertAction: .openMyOS))
+    func showAlert(title: String, text: String, symbol: String, actionLabel: String? = nil, actionID: String? = nil) {
+        self.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: title, subtitle: nil, text: text, date: Date(), alertSymbol: symbol, alertAction: .openMyOS, actionLabel: actionLabel, actionID: actionID))
     }
 
     func dismissBanner() {
@@ -318,6 +318,11 @@ final class NotchHubController {
         self.bannerHovered = false
         self.endTextEntry()
         self.model.hideBanner()
+        if let actionID = banner.actionID {
+            // Pressing the card itself does what its button does.
+            ConnectionsWidgetView.press(actionID)
+            return
+        }
         if banner.alertSymbol != nil {
             // A connection alert: take the user to where it is fixed.
             switch banner.alertAction {
