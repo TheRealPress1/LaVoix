@@ -55,6 +55,17 @@ struct NowPlayingWidgetView: View {
         return track.title != title && !track.isPlaying
     }
 
+    /// Whether the card on the left is the song Bookshelf would grade. Grade and Notes belong to Bookshelf's song (read from Spotify or Apple
+    /// Music), so they show only beside that song: not beside a browser video or anything else macOS happens to name as playing.
+    private var gradesShownCard: Bool {
+        guard self.bookshelf.now.canRate, let title = self.bookshelf.now.title else { return false }
+        if self.showsBookshelfCard { return true }
+        guard let track = self.store.track else { return true }
+        if NowPlayingSource.isBrowser(track.bundleID) { return false }
+        func plain(_ s: String) -> String { s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        return plain(track.title) == plain(title)
+    }
+
     private var bookshelfCard: some View {
         let n = self.bookshelf.now
         return VStack(alignment: .leading, spacing: 10) {
@@ -212,7 +223,7 @@ struct NowPlayingWidgetView: View {
     /// Grade and Notes while Bookshelf has a song to grade (the default), with a switch to the history; just the history otherwise.
     @ViewBuilder
     private var rightSide: some View {
-        if self.bookshelf.now.canRate, !self.staticLayout {
+        if self.gradesShownCard, !self.staticLayout {
             VStack(alignment: .leading, spacing: 8) {
                 self.tabSwitch
                 if self.rightTab == .grade { BookshelfGradePanel(capture: self.bookshelf) } else { self.historyBody }
