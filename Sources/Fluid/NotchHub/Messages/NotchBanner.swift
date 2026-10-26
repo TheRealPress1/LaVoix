@@ -17,6 +17,9 @@ struct NotchBannerContent: Equatable, Identifiable {
     let date: Date
     /// Set for a connection alert (not a message): the card shows this symbol instead of an avatar and has no reply box.
     var alertSymbol: String? = nil
+    /// What clicking an alert card does.
+    var alertAction: AlertAction = .fullDiskAccess
+    enum AlertAction: Equatable { case fullDiskAccess, openMyOS }
 
     /// Width left for the message text inside the card: card width minus side padding, avatar and spacing.
     static let textWidth: CGFloat = NotchGeometry.bannerWidth - 44 - 40 - 12

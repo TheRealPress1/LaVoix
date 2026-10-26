@@ -297,6 +297,11 @@ final class NotchHubController {
         self.scheduleBannerDismiss(after: content.alertSymbol == nil ? 6 : 12)
     }
 
+    /// A card about a connection that broke (from the engine socket's `notch.alert`, sent by myOS). Clicking it opens myOS.
+    func showAlert(title: String, text: String, symbol: String) {
+        self.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: title, subtitle: nil, text: text, date: Date(), alertSymbol: symbol, alertAction: .openMyOS))
+    }
+
     func dismissBanner() {
         self.bannerTask?.cancel()
         self.bannerHovered = false
@@ -315,7 +320,12 @@ final class NotchHubController {
         self.model.hideBanner()
         if banner.alertSymbol != nil {
             // A connection alert: take the user to where it is fixed.
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
+            switch banner.alertAction {
+            case .fullDiskAccess:
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
+            case .openMyOS:
+                NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/myOS.app"))
+            }
             return
         }
         self.model.selectedWidgetID = "messages"

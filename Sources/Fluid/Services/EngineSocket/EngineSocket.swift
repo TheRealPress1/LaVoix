@@ -472,6 +472,12 @@ nonisolated enum EngineSocket {
                     _ = emit(["ok": true, "result": try await bump.callTool(name: name, arguments: object["arguments"] as? [String: Any] ?? [:])])
                 }
             } catch { fail(message(error)) }
+        case "notch.alert":
+            // A connection that broke (a mailbox signed out, Bump disconnected), told to the user from the notch. Shows a card only.
+            guard let title = object["title"] as? String, !title.isEmpty, let text = object["text"] as? String else { return fail("title and text are required") }
+            let symbol = (object["symbol"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "exclamationmark.triangle.fill"
+            await MainActor.run { NotchHubController.shared.showAlert(title: String(title.prefix(80)), text: String(text.prefix(300)), symbol: symbol) }
+            _ = emit(["ok": true])
         case "reminders.status", "reminders.request", "reminders.today", "reminders.complete":
             guard let reminders = services.reminders else { return fail("reminders are not available") }
             do {
