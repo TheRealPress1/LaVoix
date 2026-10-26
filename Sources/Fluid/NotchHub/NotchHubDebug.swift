@@ -963,6 +963,62 @@ enum NotchHubDebug {
         }
     }
 
+    /// `LAVOIX_NOTCH_TOGGLE_TEST=1` opens the notch on a chosen tab (the real widgets) and clicks along the title band with synthetic mouse clicks until the
+    /// tab icons unfold, to see whether the title's arrow still responds. Prints where it did.
+    @MainActor static func toggleTestIfRequested() {
+        guard ProcessInfo.processInfo.environment["LAVOIX_NOTCH_TOGGLE_TEST"] == "1" else { return }
+        let tab = ProcessInfo.processInfo.environment["LAVOIX_NOTCH_TOGGLE_TAB"] ?? "nowplaying"
+        Task { @MainActor in
+            func out(_ text: String) { FileHandle.standardOutput.write(Data((text + "\n").utf8)) }
+            let hub = NotchHubController.shared
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            hub.debugIgnorePointer(true)
+            hub.start()
+            if hub.model.widgets.contains(where: { $0.id == tab }) { hub.model.selectedWidgetID = tab }
+            hub.debugSetOpen(true)
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let window = hub.debugWindow, let content = window.contentView else { out("TOGGLE TEST: no window"); exit(1) }
+            out("tab=\(hub.model.selectedWidgetID) widgets=\(hub.model.widgets.map(\.id)) expanded=\(hub.model.tabsExpanded) key=\(window.isKeyWindow) editing=\(hub.isEditingText)")
+            let left = (content.bounds.width - NotchGeometry.openSize.width) / 2 + 38
+            let y = content.bounds.height - 17
+            var hits: [Int] = []
+            for dx in stride(from: 0, through: 150, by: 6) {
+                let before = hub.model.tabsExpanded
+                let point = NSPoint(x: left + CGFloat(dx), y: y)
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    if let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                      windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                        NSApp.postEvent(event, atStart: false)
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                if hub.model.tabsExpanded != before {
+                    hits.append(dx)
+                    out("toggled by a click \(dx) pt into the title band; expanded=\(hub.model.tabsExpanded) key=\(window.isKeyWindow) editing=\(hub.isEditingText)")
+                    break
+                }
+            }
+            // Then the same click again, now that the notch is the key window with a text field editing, as a second real click would be.
+            if let dx = hits.first {
+                for round in 1...3 {
+                    let before = hub.model.tabsExpanded
+                    let point = NSPoint(x: left + CGFloat(dx), y: y)
+                    for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                        if let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                          windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                            NSApp.postEvent(event, atStart: false)
+                        }
+                    }
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    out("repeat click \(round): expanded \(before) -> \(hub.model.tabsExpanded) key=\(window.isKeyWindow) editing=\(hub.isEditingText) responder=\(window.firstResponder.map { String(describing: type(of: $0)) } ?? "none")")
+                }
+            }
+            out(hits.isEmpty ? "TOGGLE TEST: FAIL (no click along the title band unfolded the tabs; hit view at the first point: \(content.hitTest(NSPoint(x: left + 20, y: y)).map { String(describing: type(of: $0)) } ?? "none"))" : "TOGGLE TEST: PASS")
+            hub.stop()
+            exit(hits.isEmpty ? 1 : 0)
+        }
+    }
+
     /// `LAVOIX_NOTCH_TYPING_TEST=1` opens the notch on Messages (sample data), clicks the reply field with a synthetic
     /// mouse click, and reports whether the notch became the key window with a text editor focused, then types into it.
     @MainActor static func typingTestIfRequested() {

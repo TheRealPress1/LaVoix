@@ -97,6 +97,9 @@ final class NotchHubController {
         // Clicks delivered to this app while the notch is open: says which window and view took them.
         self.localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
             self?.noteClickInsideApp(event)
+            // The title's arrow is handled here, not left to the SwiftUI button: a click that also made the notch the key window (and
+            // moved the focus into a text field) was often used up by that, so it took a second click to unfold the tab icons.
+            if self?.toggleTabsIfTitleClicked(event) == true { return nil }
             return event
         }
         self.startMessagesIfEnabled()
@@ -525,6 +528,24 @@ final class NotchHubController {
             self.releaseTask?.cancel()
             self.window?.ignoresMouseEvents = false
         }
+    }
+
+    /// Where the title and its arrow sit in the open notch (the band behind the camera, left side), in the window's own top-left coordinates.
+    private func titleBandRect(contentWidth: CGFloat) -> CGRect {
+        let left = (contentWidth - NotchGeometry.openSize.width) / 2 + 38
+        let width = (NotchGeometry.openSize.width - self.model.closedSize.width) / 2 - 46
+        return CGRect(x: left, y: 0, width: max(60, width), height: max(self.model.closedSize.height, 28))
+    }
+
+    /// A click on the title's arrow folds or unfolds the tab icons. Returns true when it was one (and has been handled).
+    private func toggleTabsIfTitleClicked(_ event: NSEvent) -> Bool {
+        guard self.model.isOpen, event.window === self.window, let content = self.window?.contentView else { return false }
+        let point = event.locationInWindow
+        let fromTop = CGPoint(x: point.x, y: content.bounds.height - point.y)
+        guard self.titleBandRect(contentWidth: content.bounds.width).contains(fromTop) else { return false }
+        self.model.tabsExpanded.toggle()
+        DebugLogger.shared.info("Tabs \(self.model.tabsExpanded ? "unfolded" : "folded") by a click on the title", source: "NotchHub")
+        return true
     }
 
     private func noteClickInsideApp(_ event: NSEvent) {

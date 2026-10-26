@@ -26,6 +26,7 @@ struct FluidApp: App {
         NotchHubDebug.autotestIfRequested()
         NotchHubDebug.nowPlayingProbeIfRequested()
         NotchHubDebug.meetingCardAutotestIfRequested()
+        NotchHubDebug.toggleTestIfRequested()
         NotchHubDebug.autoNotesAutotestIfRequested()
         NotchHubDebug.contactsExportAutotestIfRequested()
         NotchHubDebug.messagesExportAutotestIfRequested()
