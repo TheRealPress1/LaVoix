@@ -74,10 +74,7 @@ enum MessagesSender {
     static func showInMessages(handles: [String], isGroup: Bool) -> Bool {
         guard let url = self.conversationURL(handles: handles, isGroup: isGroup) else { return false }
         let messagesID = "com.apple.MobileSMS"
-        // Typing in the notch makes this app the front one, so "the app you were in" is often this app itself; handing the front back to it
-        // changes nothing and leaves Messages on screen. In that case Messages is hidden instead, and macOS brings back what was behind it.
         let previous = NSWorkspace.shared.frontmostApplication
-        let previousIsOther = previous.map { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier } ?? false
         let wasInMessages = previous?.bundleIdentifier == messagesID
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
@@ -85,12 +82,12 @@ enum MessagesSender {
             guard error == nil else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
                 if wasInMessages { return }
-                if previousIsOther, let previous, !previous.isTerminated {
-                    previous.activate()
-                } else {
-                    NSRunningApplication.runningApplications(withBundleIdentifier: messagesID).first?.hide()
-                }
-                DebugLogger.shared.info("Showed a conversation in Messages for a moment; handed the front back (previous app was \(previousIsOther ? "another app" : "this app"))", source: "MessagesSender")
+                // Since macOS 14 an app that is not active cannot pull another app forward (activate() on the previous app was ignored and Messages
+                // stayed on screen), but any app may hide another one, and macOS then brings back what was behind it.
+                NSRunningApplication.runningApplications(withBundleIdentifier: messagesID).first?.hide()
+                if let previous, previous.processIdentifier != ProcessInfo.processInfo.processIdentifier, !previous.isTerminated { previous.activate() }
+                let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "none"
+                DebugLogger.shared.info("Showed a conversation in Messages for a moment and hid it again (front now: \(front))", source: "MessagesSender")
             }
         }
         return true
