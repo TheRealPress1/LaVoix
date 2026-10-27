@@ -73,13 +73,24 @@ enum MessagesSender {
     @MainActor @discardableResult
     static func showInMessages(handles: [String], isGroup: Bool) -> Bool {
         guard let url = self.conversationURL(handles: handles, isGroup: isGroup) else { return false }
+        let messagesID = "com.apple.MobileSMS"
+        // Typing in the notch makes this app the front one, so "the app you were in" is often this app itself; handing the front back to it
+        // changes nothing and leaves Messages on screen. In that case Messages is hidden instead, and macOS brings back what was behind it.
         let previous = NSWorkspace.shared.frontmostApplication
+        let previousIsOther = previous.map { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier } ?? false
+        let wasInMessages = previous?.bundleIdentifier == messagesID
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         NSWorkspace.shared.open(url, configuration: configuration) { _, error in
             guard error == nil else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
-                if let previous, !previous.isTerminated { previous.activate() }
+                if wasInMessages { return }
+                if previousIsOther, let previous, !previous.isTerminated {
+                    previous.activate()
+                } else {
+                    NSRunningApplication.runningApplications(withBundleIdentifier: messagesID).first?.hide()
+                }
+                DebugLogger.shared.info("Showed a conversation in Messages for a moment; handed the front back (previous app was \(previousIsOther ? "another app" : "this app"))", source: "MessagesSender")
             }
         }
         return true
