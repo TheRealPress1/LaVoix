@@ -76,9 +76,36 @@ final class MessagesStore: ObservableObject {
     var sendNewHandler: (String, String) async throws -> Void = { text, handle in
         try await MessagesSender.sendNew(text, toHandle: handle)
     }
-    /// What happens after a reply is sent: the conversation is shown in Messages for a moment so it counts as seen. Tests replace this.
-    var markSeenHandler: (MessageConversation) -> Void = { chat in
-        MessagesSender.showInMessages(handles: chat.handles, isGroup: chat.isGroup)
+    /// The newest message time (seconds since 1970) you have looked at, per chat, kept in this app only. Messages itself keeps its own unread state, which
+    /// the notch cannot change; this is what clears the notch's unread dot once you have opened or answered a chat.
+    private static let seenKey = "LaVoixNotchMessagesSeenUpTo"
+    private(set) var seenUpTo: [Int64: TimeInterval] = {
+        let stored = UserDefaults.standard.dictionary(forKey: "LaVoixNotchMessagesSeenUpTo") as? [String: Double] ?? [:]
+        return Dictionary(uniqueKeysWithValues: stored.compactMap { key, value in Int64(key).map { ($0, value) } })
+    }()
+    /// Tests turn this off so they never touch the real preferences.
+    var persistsSeen = true
+
+    /// A chat shows unread only while its newest message is from someone else and newer than what you last looked at.
+    private func adjustedForSeen(_ list: [MessageConversation]) -> [MessageConversation] {
+        list.map { chat in
+            guard chat.unreadCount > 0 else { return chat }
+            if chat.lastIsFromMe || (self.seenUpTo[chat.id] ?? 0) >= chat.lastDate.timeIntervalSince1970 { return chat.withUnread(0) }
+            return chat
+        }
+    }
+
+    /// You have looked at this chat (opened it in the notch or answered it): its unread dot goes away until something newer arrives.
+    func markSeen(_ chatID: Int64) {
+        guard let chat = self.conversations.first(where: { $0.id == chatID }) else { return }
+        let stamp = chat.lastDate.timeIntervalSince1970
+        guard (self.seenUpTo[chatID] ?? 0) < stamp else { return }
+        self.seenUpTo[chatID] = stamp
+        if self.persistsSeen {
+            UserDefaults.standard.set(Dictionary(uniqueKeysWithValues: self.seenUpTo.map { (String($0.key), $0.value) }), forKey: Self.seenKey)
+        }
+        self.conversations = self.adjustedForSeen(self.conversations)
+        self.unreadTotal = self.conversations.reduce(0) { $0 + $1.unreadCount }
     }
     private var refreshFailures = 0
     /// Watches for reads that keep failing: re-checks access, tells the user, and relaunches the app once if that is what cures it.
@@ -286,7 +313,8 @@ final class MessagesStore: ObservableObject {
     }
 
     func apply(conversations latest: [MessageConversation], threads: [Int64: [ThreadMessage]], incoming: [IncomingMessage], announce: Bool) {
-        var conversations = latest
+        let adjustedLatest = self.adjustedForSeen(latest)
+        var conversations = adjustedLatest
         if let pinned = self.pinned {
             if let index = conversations.firstIndex(where: { $0.id == pinned.id }) { self.pinned = conversations[index] }
             else { conversations.append(pinned) }
@@ -300,7 +328,7 @@ final class MessagesStore: ObservableObject {
         self.resolvePending()
         self.hasLoaded = true
         self.conversations = self.withPendingPreviews(conversations)
-        self.unreadTotal = latest.reduce(0) { $0 + $1.unreadCount }
+        self.unreadTotal = adjustedLatest.reduce(0) { $0 + $1.unreadCount }
         // Forget chats that fell out of the list so the cache stays small.
         let visible = Set(conversations.map(\.id))
         self.threadCache = self.threadCache.filter { visible.contains($0.key) }
@@ -322,6 +350,7 @@ final class MessagesStore: ObservableObject {
 
     func select(_ chatID: Int64) {
         if self.newChat != nil { self.newChat = nil; self.thread = [] }
+        self.markSeen(chatID)
         guard chatID != self.selectedChatID else { return }
         self.selectedChatID = chatID
         self.sendError = nil
@@ -414,10 +443,8 @@ final class MessagesStore: ObservableObject {
         Task {
             do {
                 try await self.sendHandler(text, chatGUID)
-                // Replying means you have seen it: let Messages know too, so its badge clears and the other person sees it was read.
-                if NotchMessagesSettings.marksSeenOnReply, let chat = self.conversations.first(where: { $0.guid == chatGUID }) {
-                    self.markSeenHandler(chat)
-                }
+                // Replying means you have seen it.
+                if let id = chatID ?? self.conversations.first(where: { $0.guid == chatGUID })?.id { self.markSeen(id) }
                 // The database lags the send by a moment; check a few times, quickly at first, until the real message shows.
                 for delay in [0.3, 0.6, 1.2, 2.5, 5.0] as [Double] {
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))

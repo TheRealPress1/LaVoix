@@ -13,6 +13,13 @@ struct MessageConversation: Identifiable, Equatable {
     let unreadCount: Int
     /// True when the group has been given a name; unnamed groups are shown by who is in them.
     var hasGroupName = false
+
+    /// The same conversation with a different unread count (the notch clears its own unread dot once you have looked at a chat).
+    func withUnread(_ count: Int) -> MessageConversation {
+        var copy = MessageConversation(id: id, guid: guid, title: title, handles: handles, isGroup: isGroup, lastText: lastText, lastDate: lastDate, lastIsFromMe: lastIsFromMe, unreadCount: count)
+        copy.hasGroupName = hasGroupName
+        return copy
+    }
 }
 
 struct ThreadMessage: Identifiable, Equatable {

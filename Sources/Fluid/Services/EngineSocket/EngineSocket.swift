@@ -1630,6 +1630,28 @@ nonisolated enum EngineSocketAutotest {
                 check("a new Messages store has not loaded and has not failed", fresh == (false, false))
                 check("sample data counts as loaded, and so does a first read", filled && afterRead == (true, 5))
             }
+            // the notch's own unread dot: opening or answering a chat clears it, something newer brings it back
+            do {
+                let result = await MainActor.run { () -> (Int, Int, Int, Int) in
+                    let store = MessagesStore()
+                    store.persistsSeen = false
+                    let sample = MessagesStore.sample()
+                    store.apply(conversations: sample.conversations, threads: [:], incoming: [], announce: false)
+                    let before = store.unreadTotal
+                    store.select(1)
+                    let afterOpen = store.unreadTotal
+                    // a newer message from someone else in chat 1 brings the dot back
+                    let chat = store.conversations.first { $0.id == 1 }!
+                    let newer = MessageConversation(id: 1, guid: chat.guid, title: chat.title, handles: chat.handles, isGroup: false, lastText: "new", lastDate: chat.lastDate.addingTimeInterval(60), lastIsFromMe: false, unreadCount: 3)
+                    store.apply(conversations: [newer], threads: [:], incoming: [], announce: false)
+                    let afterNew = store.unreadTotal
+                    // answering it: the newest message is yours, so no dot
+                    let mine = MessageConversation(id: 1, guid: chat.guid, title: chat.title, handles: chat.handles, isGroup: false, lastText: "ok", lastDate: chat.lastDate.addingTimeInterval(120), lastIsFromMe: true, unreadCount: 3)
+                    store.apply(conversations: [mine], threads: [:], incoming: [], announce: false)
+                    return (before, afterOpen, afterNew, store.unreadTotal)
+                }
+                check("opening a chat clears its unread count, a newer message brings it back, and answering clears it", result == (4, 2, 3, 0))
+            }
             // marking a chat seen after a reply
             do {
                 check("a one-to-one chat has an address that opens it, a group does not", MessagesSender.conversationURL(handles: ["+15551230001"], isGroup: false)?.absoluteString == "imessage://+15551230001"

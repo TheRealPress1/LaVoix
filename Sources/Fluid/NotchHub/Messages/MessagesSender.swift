@@ -68,31 +68,6 @@ enum MessagesSender {
         return URL(string: "imessage://" + encoded)
     }
 
-    /// Messages only counts a conversation as seen when it is on screen, and it has no way to be told otherwise, so this puts the conversation on
-    /// screen for a moment and then hands the front back to whatever you were using. Returns false for a group chat (no address opens one).
-    @MainActor @discardableResult
-    static func showInMessages(handles: [String], isGroup: Bool) -> Bool {
-        guard let url = self.conversationURL(handles: handles, isGroup: isGroup) else { return false }
-        let messagesID = "com.apple.MobileSMS"
-        let previous = NSWorkspace.shared.frontmostApplication
-        let wasInMessages = previous?.bundleIdentifier == messagesID
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = true
-        NSWorkspace.shared.open(url, configuration: configuration) { _, error in
-            guard error == nil else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
-                if wasInMessages { return }
-                // Since macOS 14 an app that is not active cannot pull another app forward (activate() on the previous app was ignored and Messages
-                // stayed on screen), but any app may hide another one, and macOS then brings back what was behind it.
-                NSRunningApplication.runningApplications(withBundleIdentifier: messagesID).first?.hide()
-                if let previous, previous.processIdentifier != ProcessInfo.processInfo.processIdentifier, !previous.isTerminated { previous.activate() }
-                let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "none"
-                DebugLogger.shared.info("Showed a conversation in Messages for a moment and hid it again (front now: \(front))", source: "MessagesSender")
-            }
-        }
-        return true
-    }
-
     static func compiles(_ source: String) -> Bool {
         var error: NSDictionary?
         return NSAppleScript(source: source)?.compileAndReturnError(&error) ?? false
