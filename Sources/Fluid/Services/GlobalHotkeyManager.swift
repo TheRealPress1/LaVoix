@@ -272,6 +272,45 @@ private final nonisolated class HotkeyState: @unchecked Sendable {
     }
 }
 
+/// Hands an event from a blocking event tap to the main thread without letting a busy main thread freeze
+/// input for the whole Mac. Waits briefly for the answer; if the main thread is slow, the event passes
+/// through untouched and is still handled when the main thread catches up. While earlier hand-offs are
+/// still queued, new events pass straight through instead of waiting behind them.
+final class TapMainHandoff: @unchecked Sendable {
+    static let shared = TapMainHandoff()
+
+    private let lock = NSLock()
+    private var backlog = 0
+    private let timeout: DispatchTimeInterval = .milliseconds(60)
+
+    private final class Slot: @unchecked Sendable {
+        var result: Unmanaged<CGEvent>?
+    }
+
+    func run(_ event: CGEvent, _ work: @escaping () -> Unmanaged<CGEvent>?) -> Unmanaged<CGEvent>? {
+        self.lock.lock()
+        let mainIsBehind = self.backlog > 0
+        self.backlog += 1
+        self.lock.unlock()
+
+        let slot = Slot()
+        let done = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) let work = work
+        DispatchQueue.main.async {
+            slot.result = work()
+            self.lock.lock()
+            self.backlog -= 1
+            self.lock.unlock()
+            done.signal()
+        }
+
+        if mainIsBehind || done.wait(timeout: .now() + self.timeout) == .timedOut {
+            return Unmanaged.passUnretained(event)
+        }
+        return slot.result
+    }
+}
+
 @MainActor
 final class GlobalHotkeyManager: NSObject {
     enum CancelHandlingResult {
@@ -827,7 +866,7 @@ final class GlobalHotkeyManager: NSObject {
                         manager.handleKeyEvent(type: type, event: event)
                     }
                 }
-                return DispatchQueue.main.sync {
+                return TapMainHandoff.shared.run(event) {
                     MainActor.assumeIsolated {
                         manager.handleKeyEvent(type: type, event: event)
                     }
@@ -1100,7 +1139,12 @@ final class GlobalHotkeyManager: NSObject {
             callback: { _, type, event, refcon -> Unmanaged<CGEvent>? in
                 guard let refcon else { return Unmanaged.passUnretained(event) }
                 let manager = Unmanaged<GlobalHotkeyManager>.fromOpaque(refcon).takeUnretainedValue()
-                return manager.handleMouseShortcutEvent(type: type, event: event)
+                if Thread.isMainThread { return manager.handleMouseShortcutEvent(type: type, event: event) }
+                return TapMainHandoff.shared.run(event) {
+                    MainActor.assumeIsolated {
+                        manager.handleMouseShortcutEvent(type: type, event: event)
+                    }
+                }
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
@@ -1117,7 +1161,8 @@ final class GlobalHotkeyManager: NSObject {
         self.mouseShortcutTap = tap
         self.mouseShortcutSource = source
         self.monitoredMouseButtons = mouseButtons
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        // Serviced off the main thread: this tap can swallow clicks, so it must not wait on a busy main loop.
+        CFRunLoopAddSource(self.keyboardTapRunLoopStartingIfNeeded(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         installedTap = Self.isTapEnabled(tap)
         let summary = mouseButtons.sorted().map(String.init).joined(separator: ",")
@@ -1150,7 +1195,7 @@ final class GlobalHotkeyManager: NSObject {
     }
 
     private nonisolated func cleanupMouseShortcutTap(preservePrimaryPress: Bool = false) {
-        Self.tearDown(tap: self.mouseShortcutTap, source: self.mouseShortcutSource)
+        Self.tearDown(tap: self.mouseShortcutTap, source: self.mouseShortcutSource, runLoop: self.keyboardTapRunLoop ?? CFRunLoopGetMain())
         self.mouseShortcutTap = nil
         self.mouseShortcutSource = nil
         self.monitoredMouseButtons = []
