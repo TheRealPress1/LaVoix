@@ -1658,6 +1658,13 @@ nonisolated enum EngineSocketAutotest {
                         && MessagesSender.conversationURL(handles: ["sam@example.com"], isGroup: false)?.absoluteString == "imessage://sam@example.com"
                         && MessagesSender.conversationURL(handles: ["+1", "+2"], isGroup: true) == nil && MessagesSender.conversationURL(handles: [], isGroup: false) == nil)
             }
+            // WhatsApp from the notch: a phone number is needed, and the link carries the text safely
+            do {
+                check("WhatsApp is reached by phone number: digits are kept, an email or a too-short number is refused",
+                      WhatsAppSender.digits(of: "+1 (404) 555-1234") == "14045551234" && WhatsAppSender.digits(of: "sam@example.com") == nil && WhatsAppSender.digits(of: "12345") == nil)
+                check("the WhatsApp link carries the number and the text, escaped",
+                      WhatsAppSender.link(digits: "14045551234", text: "hi there & more\n")?.absoluteString == "whatsapp://send?phone=14045551234&text=hi%20there%20%26%20more")
+            }
             // FaceTime from the notch
             do {
                 check("a number keeps its plus and an email its at sign in the call address", FaceTimeDatabase.callURL(address: "+14155550101", audio: false)?.absoluteString == "facetime://+14155550101" && FaceTimeDatabase.callURL(address: "ada@example.com", audio: true)?.absoluteString == "facetime-audio://ada@example.com")

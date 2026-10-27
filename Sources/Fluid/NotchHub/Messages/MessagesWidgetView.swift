@@ -219,7 +219,14 @@ private struct ThreadView: View {
     var body: some View {
         VStack(spacing: 8) {
             if let draft = self.store.newChat {
-                Text("New message to \(draft.name)").font(.system(size: 11.5, weight: .medium)).foregroundStyle(.white.opacity(0.55)).frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 6) {
+                    Text("New message to \(draft.name)").font(.system(size: 11.5, weight: .medium)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+                    Spacer(minLength: 4)
+                    if self.store.newChatCanUseWhatsApp {
+                        self.serviceButton("iMessage", .iMessage, selected: draft.service)
+                        self.serviceButton("WhatsApp", .whatsApp, selected: draft.service)
+                    }
+                }
             }
             if self.staticLayout {
                 VStack(spacing: 5) {
@@ -252,7 +259,7 @@ private struct ThreadView: View {
             }
 
             HStack(spacing: 8) {
-                (self.staticLayout ? AnyView(Text("iMessage").foregroundStyle(.white.opacity(0.4)).frame(maxWidth: .infinity, alignment: .leading)) : AnyView(TextField("", text: self.$draft, prompt: Text("iMessage").foregroundStyle(.white.opacity(0.45))).foregroundStyle(.white).tint(.white)))
+                (self.staticLayout ? AnyView(Text(self.fieldPrompt).foregroundStyle(.white.opacity(0.4)).frame(maxWidth: .infinity, alignment: .leading)) : AnyView(TextField("", text: self.$draft, prompt: Text(self.fieldPrompt).foregroundStyle(.white.opacity(0.45))).foregroundStyle(.white).tint(.white)))
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .focused(self.$focused)
@@ -287,6 +294,20 @@ private struct ThreadView: View {
             if isFocused { NotchHubController.shared.beginTextEntry() }
         }
         .onDisappear { NotchHubController.shared.endTextEntry() }
+    }
+
+    private var fieldPrompt: String { self.store.newChat?.service == .whatsApp ? "WhatsApp" : "iMessage" }
+
+    private func serviceButton(_ title: String, _ service: MessagesStore.Service, selected: MessagesStore.Service) -> some View {
+        Button { self.store.setNewChatService(service) } label: {
+            Text(title)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(selected == service ? .black : .white.opacity(0.6))
+                .padding(.horizontal, 8)
+                .frame(height: 20)
+                .background(Capsule().fill(Color.white.opacity(selected == service ? 0.9 : 0.1)))
+        }
+        .buttonStyle(.plain)
     }
 
     private func send() {
