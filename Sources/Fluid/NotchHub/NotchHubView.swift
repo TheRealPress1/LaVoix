@@ -164,7 +164,8 @@ struct NotchHubView: View {
                         .background(Capsule().fill(selected ? Color.white.opacity(0.14) : .clear))
                         .overlay(alignment: .topTrailing) {
                             if let count = self.model.badges[widget.id], count > 0 {
-                                Circle().fill(Color.blue).frame(width: 8, height: 8).offset(x: 1, y: -1)
+                                // Inside the icon's own frame: the tab row is a scroll view that clips at its edges, so a dot hung outside the corner was cut off.
+                                Circle().fill(Color.blue).frame(width: 7, height: 7).offset(x: -2, y: 2)
                             }
                         }
                 }
