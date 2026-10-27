@@ -283,6 +283,11 @@ final class TapMainHandoff: @unchecked Sendable {
     private var backlog = 0
     private let timeout: DispatchTimeInterval = .milliseconds(60)
 
+    // Counters behind the log line below; reset each time it is written.
+    private var passedThrough = 0
+    private var worstDelay = 0.0
+    private var lastLogged = 0.0
+
     private final class Slot: @unchecked Sendable {
         var result: Unmanaged<CGEvent>?
     }
@@ -295,19 +300,49 @@ final class TapMainHandoff: @unchecked Sendable {
 
         let slot = Slot()
         let done = DispatchSemaphore(value: 0)
+        let submitted = ProcessInfo.processInfo.systemUptime
         nonisolated(unsafe) let work = work
         DispatchQueue.main.async {
+            let delay = ProcessInfo.processInfo.systemUptime - submitted
             slot.result = work()
             self.lock.lock()
             self.backlog -= 1
+            self.worstDelay = max(self.worstDelay, delay)
             self.lock.unlock()
             done.signal()
         }
 
         if mainIsBehind || done.wait(timeout: .now() + self.timeout) == .timedOut {
+            self.notePassedThrough()
             return Unmanaged.passUnretained(event)
         }
         return slot.result
+    }
+
+    /// Records that a key went through without being handled in time, and writes at most one log line every five seconds
+    /// (off the tap thread) saying how many and how long the main thread kept them waiting.
+    private func notePassedThrough() {
+        let now = ProcessInfo.processInfo.systemUptime
+        self.lock.lock()
+        self.passedThrough += 1
+        let due = now - self.lastLogged >= 5
+        var count = 0
+        var worst = 0.0
+        if due {
+            self.lastLogged = now
+            count = self.passedThrough
+            worst = self.worstDelay
+            self.passedThrough = 0
+            self.worstDelay = 0
+        }
+        self.lock.unlock()
+        guard due else { return }
+        DispatchQueue.global(qos: .utility).async {
+            DebugLogger.shared.warning(
+                "Hotkey tap did not wait for a busy main thread: \(count) key event(s) passed through unhandled, worst main-thread delay \(Int(worst * 1000)) ms",
+                source: "GlobalHotkeyManager"
+            )
+        }
     }
 }
 

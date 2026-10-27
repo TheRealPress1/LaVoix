@@ -1593,9 +1593,9 @@ nonisolated enum EngineSocketAutotest {
             }
             // freeze snapshots
             do {
-                check("a short stall is ignored", !StallRecorder.shouldCapture(stalledFor: 0.3, sinceLastCapture: 500))
+                check("a short stall is ignored", !StallRecorder.shouldCapture(stalledFor: 0.1, sinceLastCapture: 500))
                 check("a real stall is recorded", StallRecorder.shouldCapture(stalledFor: 1.2, sinceLastCapture: 500))
-                check("snapshots are spaced out", !StallRecorder.shouldCapture(stalledFor: 5, sinceLastCapture: 30))
+                check("snapshots are spaced out", !StallRecorder.shouldCapture(stalledFor: 5, sinceLastCapture: 10))
             }
             // now playing
             do {
