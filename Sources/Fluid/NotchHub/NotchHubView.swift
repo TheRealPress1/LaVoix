@@ -157,9 +157,15 @@ struct NotchHubView: View {
                     NotchHubController.shared.verifyTabSwitch(to: widget.id)
                     self.model.selectedWidgetID = widget.id
                 } label: {
-                    Image(systemName: widget.systemImage)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(selected ? Color.white : Color.white.opacity(0.45))
+                    Group {
+                        if let image = widget.brandImage {
+                            Image(nsImage: image).resizable().interpolation(.high).scaledToFit().frame(width: 17, height: 17).opacity(selected ? 1 : 0.6)
+                        } else {
+                            Image(systemName: widget.systemImage)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(selected ? Color.white : Color.white.opacity(0.45))
+                        }
+                    }
                         .frame(width: 30, height: 24)
                         .background(Capsule().fill(selected ? Color.white.opacity(0.14) : .clear))
                         .overlay(alignment: .topTrailing) {

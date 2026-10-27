@@ -476,9 +476,10 @@ nonisolated enum EngineSocket {
             // A connection that broke (a mailbox signed out, Bump disconnected), told to the user from the notch. Shows a card only.
             guard let title = object["title"] as? String, !title.isEmpty, let text = object["text"] as? String else { return fail("title and text are required") }
             let symbol = (object["symbol"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "exclamationmark.triangle.fill"
+            let icon = (object["icon"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(160)) }
             let label = (object["action_label"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(30)) }
             let actionID = (object["action_id"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(160)) }
-            await MainActor.run { NotchHubController.shared.showAlert(title: String(title.prefix(80)), text: String(text.prefix(300)), symbol: symbol, actionLabel: label, actionID: actionID) }
+            await MainActor.run { NotchHubController.shared.showAlert(title: String(title.prefix(80)), text: String(text.prefix(300)), symbol: symbol, icon: icon, actionLabel: label, actionID: actionID) }
             _ = emit(["ok": true])
         case "notch.connections_set":
             // The state of every connector, for the Connections tab (and its badge).

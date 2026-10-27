@@ -17,6 +17,8 @@ struct NotchBannerContent: Equatable, Identifiable {
     let date: Date
     /// Set for a connection alert (not a message): the card shows this symbol instead of an avatar and has no reply box.
     var alertSymbol: String? = nil
+    /// A connector's logo (its id, e.g. "bump") drawn instead of the symbol on an alert card.
+    var alertIcon: String? = nil
     /// What clicking an alert card does.
     var alertAction: AlertAction = .fullDiskAccess
     enum AlertAction: Equatable { case fullDiskAccess, openMyOS }
@@ -68,7 +70,10 @@ struct NotchBannerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
-                if let symbol = self.content.alertSymbol {
+                if let icon = self.content.alertIcon {
+                    ConnectorIconView(id: icon, title: self.content.title, size: 40)
+                        .frame(width: 40, height: 40)
+                } else if let symbol = self.content.alertSymbol {
                     Image(systemName: symbol)
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(.white)

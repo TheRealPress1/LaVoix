@@ -40,10 +40,7 @@ final class MessagesStore: ObservableObject {
     struct NewChat: Equatable {
         let name: String
         let handle: String
-        var service: Service = .iMessage
     }
-    /// Which app a first message goes through.
-    enum Service: Equatable { case iMessage, whatsApp }
     @Published private(set) var composing = false
     @Published private(set) var composeResults: [ComposeResult] = []
     @Published private(set) var newChat: NewChat?
@@ -78,23 +75,6 @@ final class MessagesStore: ObservableObject {
     /// How a first message to someone with no chat is sent. Tests replace this too.
     var sendNewHandler: (String, String) async throws -> Void = { text, handle in
         try await MessagesSender.sendNew(text, toHandle: handle)
-    }
-    /// How a first message through WhatsApp is sent. Tests replace this too.
-    var whatsAppSendHandler: (String, String) async throws -> Void = { text, handle in
-        try await WhatsAppSender.send(text, toHandle: handle)
-    }
-
-    /// True when the person being written to has a phone number and WhatsApp Desktop is on this Mac.
-    var newChatCanUseWhatsApp: Bool {
-        guard let draft = self.newChat else { return false }
-        return WhatsAppSender.isAvailable && WhatsAppSender.digits(of: draft.handle) != nil
-    }
-
-    func setNewChatService(_ service: Service) {
-        guard var draft = self.newChat, draft.service != service, service == .iMessage || self.newChatCanUseWhatsApp else { return }
-        draft.service = service
-        self.newChat = draft
-        self.sendError = nil
     }
     /// The newest message time (seconds since 1970) you have looked at, per chat, kept in this app only. Messages itself keeps its own unread state, which
     /// the notch cannot change; this is what clears the notch's unread dot once you have opened or answered a chat.
@@ -553,20 +533,6 @@ final class MessagesStore: ObservableObject {
     private func deliverNew(_ text: String, to draft: NewChat) {
         self.sendError = nil
         self.thread.append(ThreadMessage(id: -1_000_000 - Int64(self.thread.count), text: text, date: Date(), isFromMe: true, senderHandle: ""))
-        if draft.service == .whatsApp {
-            // WhatsApp has no chat in this tab to pick up afterwards: the sent message stays on screen as you wrote it.
-            self.isSending = true
-            Task {
-                defer { self.isSending = false }
-                do {
-                    try await self.whatsAppSendHandler(text, draft.handle)
-                } catch {
-                    self.sendError = error.localizedDescription
-                    self.thread.removeAll { $0.id <= -1_000_000 }
-                }
-            }
-            return
-        }
         let database = self.database
         Task {
             do {

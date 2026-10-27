@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// One module that lives inside the notch. Anything that can draw a view can be a widget.
@@ -5,6 +6,8 @@ struct NotchWidget: Identifiable {
     let id: String
     let title: String
     let systemImage: String
+    /// A brand's own icon for the tab (WhatsApp's), drawn instead of the symbol when set.
+    var brandImage: NSImage? = nil
     let content: @MainActor () -> AnyView
 }
 
@@ -66,6 +69,11 @@ enum NotchWidgetRegistry {
         if NotchMessagesSettings.isEnabled {
             widgets.append(NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") {
                 AnyView(MessagesWidgetView(store: MessagesStore.shared))
+            })
+        }
+        if PeopleDatabase.isAvailable && WhatsAppSender.isAvailable {
+            widgets.append(NotchWidget(id: "whatsapp", title: "WhatsApp", systemImage: "bubble.left.fill", brandImage: ConnectorIcon.whatsApp) {
+                AnyView(WhatsAppWidgetView(store: WhatsAppStore.shared))
             })
         }
         widgets.append(NotchWidget(id: "connections", title: "Connections", systemImage: "gearshape.fill") {
