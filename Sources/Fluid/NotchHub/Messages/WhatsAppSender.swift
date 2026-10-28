@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 import SQLite3
@@ -52,26 +53,51 @@ enum WhatsAppSender {
         NSRunningApplication.runningApplications(withBundleIdentifier: self.bundleID).first
     }
 
+    private static func log(_ message: String) {
+        DebugLogger.shared.info(message, source: "WhatsAppSender")
+    }
+
+    private static func postReturn(to pid: pid_t) {
+        let source = CGEventSource(stateID: .hidSystemState)
+        for down in [true, false] {
+            let event = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: down)
+            if event == nil { self.log("Could not create the Return key event") }
+            event?.postToPid(pid)
+            Thread.sleep(forTimeInterval: 0.06)
+        }
+    }
+
     private static func sendBlocking(url: URL, text: String) throws {
         let started = Date().timeIntervalSince1970
         let running = self.whatsApp() != nil
+        let frontBefore = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "none"
         let open = Process()
         open.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         // -g keeps the app you are in at the front. If WhatsApp is not running it has to be started, which does come forward.
         open.arguments = (running ? ["-g"] : []) + [url.absoluteString]
         try open.run()
         open.waitUntilExit()
+        self.log("Opened the chat link (WhatsApp was running: \(running), front before: \(frontBefore), status \(open.terminationStatus))")
         guard open.terminationStatus == 0 else { throw MessagesSender.SendError.failed("WhatsApp Desktop couldn't be opened.") }
         Thread.sleep(forTimeInterval: running ? 2.0 : 5.0)
         guard let pid = self.whatsApp()?.processIdentifier else { throw MessagesSender.SendError.failed("WhatsApp Desktop isn't running.") }
-        for down in [true, false] {
-            CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: down)?.postToPid(pid)
-            Thread.sleep(forTimeInterval: 0.06)
-        }
-        for _ in 0..<8 {
+        self.log("Posting Return to WhatsApp (pid \(pid)); front now: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "none"), accessibility trusted: \(AXIsProcessTrusted())")
+        self.postReturn(to: pid)
+        var pressedAgain = false
+        for attempt in 0..<8 {
             Thread.sleep(forTimeInterval: 0.9)
-            if self.sentSince(started, text: text) { return }
+            if self.sentSince(started, text: text) {
+                self.log("Confirmed in WhatsApp's database after \(attempt + 1) check(s)\(pressedAgain ? " (after a second Return)" : "")")
+                return
+            }
+            // Return on an empty box does nothing, so a second press can never send twice: if the first did not land, this one may.
+            if attempt == 2, !pressedAgain {
+                pressedAgain = true
+                self.log("Not in the database yet; pressing Return once more")
+                self.postReturn(to: pid)
+            }
         }
+        self.log("Could not confirm the message in WhatsApp's database")
         throw MessagesSender.SendError.failed("WhatsApp opened with your message typed, but it couldn't be confirmed as sent. Check WhatsApp before sending it again.")
     }
 
