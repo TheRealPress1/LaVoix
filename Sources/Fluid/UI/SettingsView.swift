@@ -443,6 +443,21 @@ struct SettingsView: View {
                             }
 
                             self.settingsToggleRow(
+                                title: "WhatsApp cards in the notch",
+                                description: "A card drops out of the notch when someone writes to you on WhatsApp, with a box to reply. Group chats and muted chats are left out.",
+                                footnote: "WhatsApp Desktop has to be running, because that is where the messages arrive. WhatsApp shows its own banner in the top right as well; turn that off under Notifications in System Settings if you only want the notch.",
+                                isOn: Binding(
+                                    get: { NotchWhatsAppSettings.alertsEnabled },
+                                    set: { enabled in
+                                        NotchWhatsAppSettings.alertsEnabled = enabled
+                                        NotchHubController.shared.whatsAppSettingChanged()
+                                        SettingsStore.shared.objectWillChange.send()
+                                    }
+                                )
+                            )
+                            Divider().opacity(0.2)
+
+                            self.settingsToggleRow(
                                 title: "Show message text in the notch",
                                 description: "Turn off to show who messaged without showing what they said.",
                                 isOn: Binding(

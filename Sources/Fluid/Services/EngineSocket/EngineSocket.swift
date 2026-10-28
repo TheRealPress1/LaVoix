@@ -3,6 +3,7 @@ import AVFoundation
 import Contacts
 import Darwin
 import Foundation
+import SQLite3
 
 /// Lets myOS use LaVoix's engine. A Unix socket in the owner-only folder `~/Library/Application Support/myOS/private/`
 /// (the same place as the message store), NOT a TCP port: any process on the Mac can reach a port, only this user can reach
@@ -1665,6 +1666,38 @@ nonisolated enum EngineSocketAutotest {
                       WhatsAppSender.digits(of: "+1 (404) 555-1234") == "14045551234" && WhatsAppSender.digits(of: "sam@example.com") == nil && WhatsAppSender.digits(of: "12345") == nil)
                 check("the WhatsApp link carries the number and the text, escaped",
                       WhatsAppSender.link(digits: "14045551234", text: "hi there & more\n")?.absoluteString == "whatsapp://send?phone=14045551234&text=hi%20there%20%26%20more")
+            }
+            // WhatsApp cards: only new, unmuted, one-to-one messages from someone else, latest per chat
+            do {
+                let dir = NSTemporaryDirectory() + "lavoix-wa-alerts-\(ProcessInfo.processInfo.processIdentifier)"
+                try? FileManager.default.removeItem(atPath: dir)
+                try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+                defer { try? FileManager.default.removeItem(atPath: dir) }
+                let appleNow = Date().timeIntervalSince1970 - 978_307_200
+                var db: OpaquePointer?
+                var setup = false
+                if sqlite3_open(dir + "/ChatStorage.sqlite", &db) == SQLITE_OK {
+                    let sql = """
+                    CREATE TABLE ZWACHATSESSION (Z_PK INTEGER PRIMARY KEY, ZCONTACTJID TEXT, ZPARTNERNAME TEXT);
+                    CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY, ZCHATSESSION INTEGER, ZISFROMME INTEGER, ZMESSAGEDATE REAL, ZMESSAGETYPE INTEGER, ZTEXT TEXT);
+                    CREATE TABLE ZWACHATPUSHCONFIG (ZJID TEXT, ZMUTEDUNTIL REAL);
+                    INSERT INTO ZWACHATSESSION VALUES (1, '14045551234@s.whatsapp.net', 'Sam'), (2, '14045550000@s.whatsapp.net', 'Muted Max'), (3, '120363@g.us', 'A group'), (4, '14045557777@s.whatsapp.net', '');
+                    INSERT INTO ZWACHATPUSHCONFIG VALUES ('14045550000@s.whatsapp.net', 63113904000);
+                    INSERT INTO ZWAMESSAGE VALUES (1, 1, 0, \(appleNow - 5), 0, 'first'), (2, 1, 0, \(appleNow - 3), 0, 'second'), (3, 2, 0, \(appleNow - 3), 0, 'muted'),
+                      (4, 3, 0, \(appleNow - 3), 0, 'group'), (5, 1, 1, \(appleNow - 2), 0, 'mine'), (6, 4, 0, \(appleNow - 600), 0, 'stale'),
+                      (7, 4, 0, \(appleNow - 1), 1, 'GAAqAggAQLb///////wFiJDIxODZCN0UxL');
+                    """
+                    setup = sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK
+                }
+                sqlite3_close(db)
+                let watchFrom = setup ? WhatsAppDatabase.latestMessagePK(in: dir) : nil
+                let fresh = setup ? WhatsAppDatabase.incomingSince(pk: 0, in: dir) : nil
+                let nothing = setup ? WhatsAppDatabase.incomingSince(pk: 7, in: dir) : nil
+                let texts = fresh?.messages.map { "\($0.name):\($0.text)" } ?? []
+                check("watching starts from the newest message", watchFrom == 7)
+                check("new WhatsApp messages: one per chat (the latest), no muted chat, group, own message or stale one, media named not encoded",
+                      texts == ["Sam:second", "+14045557777:Photo"] && fresh?.newest == 7)
+                check("nothing new gives no cards and keeps the position", nothing?.messages.isEmpty == true && nothing?.newest == 7)
             }
             // WhatsApp chats: a chat id is a phone number, an anonymous id comes from WhatsApp's contacts file
             do {

@@ -26,6 +26,7 @@ final class NotchHubController {
     /// True while the card's reply box has text in it, so leaving the card doesn't throw the draft away.
     var bannerHasDraft = false
     private var unreadObserver: AnyCancellable?
+    private var whatsAppBadgeObserver: AnyCancellable?
     private var resignObserver: NSObjectProtocol?
     private var becomeKeyObserver: NSObjectProtocol?
     private var clickMonitor: Any?
@@ -103,6 +104,7 @@ final class NotchHubController {
             return event
         }
         self.startMessagesIfEnabled()
+        self.startWhatsAppAlertsIfEnabled()
         ConnectionsStore.shared.restoreBadge()
         NotchMeetingCardController.shared.hubStateChanged()
         if NotchClipboardSettings.isEnabled { ClipboardStore.shared.start() }
@@ -144,6 +146,8 @@ final class NotchHubController {
         self.endTextEntry()
         MessagesStore.shared.stop()
         self.unreadObserver = nil
+        WhatsAppAlerts.shared.stop()
+        self.whatsAppBadgeObserver = nil
         self.model.close()
         if let dragMonitor { NSEvent.removeMonitor(dragMonitor) }
         self.dragMonitor = nil
@@ -277,6 +281,40 @@ final class NotchHubController {
         store.start()
     }
 
+    // MARK: - WhatsApp cards
+
+    /// Starts or stops the cards for new WhatsApp messages to match their setting.
+    func whatsAppSettingChanged() {
+        guard self.isRunning else { return }
+        self.startWhatsAppAlertsIfEnabled()
+    }
+
+    private func startWhatsAppAlertsIfEnabled() {
+        guard NotchWhatsAppSettings.alertsEnabled, WhatsAppSender.isAvailable else {
+            WhatsAppAlerts.shared.stop()
+            self.whatsAppBadgeObserver = nil
+            self.model.setBadge("whatsapp", 0)
+            return
+        }
+        WhatsAppAlerts.shared.onIncoming = { [weak self] message in
+            self?.showBanner(NotchBannerContent(
+                chatID: message.chatID,
+                chatGUID: "",
+                title: message.name,
+                avatarHandle: "+" + message.phone,
+                subtitle: nil,
+                text: NotchMessagesSettings.showsPreviews ? message.text : "New message",
+                date: message.date,
+                whatsAppPhone: message.phone
+            ))
+        }
+        self.whatsAppBadgeObserver = WhatsAppStore.shared.$unreadChats.sink { [weak self] count in
+            self?.model.setBadge("whatsapp", count)
+        }
+        WhatsAppStore.shared.refreshRecents()
+        WhatsAppAlerts.shared.start()
+    }
+
     // MARK: - Notification card
 
     /// Drops a notification card out of the notch. Hover expands it for a reply; it dismisses itself otherwise.
@@ -337,13 +375,29 @@ final class NotchHubController {
             }
             return
         }
+        if let phone = banner.whatsAppPhone {
+            if self.model.widgets.contains(where: { $0.id == "whatsapp" }) {
+                self.model.selectedWidgetID = "whatsapp"
+                WhatsAppStore.shared.open(phone: phone, name: banner.title)
+                self.open()
+            } else if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "net.whatsapp.WhatsApp") {
+                NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
+            }
+            return
+        }
         self.model.selectedWidgetID = "messages"
         MessagesStore.shared.select(banner.chatID)
         self.open()
     }
 
     func sendFromBanner(_ text: String, content: NotchBannerContent) {
-        MessagesStore.shared.send(text, toChatGUID: content.chatGUID)
+        if let phone = content.whatsAppPhone {
+            WhatsAppStore.shared.send(text, toPhone: phone) { [weak self] reason in
+                self?.showAlert(title: "WhatsApp message not sent", text: reason, symbol: "exclamationmark.triangle.fill")
+            }
+        } else {
+            MessagesStore.shared.send(text, toChatGUID: content.chatGUID)
+        }
         self.endTextEntry()
         self.scheduleBannerDismiss(after: 1.4, force: true)
     }

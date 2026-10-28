@@ -11,6 +11,17 @@ nonisolated struct WhatsAppChat: Identifiable, Equatable {
     let unread: Int
 }
 
+/// A new message from someone else, for a card in the notch.
+nonisolated struct WhatsAppIncoming: Identifiable, Equatable {
+    /// The message's number in WhatsApp's database; later messages have higher numbers.
+    let id: Int64
+    let chatID: Int64
+    let phone: String
+    let name: String
+    let text: String
+    let date: Date
+}
+
 nonisolated struct WhatsAppMessage: Identifiable, Equatable {
     let id: Int64
     let text: String
@@ -25,9 +36,9 @@ nonisolated enum WhatsAppDatabase {
     private static let appleEpoch: TimeInterval = 978_307_200
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    private static func open(_ file: String) -> OpaquePointer? {
+    private static func open(_ file: String, in directory: String? = nil) -> OpaquePointer? {
         var db: OpaquePointer?
-        guard sqlite3_open_v2(self.container + "/" + file, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db else { sqlite3_close(db); return nil }
+        guard sqlite3_open_v2((directory ?? self.container) + "/" + file, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db else { sqlite3_close(db); return nil }
         sqlite3_busy_timeout(db, 600)
         return db
     }
@@ -37,8 +48,8 @@ nonisolated enum WhatsAppDatabase {
     }
 
     /// Anonymous chat id -> phone digits, from WhatsApp's contacts file.
-    private static func lidMap() -> [String: String] {
-        guard let db = self.open("ContactsV2.sqlite") else { return [:] }
+    private static func lidMap(in directory: String? = nil) -> [String: String] {
+        guard let db = self.open("ContactsV2.sqlite", in: directory) else { return [:] }
         defer { sqlite3_close(db) }
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, "SELECT ZLID, ZPHONENUMBER FROM ZWAADDRESSBOOKCONTACT WHERE ZLID != '' AND ZPHONENUMBER != ''", -1, &statement, nil) == SQLITE_OK else { return [:] }
@@ -156,5 +167,79 @@ nonisolated enum WhatsAppDatabase {
                 isFromMe: sqlite3_column_int(statement, 2) != 0))
         }
         return out.reversed()
+    }
+
+    // MARK: - New messages (for notch cards)
+
+    /// A message from someone else that is worth a card in the notch.
+    struct Raw: Equatable {
+        let pk: Int64
+        let chatID: Int64
+        let jid: String
+        let name: String
+        let type: Int32
+        let text: String
+        let date: Date
+        /// When the chat's mute ends, in WhatsApp's seconds; 0 when it is not muted. "Always" is a date far in the future.
+        let mutedUntil: Double
+    }
+
+    /// The message kinds that get a card: text and the things that have a name (photo, voice note, ...). Deleted messages, notices and the like do not.
+    private static let alertKinds: Set<Int32> = [0, 1, 2, 3, 4, 5, 7, 8, 15]
+
+    /// From the new messages, the ones to show: one-to-one chats only, not muted, not older than a minute and a half (a backlog arriving after sleep is not
+    /// news), and only the latest message of each chat. Pure, so it is tested without a database.
+    static func selectAlerts(_ rows: [Raw], lids: [String: String], now: Date = Date(), maxAge: TimeInterval = 90) -> [WhatsAppIncoming] {
+        let appleNow = now.timeIntervalSince1970 - self.appleEpoch
+        var latest: [Int64: WhatsAppIncoming] = [:]
+        for row in rows.sorted(by: { $0.pk < $1.pk }) {
+            guard self.alertKinds.contains(row.type), row.mutedUntil <= appleNow, now.timeIntervalSince(row.date) <= maxAge,
+                  let phone = self.phone(ofJID: row.jid, lids: lids) else { continue }
+            let name = row.name.trimmingCharacters(in: .whitespaces)
+            latest[row.chatID] = WhatsAppIncoming(id: row.pk, chatID: row.chatID, phone: phone, name: name.isEmpty ? "+" + phone : name,
+                                                  text: self.preview(code: row.type, text: row.text), date: row.date)
+        }
+        return latest.values.sorted { $0.id < $1.id }
+    }
+
+    /// The newest message number in the database (any message), the point to watch from. nil when it can't be read.
+    static func latestMessagePK(in directory: String? = nil) -> Int64? {
+        guard let db = self.open("ChatStorage.sqlite", in: directory) else { return nil }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT COALESCE(MAX(Z_PK), 0) FROM ZWAMESSAGE", -1, &statement, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(statement) }
+        return sqlite3_step(statement) == SQLITE_ROW ? sqlite3_column_int64(statement, 0) : nil
+    }
+
+    /// What arrived after message number `pk`: the new highest number, and the messages worth a card. nil when the database can't be read. When nothing is
+    /// new it does one tiny query and stops, so watching every few seconds costs almost nothing.
+    static func incomingSince(pk: Int64, in directory: String? = nil) -> (newest: Int64, messages: [WhatsAppIncoming])? {
+        guard let db = self.open("ChatStorage.sqlite", in: directory) else { return nil }
+        defer { sqlite3_close(db) }
+        var maxStatement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT COALESCE(MAX(Z_PK), 0) FROM ZWAMESSAGE", -1, &maxStatement, nil) == SQLITE_OK else { return nil }
+        let newest = sqlite3_step(maxStatement) == SQLITE_ROW ? sqlite3_column_int64(maxStatement, 0) : 0
+        sqlite3_finalize(maxStatement)
+        guard newest > pk else { return (max(newest, pk), []) }
+        let sql = """
+        SELECT m.Z_PK, m.ZCHATSESSION, s.ZCONTACTJID, COALESCE(s.ZPARTNERNAME, ''), m.ZMESSAGETYPE, COALESCE(m.ZTEXT, ''), m.ZMESSAGEDATE, COALESCE(p.ZMUTEDUNTIL, 0)
+        FROM ZWAMESSAGE m JOIN ZWACHATSESSION s ON s.Z_PK = m.ZCHATSESSION LEFT JOIN ZWACHATPUSHCONFIG p ON p.ZJID = s.ZCONTACTJID
+        WHERE m.Z_PK > ?1 AND m.Z_PK <= ?2 AND m.ZISFROMME = 0 AND m.ZMESSAGEDATE IS NOT NULL
+          AND (s.ZCONTACTJID LIKE '%@s.whatsapp.net' OR s.ZCONTACTJID LIKE '%@lid')
+        ORDER BY m.Z_PK
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, pk)
+        sqlite3_bind_int64(statement, 2, newest)
+        var rows: [Raw] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            rows.append(Raw(pk: sqlite3_column_int64(statement, 0), chatID: sqlite3_column_int64(statement, 1), jid: self.text(statement, 2), name: self.text(statement, 3),
+                            type: sqlite3_column_int(statement, 4), text: self.text(statement, 5),
+                            date: Date(timeIntervalSince1970: sqlite3_column_double(statement, 6) + self.appleEpoch), mutedUntil: sqlite3_column_double(statement, 7)))
+        }
+        return (newest, self.selectAlerts(rows, lids: rows.isEmpty ? [:] : self.lidMap(in: directory)))
     }
 }

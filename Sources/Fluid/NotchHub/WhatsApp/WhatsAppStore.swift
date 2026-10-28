@@ -29,6 +29,8 @@ final class WhatsAppStore: ObservableObject {
     @Published private(set) var pending: [Pending] = []
     @Published private(set) var isSending = false
     @Published private(set) var error: String?
+    /// How many chats have something you have not looked at yet (the dot on the notch's WhatsApp tab).
+    @Published private(set) var unreadChats = 0
     private var latestSearch = 0
 
     /// The newest message time you have looked at, per number, kept in this app only: it clears the notch's unread dot for a chat you opened.
@@ -50,6 +52,7 @@ final class WhatsAppStore: ObservableObject {
             let result = await Task.detached(priority: .userInitiated) { WhatsAppDatabase.recents() }.value
             if let result {
                 self.recents = result
+                self.updateUnreadCount()
                 if self.state != .ready { self.state = .ready }
                 // Like Messages, a chat is always open: the latest one, until you pick another (looking at it this way does not count as reading it).
                 if self.selected == nil, let first = result.first {
@@ -76,6 +79,11 @@ final class WhatsAppStore: ObservableObject {
 
     func open(chat: WhatsAppChat) {
         self.open(Target(name: chat.name, phone: chat.phone), lastDate: chat.lastDate)
+    }
+
+    /// Opens the chat with this number (from a notch card): it counts as looked at.
+    func open(phone: String, name: String) {
+        self.open(Target(name: name, phone: phone), lastDate: Date())
     }
 
     func open(contact: FaceTimeContact) {
@@ -110,6 +118,12 @@ final class WhatsAppStore: ObservableObject {
         self.seenUpTo[phone] = stamp
         if self.persistsSeen { UserDefaults.standard.set(self.seenUpTo, forKey: Self.seenKey) }
         self.objectWillChange.send()
+        self.updateUnreadCount()
+    }
+
+    private func updateUnreadCount() {
+        let count = self.recents.filter { self.hasUnread($0) }.count
+        if count != self.unreadChats { self.unreadChats = count }
     }
 
     func send(_ text: String) {
@@ -129,6 +143,25 @@ final class WhatsAppStore: ObservableObject {
             } catch {
                 self.error = error.localizedDescription
                 self.pending.removeAll { $0.id == bubble.id }
+            }
+        }
+    }
+
+    /// Sends to a number without opening its chat here (a reply typed on a notch card). `failure` gets the reason in words when it did not go out.
+    func send(_ text: String, toPhone phone: String, failure: @escaping (String) -> Void) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard !self.isSending else { failure("Another WhatsApp message is still being sent. Try again in a moment."); return }
+        self.isSending = true
+        Task {
+            defer { self.isSending = false }
+            do {
+                try await self.sendHandler(trimmed, phone)
+                self.markSeen(phone, upTo: Date())
+                self.refreshRecents()
+                if self.selected?.phone == phone { self.refreshThread() }
+            } catch {
+                failure(error.localizedDescription)
             }
         }
     }

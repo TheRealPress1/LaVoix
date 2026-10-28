@@ -25,6 +25,8 @@ struct NotchBannerContent: Equatable, Identifiable {
     /// A button on an alert card (and what pressing the card does): myOS runs the action, e.g. signing a mailbox in again.
     var actionLabel: String? = nil
     var actionID: String? = nil
+    /// Set for a WhatsApp message: the number it came from. Replies go out through WhatsApp, and pressing the card opens that chat in the WhatsApp tab.
+    var whatsAppPhone: String? = nil
 
     /// Width left for the message text inside the card: card width minus side padding, avatar and spacing.
     static let textWidth: CGFloat = NotchGeometry.bannerWidth - 44 - 40 - 12
@@ -65,7 +67,8 @@ struct NotchBannerView: View {
     @State private var sent = false
     @FocusState private var focused: Bool
 
-    private let blue = Color(red: 0.04, green: 0.52, blue: 1.0)
+    private var blue: Color { self.content.whatsAppPhone == nil ? Color(red: 0.04, green: 0.52, blue: 1.0) : Color(red: 0.145, green: 0.827, blue: 0.4) }
+    private var serviceName: String { self.content.whatsAppPhone == nil ? "iMessage" : "WhatsApp" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -145,12 +148,12 @@ struct NotchBannerView: View {
                         .foregroundStyle(.white.opacity(0.7))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else if self.staticLayout {
-                    Text("iMessage")
+                    Text(self.serviceName)
                         .font(.system(size: 14))
                         .foregroundStyle(.white.opacity(0.4))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
-                    TextField("", text: self.$draft, prompt: Text("iMessage").foregroundStyle(.white.opacity(0.45)))
+                    TextField("", text: self.$draft, prompt: Text(self.serviceName).foregroundStyle(.white.opacity(0.45)))
                         .textFieldStyle(.plain)
                         .font(.system(size: 14))
                         .foregroundStyle(.white)
