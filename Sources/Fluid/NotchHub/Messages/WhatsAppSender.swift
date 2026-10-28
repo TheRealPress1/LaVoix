@@ -71,15 +71,31 @@ enum WhatsAppSender {
         let started = Date().timeIntervalSince1970
         let running = self.whatsApp() != nil
         let frontBefore = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "none"
+        if !running {
+            // Not running: start it hidden and without taking the front (-g -j), and wait until it is up and has settled, so the chat link below is
+            // handled by a WhatsApp that is ready for it (a cold start is slow, and a Return pressed too early is lost).
+            let launch = Process()
+            launch.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            launch.arguments = ["-g", "-j", "-b", self.bundleID]
+            try launch.run()
+            launch.waitUntilExit()
+            var waited = 0.0
+            while self.whatsApp() == nil, waited < 15 {
+                Thread.sleep(forTimeInterval: 0.5)
+                waited += 0.5
+            }
+            Thread.sleep(forTimeInterval: 4.0)
+            self.log("Started WhatsApp hidden (up after about \(Int(waited)) s)")
+        }
         let open = Process()
         open.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        // -g keeps the app you are in at the front. If WhatsApp is not running it has to be started, which does come forward.
-        open.arguments = (running ? ["-g"] : []) + [url.absoluteString]
+        // -g keeps the app you are in at the front.
+        open.arguments = ["-g", url.absoluteString]
         try open.run()
         open.waitUntilExit()
         self.log("Opened the chat link (WhatsApp was running: \(running), front before: \(frontBefore), status \(open.terminationStatus))")
         guard open.terminationStatus == 0 else { throw MessagesSender.SendError.failed("WhatsApp Desktop couldn't be opened.") }
-        Thread.sleep(forTimeInterval: running ? 2.0 : 5.0)
+        Thread.sleep(forTimeInterval: running ? 2.0 : 3.0)
         guard let pid = self.whatsApp()?.processIdentifier else { throw MessagesSender.SendError.failed("WhatsApp Desktop isn't running.") }
         self.log("Posting Return to WhatsApp (pid \(pid)); front now: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "none"), accessibility trusted: \(AXIsProcessTrusted())")
         self.postReturn(to: pid)
