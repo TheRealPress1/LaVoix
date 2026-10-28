@@ -41,7 +41,7 @@ final class AppServices: ObservableObject {
             DebugLogger.shared.info("🚦 UI Ready signal received - services can now initialize", source: "AppServices")
             self.isUIReady = true
         }
-        _ = self.meetingAutoDetector
+        if !DiagnosticRun.isActive { _ = self.meetingAutoDetector }
     }
 
     // MARK: - Lazy Services

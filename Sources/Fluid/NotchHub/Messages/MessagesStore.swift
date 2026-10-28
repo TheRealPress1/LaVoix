@@ -142,6 +142,9 @@ final class MessagesStore: ObservableObject {
     /// A store filled with sample data, for previews. It never touches the real database.
     static func sample(access: AccessState = .granted) -> MessagesStore {
         let store = MessagesStore()
+        // A sample store is for tests and previews: it must never write the "seen" record to this Mac's real preferences (opening a sample chat did,
+        // and a later test then saw those chats as already read).
+        store.persistsSeen = false
         let now = Date()
         store.access = access
         store.hasLoaded = true

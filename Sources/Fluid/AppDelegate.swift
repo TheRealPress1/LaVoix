@@ -114,7 +114,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         SettingsStore.shared.initializeAppSettings()
         DictationAppSession.shared.start()
         OnboardingAISetupController.live.resumePendingDownload()
-        LocalAPIServer.shared.start()
+        if !DiagnosticRun.isActive { LocalAPIServer.shared.start() }
         EngineSocket.startIfEnabled()
         DebugWindowSnapshot.startIfRequested()
         WritingRecoveryMonitor.shared.apply()
@@ -370,6 +370,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     private func scheduleMeetingAutoDetectorStart() {
+        // A test run must not arm a recorder against a call that the real engine may be recording.
+        guard !DiagnosticRun.isActive else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             Task { @MainActor in
                 _ = AppServices.shared.meetingAutoDetector

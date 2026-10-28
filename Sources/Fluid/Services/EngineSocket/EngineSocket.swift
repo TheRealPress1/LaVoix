@@ -138,8 +138,55 @@ nonisolated enum EngineSocket {
     private nonisolated(unsafe) static var listeners: [String: Int32] = [:]
 
     static func startIfEnabled() {
-        guard self.isEnabled, ProcessInfo.processInfo.environment["LAVOIX_ENGINE_SOCKET_AUTOTEST"] != "1" else { return }
+        // A test or render run is not the engine: it must never serve (or take) the engine's socket.
+        guard self.isEnabled, !DiagnosticRun.isActive, ProcessInfo.processInfo.environment["LAVOIX_ENGINE_SOCKET_AUTOTEST"] != "1" else { return }
         _ = self.start(at: self.defaultURL, services: self.liveServices)
+    }
+
+    /// What is on a socket path right now.
+    enum PathOwner: Equatable {
+        /// No file, or a leftover file nobody listens on (a crashed run).
+        case none
+        /// A live engine that answered.
+        case answering
+        /// Something accepts connections there but did not answer in time (hung, or very busy).
+        case silent
+    }
+
+    /// How long an owner has to answer before it counts as silent. The freeze watchdog gives an engine the same few seconds.
+    nonisolated(unsafe) static var ownerAnswerTimeout: TimeInterval = 3
+    /// Whether a meeting is being recorded; tests replace this.
+    nonisolated(unsafe) static var recordingInProgress: () -> Bool = { MeetingRecordingGuard.isRecordingInProgress() }
+
+    /// Asks whoever owns `path` a question (the same `activity` one the watchdog asks) to tell a live engine from a leftover file.
+    static func owner(of path: String) -> PathOwner {
+        guard FileManager.default.fileExists(atPath: path) else { return .none }
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = Array(path.utf8)
+        guard pathBytes.count < MemoryLayout.size(ofValue: addr.sun_path) else { return .none }
+        withUnsafeMutableBytes(of: &addr.sun_path) { raw in
+            for (i, b) in pathBytes.enumerated() { raw[i] = b }
+            raw[pathBytes.count] = 0
+        }
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return .silent }
+        defer { close(fd) }
+        var noSignal: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
+        let connected = withUnsafePointer(to: &addr) { p in
+            p.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        if connected != 0 {
+            // Refused or gone: a leftover file. Anything else (permissions, a full queue) is not proof that nobody is there.
+            return (errno == ECONNREFUSED || errno == ENOENT) ? .none : .silent
+        }
+        let question = Array("{\"op\":\"activity\"}\n".utf8)
+        guard write(fd, question, question.count) == question.count else { return .silent }
+        var waiting = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        guard poll(&waiting, 1, Int32(self.ownerAnswerTimeout * 1000)) > 0 else { return .silent }
+        var byte: UInt8 = 0
+        return read(fd, &byte, 1) > 0 ? .answering : .silent
     }
 
     static let liveGenerator: Generator = { system, user, maxTokens in
@@ -184,7 +231,22 @@ nonisolated enum EngineSocket {
         let dir = url.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
-        unlink(url.path) // a stale socket from a crashed run
+        // Only a leftover file from a crashed run may be removed. A second process (a test, a stray copy) used to delete a live engine's socket
+        // here, which left the engine alive but unreachable, looking frozen to the watchdog. A live owner is never replaced, and neither is a silent
+        // one while a meeting is being recorded (it may only be busy, and the recording it holds must not be cut short).
+        switch self.owner(of: url.path) {
+        case .none:
+            break
+        case .answering:
+            DebugLogger.shared.warning("Another engine already serves \(url.lastPathComponent); leaving it alone", source: "EngineSocket")
+            return false
+        case .silent:
+            if self.recordingInProgress() {
+                DebugLogger.shared.warning("The engine socket is held by something that did not answer, and a meeting is being recorded; leaving it alone", source: "EngineSocket")
+                return false
+            }
+        }
+        unlink(url.path) // a stale socket from a crashed run, or a hung engine nobody is recording with
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
@@ -201,7 +263,7 @@ nonisolated enum EngineSocket {
         }
         guard bound == 0 else { close(fd); return false }
         chmod(url.path, 0o600)
-        guard listen(fd, 8) == 0 else { close(fd); unlink(url.path); return false }
+        guard listen(fd, 128) == 0 else { close(fd); unlink(url.path); return false }
         self.listeners[url.path] = fd
 
         DispatchQueue.global(qos: .utility).async {
@@ -1253,6 +1315,65 @@ nonisolated enum EngineSocketAutotest {
             check("socket is owner-only (0600)", (attrs?[.posixPermissions] as? NSNumber)?.intValue == 0o600)
             check("folder is owner-only (0700)", (dirAttrs?[.posixPermissions] as? NSNumber)?.intValue == 0o700)
 
+            // A second process must never take a live engine's socket (that left the engine unreachable, looking frozen, and got it quit mid-recording).
+            EngineSocket.ownerAnswerTimeout = 0.6
+            let ownedPath = url.deletingLastPathComponent().appendingPathComponent("owned.sock")
+            let ownedURL = URL(fileURLWithPath: ownedPath.path)
+            let nothingRecording: () -> Bool = { false }
+            EngineSocket.recordingInProgress = nothingRecording
+            check("no file means nobody owns the path", EngineSocket.owner(of: ownedPath.path) == .none)
+            if let live = RawOwner(path: ownedPath.path, answers: true) {
+                check("a live owner is recognised by its answer", EngineSocket.owner(of: ownedPath.path) == .answering)
+                check("a second process does not take a live engine's socket", EngineSocket.start(at: ownedURL, services: services) == false)
+                check("...and the live engine still answers afterwards", EngineSocket.owner(of: ownedPath.path) == .answering)
+                live.close()
+            } else { check("test listener could not start", false) }
+            if let crashed = RawOwner(path: ownedPath.path, answers: true) {
+                crashed.close(leaveFile: true)
+                check("a leftover file nobody listens on counts as nobody", EngineSocket.owner(of: ownedPath.path) == .none)
+                check("a leftover file from a crashed engine is replaced", EngineSocket.start(at: ownedURL, services: services) == true)
+                EngineSocket.stop(removing: ownedURL)
+            } else { check("test listener could not start", false) }
+            if let hung = RawOwner(path: ownedPath.path, answers: false) {
+                check("an owner that accepts but never answers is silent", EngineSocket.owner(of: ownedPath.path) == .silent)
+                EngineSocket.recordingInProgress = { true }
+                check("a silent owner is left alone while a meeting is recorded", EngineSocket.start(at: ownedURL, services: services) == false)
+                check("...and its socket file is still there", FileManager.default.fileExists(atPath: ownedPath.path))
+                EngineSocket.recordingInProgress = nothingRecording
+                check("a silent owner is replaced when nothing is being recorded", EngineSocket.start(at: ownedURL, services: services) == true)
+                hung.close(leaveFile: true)
+                EngineSocket.stop(removing: ownedURL)
+            } else { check("test listener could not start", false) }
+            EngineSocket.ownerAnswerTimeout = 3
+
+            // Whether a meeting is being recorded, read from the session files.
+            do {
+                let meetings = FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-guard-\(UUID().uuidString)")
+                func session(_ id: String, state: String?, ageSeconds: TimeInterval, raw: String? = nil) {
+                    let folder = meetings.appendingPathComponent(id)
+                    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    let file = folder.appendingPathComponent("session.json")
+                    try? (raw ?? "{\"state\":\"\(state ?? "")\"}").write(to: file, atomically: true, encoding: .utf8)
+                    try? FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-ageSeconds)], ofItemAtPath: file.path)
+                }
+                func recording() -> Bool { MeetingRecordingGuard.isRecordingInProgress(meetingsFolder: meetings) }
+                check("no meetings folder means nothing is recording", MeetingRecordingGuard.isRecordingInProgress(meetingsFolder: meetings) == false)
+                session("a", state: "completed", ageSeconds: 5)
+                check("a finished meeting is not a recording", !recording())
+                session("a", state: "completed", ageSeconds: 3000)
+                session("b", state: "recording", ageSeconds: 10)
+                check("a meeting written ten seconds ago in the recording state is a recording", recording())
+                session("b", state: "recording", ageSeconds: 600)
+                check("a recording that stopped being written ten minutes ago is not one", !recording())
+                session("c", state: "paused", ageSeconds: 30)
+                check("a paused meeting still counts", recording())
+                session("c", state: nil, ageSeconds: 5, raw: "not json at all")
+                check("an unreadable session written just now counts as a recording (never cut one off by mistake)", recording())
+                session("c", state: "interrupted", ageSeconds: 1000)
+                check("an old interrupted meeting does not", !recording())
+                try? FileManager.default.removeItem(at: meetings)
+            }
+
             func lines(_ payload: String) -> [[String: Any]] {
                 Self.roundTrip(url: url, payload: payload).compactMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
             }
@@ -1792,6 +1913,53 @@ nonisolated enum EngineSocketAutotest {
     }
 
     /// Minimal blocking client, the same thing myOS does from Rust. Returns every line the server sent.
+    /// A bare listener standing in for "another process owns the socket": it accepts connections and, when `answers`, replies to the first line.
+    /// `close()` shuts it down and, unless `leaveFile`, removes the file (a crashed engine leaves the file behind).
+    final class RawOwner: @unchecked Sendable {
+        private let fd: Int32
+        private let path: String
+        private var held: [Int32] = []
+        private let lock = NSLock()
+        init?(path: String, answers: Bool) {
+            self.path = path
+            unlink(path)
+            var addr = sockaddr_un()
+            addr.sun_family = sa_family_t(AF_UNIX)
+            let bytes = Array(path.utf8)
+            withUnsafeMutableBytes(of: &addr.sun_path) { raw in
+                for (i, b) in bytes.enumerated() { raw[i] = b }
+                raw[bytes.count] = 0
+            }
+            let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+            guard fd >= 0 else { return nil }
+            let bound = withUnsafePointer(to: &addr) { p in
+                p.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+            }
+            guard bound == 0, listen(fd, 8) == 0 else { Darwin.close(fd); return nil }
+            self.fd = fd
+            DispatchQueue.global().async { [self] in
+                while true {
+                    let client = accept(fd, nil, nil)
+                    if client < 0 { break }
+                    if answers {
+                        var buffer = [UInt8](repeating: 0, count: 256)
+                        _ = read(client, &buffer, buffer.count)
+                        let reply = Array("{\"ok\":true,\"activity\":{}}\n".utf8)
+                        _ = write(client, reply, reply.count)
+                        Darwin.close(client)
+                    } else {
+                        self.lock.lock(); self.held.append(client); self.lock.unlock()
+                    }
+                }
+            }
+        }
+        func close(leaveFile: Bool = false) {
+            Darwin.close(self.fd)
+            self.lock.lock(); for client in self.held { Darwin.close(client) }; self.held = []; self.lock.unlock()
+            if !leaveFile { unlink(self.path) }
+        }
+    }
+
     static func roundTrip(url: URL, payload: String, stopAfterFirstLine: Bool = false) -> [Data] {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { return [] }
