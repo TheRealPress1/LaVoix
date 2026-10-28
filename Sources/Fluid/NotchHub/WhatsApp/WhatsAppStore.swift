@@ -51,6 +51,11 @@ final class WhatsAppStore: ObservableObject {
             if let result {
                 self.recents = result
                 if self.state != .ready { self.state = .ready }
+                // Like Messages, a chat is always open: the latest one, until you pick another (looking at it this way does not count as reading it).
+                if self.selected == nil, let first = result.first {
+                    self.selected = Target(name: first.name, phone: first.phone)
+                    self.refreshThread()
+                }
             } else if self.recents.isEmpty {
                 self.state = .unavailable
             }
@@ -85,14 +90,6 @@ final class WhatsAppStore: ObservableObject {
         self.error = nil
         if let lastDate { self.markSeen(target.phone, upTo: lastDate) }
         self.refreshThread()
-    }
-
-    func close() {
-        self.selected = nil
-        self.thread = []
-        self.pending = []
-        self.error = nil
-        self.refreshRecents()
     }
 
     func refreshThread() {

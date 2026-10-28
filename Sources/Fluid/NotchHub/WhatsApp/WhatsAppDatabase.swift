@@ -64,12 +64,13 @@ nonisolated enum WhatsAppDatabase {
         guard let db = self.open("ChatStorage.sqlite") else { return nil }
         defer { sqlite3_close(db) }
         let lids = self.lidMap()
+        // The preview comes from the last message itself: the chat row's own "last text" can hold encoded data for media.
         let sql = """
-        SELECT Z_PK, ZCONTACTJID, COALESCE(ZPARTNERNAME, ''), ZLASTMESSAGEDATE, COALESCE(ZLASTMESSAGETEXT, ''), COALESCE(ZUNREADCOUNT, 0)
-        FROM ZWACHATSESSION
-        WHERE (ZCONTACTJID LIKE '%@s.whatsapp.net' OR ZCONTACTJID LIKE '%@lid')
-          AND COALESCE(ZREMOVED, 0) = 0 AND COALESCE(ZARCHIVED, 0) = 0 AND COALESCE(ZHIDDEN, 0) = 0 AND ZLASTMESSAGEDATE IS NOT NULL
-        ORDER BY ZLASTMESSAGEDATE DESC LIMIT 200
+        SELECT s.Z_PK, s.ZCONTACTJID, COALESCE(s.ZPARTNERNAME, ''), s.ZLASTMESSAGEDATE, COALESCE(m.ZMESSAGETYPE, -1), COALESCE(m.ZTEXT, s.ZLASTMESSAGETEXT, ''), COALESCE(s.ZUNREADCOUNT, 0)
+        FROM ZWACHATSESSION s LEFT JOIN ZWAMESSAGE m ON m.Z_PK = s.ZLASTMESSAGE
+        WHERE (s.ZCONTACTJID LIKE '%@s.whatsapp.net' OR s.ZCONTACTJID LIKE '%@lid')
+          AND COALESCE(s.ZREMOVED, 0) = 0 AND COALESCE(s.ZARCHIVED, 0) = 0 AND COALESCE(s.ZHIDDEN, 0) = 0 AND s.ZLASTMESSAGEDATE IS NOT NULL
+        ORDER BY s.ZLASTMESSAGEDATE DESC LIMIT 200
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return nil }
@@ -83,11 +84,26 @@ nonisolated enum WhatsAppDatabase {
                 id: sqlite3_column_int64(statement, 0),
                 name: name.isEmpty ? "+" + phone : name,
                 phone: phone,
-                lastText: self.text(statement, 4).trimmingCharacters(in: .whitespacesAndNewlines),
+                lastText: self.preview(code: sqlite3_column_int(statement, 4), text: self.text(statement, 5)),
                 lastDate: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3) + self.appleEpoch),
-                unread: Int(sqlite3_column_int(statement, 5))))
+                unread: Int(sqlite3_column_int(statement, 6))))
         }
         return out
+    }
+
+    /// Encoded data (base64 with no spaces) that WhatsApp sometimes keeps where text should be, for media and other non-text messages.
+    static func looksEncoded(_ text: String) -> Bool {
+        guard text.count >= 24, !text.contains(" ") else { return false }
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+        return text.unicodeScalars.allSatisfy { allowed.contains($0) }
+    }
+
+    /// The line shown under a chat's name: the text of a text message, the kind of thing for anything else ("Photo", "Voice note").
+    static func preview(code: Int32, text: String) -> String {
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if code <= 0, !body.isEmpty, !self.looksEncoded(body) { return body }
+        if code > 0 { return body.isEmpty || self.looksEncoded(body) ? self.kindName(code) : body }
+        return self.looksEncoded(body) ? "Attachment" : (body.isEmpty ? "Message" : body)
     }
 
     /// What a message type is called when it has no text.
@@ -135,7 +151,7 @@ nonisolated enum WhatsAppDatabase {
             let body = self.text(statement, 4).trimmingCharacters(in: .whitespacesAndNewlines)
             out.append(WhatsAppMessage(
                 id: sqlite3_column_int64(statement, 0),
-                text: code == 0 || !body.isEmpty ? body : self.kindName(code),
+                text: code == 0 || (!body.isEmpty && !self.looksEncoded(body)) ? body : self.kindName(code),
                 date: Date(timeIntervalSince1970: sqlite3_column_double(statement, 1) + self.appleEpoch),
                 isFromMe: sqlite3_column_int(statement, 2) != 0))
         }
