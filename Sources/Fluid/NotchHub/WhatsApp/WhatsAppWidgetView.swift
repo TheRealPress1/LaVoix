@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Write to someone on WhatsApp from the notch: type a name (the people you are closest to come first), press one, type, send. The message goes out through
-/// WhatsApp Desktop without WhatsApp coming to the front. Names and numbers come from myOS and are never kept here.
+/// WhatsApp in the notch: opens on your latest chats (like Messages), a search for anyone else with a phone number, and a conversation view with what was said
+/// and a box to write in. Messages go out through WhatsApp Desktop without it coming to the front.
 struct WhatsAppWidgetView: View {
     @ObservedObject var store: WhatsAppStore
     @Environment(\.notchWidgetActive) private var active
@@ -21,22 +21,35 @@ struct WhatsAppWidgetView: View {
             }
         }
         .foregroundStyle(.white)
-        .onAppear { self.store.search(self.query) }
+        .onAppear { self.store.refreshRecents(); self.store.search(self.query) }
         .onChange(of: self.query) { _, text in if self.active { self.store.search(text) } }
         .onChange(of: self.searchFocused) { _, f in if f { NotchHubController.shared.beginTextEntry() } }
         .onChange(of: self.draftFocused) { _, f in if f { NotchHubController.shared.beginTextEntry() } }
         .onDisappear { NotchHubController.shared.endTextEntry() }
+        // Look again every few seconds while this tab is showing, so new messages appear without reopening the notch.
+        .task(id: self.active) {
+            while self.active, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                guard self.active else { break }
+                if self.store.selected != nil { self.store.refreshThread() } else { self.store.refreshRecents() }
+            }
+        }
     }
+
+    private var searching: Bool { !self.query.trimmingCharacters(in: .whitespaces).isEmpty }
 
     private var picker: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(.white.opacity(0.45))
-                    TextField("", text: self.$query, prompt: Text("Who do you want to message on WhatsApp?").foregroundStyle(.white.opacity(0.45)))
+                    TextField("", text: self.$query, prompt: Text("Search for someone to message on WhatsApp").foregroundStyle(.white.opacity(0.45)))
                         .textFieldStyle(.plain).foregroundStyle(.white).tint(.white)
                         .focused(self.$searchFocused)
-                        .onSubmit { if let first = self.store.contacts.first { self.store.open(first) } }
+                        .onSubmit {
+                            if self.searching, let first = self.store.contacts.first { self.store.open(contact: first) }
+                            else if let first = self.store.recents.first { self.store.open(chat: first) }
+                        }
                 }
                 .padding(.horizontal, 10).frame(height: 30)
                 .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.white.opacity(0.08)))
@@ -46,13 +59,7 @@ struct WhatsAppWidgetView: View {
                 }
                 .buttonStyle(.plain)
             }
-            switch self.store.state {
-            case .loading:
-                ProgressView().controlSize(.small).tint(.white).frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .unavailable:
-                Text("myOS isn’t set up on this Mac, so there are no people to message yet.")
-                    .font(.system(size: 12)).foregroundStyle(.white.opacity(0.5)).frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .ready:
+            if self.searching {
                 if self.store.contacts.isEmpty {
                     Text("No one with a phone number matches.").font(.system(size: 12)).foregroundStyle(.white.opacity(0.45))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -60,7 +67,7 @@ struct WhatsAppWidgetView: View {
                     ScrollView(.vertical, showsIndicators: false) {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 6)], spacing: 6) {
                             ForEach(self.store.contacts) { person in
-                                Button { self.store.open(person) } label: {
+                                Button { self.store.open(contact: person) } label: {
                                     HStack(spacing: 6) {
                                         Text(person.name).font(.system(size: 13, weight: .medium)).lineLimit(1).truncationMode(.tail)
                                         Spacer(minLength: 4)
@@ -75,11 +82,50 @@ struct WhatsAppWidgetView: View {
                         }
                     }
                 }
+            } else {
+                switch self.store.state {
+                case .loading:
+                    ProgressView().controlSize(.small).tint(.white).frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .unavailable:
+                    Text("Couldn’t read WhatsApp on this Mac. Open WhatsApp Desktop once, and make sure myOS has Full Disk Access.")
+                        .font(.system(size: 12)).foregroundStyle(.white.opacity(0.5)).multilineTextAlignment(.center).frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .ready:
+                    if self.store.recents.isEmpty {
+                        Text("No WhatsApp chats yet.").font(.system(size: 12)).foregroundStyle(.white.opacity(0.45)).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        ScrollView(.vertical, showsIndicators: false) {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 6)], spacing: 4) {
+                                ForEach(self.store.recents) { chat in
+                                    Button { self.store.open(chat: chat) } label: { self.recentRow(chat) }.buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
-    private func conversation(_ person: FaceTimeContact) -> some View {
+    private func recentRow(_ chat: WhatsAppChat) -> some View {
+        let unread = self.store.hasUnread(chat)
+        return HStack(spacing: 9) {
+            NotchAvatar(name: chat.name, handle: "+" + chat.phone, size: 30)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack {
+                    Text(chat.name).font(.system(size: 12.5, weight: unread ? .bold : .semibold)).lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(Self.relative(chat.lastDate)).font(.system(size: 10)).foregroundStyle(.white.opacity(0.4))
+                }
+                Text(chat.lastText.isEmpty ? "Media" : chat.lastText)
+                    .font(.system(size: 11.5)).foregroundStyle(.white.opacity(unread ? 0.8 : 0.5)).lineLimit(1)
+            }
+            if unread { Circle().fill(self.green).frame(width: 8, height: 8) }
+        }
+        .padding(.horizontal, 8).frame(height: 38)
+        .contentShape(Rectangle())
+    }
+
+    private func conversation(_ person: WhatsAppStore.Target) -> some View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
                 Button { self.store.close(); self.draft = "" } label: {
@@ -92,26 +138,21 @@ struct WhatsAppWidgetView: View {
                 Spacer(minLength: 4)
                 Text("WhatsApp").font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.4))
             }
-            let sent = self.store.sent[person.id] ?? []
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .trailing, spacing: 5) {
-                        if sent.isEmpty {
-                            Text("Messages you send here go through WhatsApp. The conversation itself stays in WhatsApp.")
-                                .font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.4)).frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(spacing: 5) {
+                        ForEach(self.store.thread) { message in
+                            self.bubble(message.text, fromMe: message.isFromMe).id(message.id)
                         }
-                        ForEach(sent) { message in
-                            Text(message.text)
-                                .font(.system(size: 13)).foregroundStyle(.white)
-                                .padding(.horizontal, 11).padding(.vertical, 6)
-                                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color(red: 0.0, green: 0.36, blue: 0.3)))
-                                .frame(maxWidth: .infinity, alignment: .trailing)
-                                .id(message.id)
+                        ForEach(self.store.pending) { message in
+                            self.bubble(message.text, fromMe: true).opacity(0.6).id(message.id)
                         }
                     }
                     .padding(.vertical, 2)
                 }
-                .onChange(of: sent) { _, items in if let last = items.last { proxy.scrollTo(last.id, anchor: .bottom) } }
+                .onChange(of: self.store.thread) { _, thread in if let last = thread.last { proxy.scrollTo(last.id, anchor: .bottom) } }
+                .onChange(of: self.store.pending) { _, items in if let last = items.last { proxy.scrollTo(last.id, anchor: .bottom) } }
+                .onAppear { if let last = self.store.thread.last { proxy.scrollTo(last.id, anchor: .bottom) } }
             }
             if let error = self.store.error {
                 Text(error).font(.system(size: 10.5)).foregroundStyle(.orange).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
@@ -144,8 +185,25 @@ struct WhatsAppWidgetView: View {
         }
     }
 
+    private func bubble(_ text: String, fromMe: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 13)).foregroundStyle(.white)
+            .padding(.horizontal, 11).padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(fromMe ? Color(red: 0.0, green: 0.36, blue: 0.3) : Color.white.opacity(0.14)))
+            .frame(maxWidth: .infinity, alignment: fromMe ? .trailing : .leading)
+    }
+
     private func send() {
         self.store.send(self.draft)
         self.draft = ""
+    }
+
+    private static func relative(_ date: Date) -> String {
+        let seconds = Date().timeIntervalSince(date)
+        if seconds < 60 { return "now" }
+        if seconds < 3600 { return "\(Int(seconds / 60))m" }
+        if seconds < 86_400 { return "\(Int(seconds / 3600))h" }
+        if seconds < 604_800 { return "\(Int(seconds / 86_400))d" }
+        return date.formatted(.dateTime.month(.abbreviated).day())
     }
 }

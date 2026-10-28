@@ -1666,6 +1666,24 @@ nonisolated enum EngineSocketAutotest {
                 check("the WhatsApp link carries the number and the text, escaped",
                       WhatsAppSender.link(digits: "14045551234", text: "hi there & more\n")?.absoluteString == "whatsapp://send?phone=14045551234&text=hi%20there%20%26%20more")
             }
+            // WhatsApp chats: a chat id is a phone number, an anonymous id comes from WhatsApp's contacts file
+            do {
+                let lids = ["998877@lid": "14045559999"]
+                check("a WhatsApp chat id gives its phone number, also with a device suffix or through the contacts file",
+                      WhatsAppDatabase.phone(ofJID: "14045551234@s.whatsapp.net", lids: lids) == "14045551234"
+                        && WhatsAppDatabase.phone(ofJID: "14045551234:7@s.whatsapp.net", lids: lids) == "14045551234"
+                        && WhatsAppDatabase.phone(ofJID: "998877@lid", lids: lids) == "14045559999"
+                        && WhatsAppDatabase.phone(ofJID: "555@lid", lids: lids) == nil && WhatsAppDatabase.phone(ofJID: "120363@g.us", lids: lids) == nil)
+                let unread = await MainActor.run { () -> (Bool, Bool) in
+                    let store = WhatsAppStore()
+                    store.persistsSeen = false
+                    let chat = WhatsAppChat(id: 1, name: "Sam", phone: "14045551234", lastText: "hi", lastDate: Date(), unread: 2)
+                    let before = store.hasUnread(chat)
+                    store.open(chat: chat)
+                    return (before, store.hasUnread(chat))
+                }
+                check("a WhatsApp chat shows unread until you open it", unread == (true, false))
+            }
             // FaceTime from the notch
             do {
                 check("a number keeps its plus and an email its at sign in the call address", FaceTimeDatabase.callURL(address: "+14155550101", audio: false)?.absoluteString == "facetime://+14155550101" && FaceTimeDatabase.callURL(address: "ada@example.com", audio: true)?.absoluteString == "facetime-audio://ada@example.com")
