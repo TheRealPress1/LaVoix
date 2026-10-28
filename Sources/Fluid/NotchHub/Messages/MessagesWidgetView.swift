@@ -1,11 +1,14 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Conversations on the left, the open thread and a reply box on the right.
 struct MessagesWidgetView: View {
     @ObservedObject var store: MessagesStore
     /// Image previews can't draw scroll views or text fields; this swaps in static stand-ins.
     var staticLayout = false
+    /// The conversation a dragged file is over.
+    @State private var dropChatID: Int64?
 
     var body: some View {
         switch self.store.access {
@@ -89,14 +92,34 @@ struct MessagesWidgetView: View {
     private var rows: some View {
         VStack(spacing: 4) {
             ForEach(self.store.conversations) { conversation in
-                ConversationRow(
-                    conversation: conversation,
-                    title: self.store.title(for: conversation),
-                    selected: conversation.id == self.store.selectedChatID
-                )
-                .onTapGesture { self.store.select(conversation.id) }
+                self.row(for: conversation)
             }
         }
+    }
+
+    private func row(for conversation: MessageConversation) -> some View {
+        let targeted = Binding<Bool>(
+            get: { self.dropChatID == conversation.id },
+            set: { on in
+                if on { self.dropChatID = conversation.id } else if self.dropChatID == conversation.id { self.dropChatID = nil }
+            }
+        )
+        return ConversationRow(
+            conversation: conversation,
+            title: self.store.title(for: conversation),
+            selected: conversation.id == self.store.selectedChatID,
+            dropTargeted: self.dropChatID == conversation.id
+        )
+        .onTapGesture { self.store.select(conversation.id) }
+        // A file dropped on a conversation opens it and waits there for Send.
+        .modifier(MessagesDropTarget(enabled: !self.staticLayout, targeted: targeted) { providers in
+            self.dropOnRow(providers, chatID: conversation.id)
+        })
+    }
+
+    private func dropOnRow(_ providers: [NSItemProvider], chatID: Int64) {
+        let store = self.store
+        NotchDropLoader.load(providers) { urls in store.stage(urls, chatID: chatID) }
     }
 
     // MARK: - Permission and empty states
@@ -151,10 +174,63 @@ struct MessagesWidgetView: View {
     }
 }
 
+/// Lets a conversation row or the open thread take a dropped file. Previews can't draw drop targets, so they leave it out.
+private struct MessagesDropTarget: ViewModifier {
+    let enabled: Bool
+    @Binding var targeted: Bool
+    let drop: ([NSItemProvider]) -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if self.enabled {
+            content.onDrop(of: [.fileURL, .image], isTargeted: self.$targeted) { providers in
+                self.drop(providers)
+                return true
+            }
+        } else {
+            content
+        }
+    }
+}
+
+/// The files waiting to be sent, above the reply box, on one line with who they would go to. Nothing leaves until Send is pressed.
+private struct StagedFilesBar: View {
+    @ObservedObject var store: MessagesStore
+    let recipient: String?
+
+    var body: some View {
+        let files = self.store.stagedFiles
+        HStack(spacing: 8) {
+            if let first = files.first {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: first.path)).resizable().frame(width: 20, height: 20)
+                Text(files.count > 1 ? "\(first.lastPathComponent) +\(files.count - 1)" : first.lastPathComponent)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Text(self.recipient.map { "to \($0)" } ?? "open a chat first")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.5))
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Button { for file in files { self.store.unstage(file) } } label: {
+                Image(systemName: "xmark.circle.fill").font(.system(size: 14)).foregroundStyle(.white.opacity(0.6))
+            }
+            .buttonStyle(.plain)
+            .help("Don't send")
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Capsule().fill(Color.white.opacity(0.1)))
+    }
+}
+
 private struct ConversationRow: View {
     let conversation: MessageConversation
     let title: String
     let selected: Bool
+    var dropTargeted = false
 
     var body: some View {
         HStack(spacing: 9) {
@@ -185,7 +261,11 @@ private struct ConversationRow: View {
         }
         .padding(.horizontal, 8)
         .frame(height: 38)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(self.selected ? 0.12 : 0)))
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(self.dropTargeted ? 0.22 : (self.selected ? 0.12 : 0))))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.white.opacity(self.dropTargeted ? 0.8 : 0), style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+        )
         .contentShape(Rectangle())
     }
 
@@ -215,6 +295,16 @@ private struct ThreadView: View {
     var staticLayout = false
     @State private var draft = ""
     @FocusState private var focused: Bool
+    /// A dragged file is over the thread.
+    @State private var dropTargeted = false
+
+    private var recipient: String? {
+        self.store.conversations.first { $0.id == self.store.selectedChatID }.map { self.store.title(for: $0) }
+    }
+
+    private var canSend: Bool {
+        !self.draft.trimmingCharacters(in: .whitespaces).isEmpty || !self.store.stagedFiles.isEmpty
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -251,6 +341,10 @@ private struct ThreadView: View {
                 Text(error).font(.system(size: 10.5)).foregroundStyle(.orange).lineLimit(2)
             }
 
+            if !self.store.stagedFiles.isEmpty {
+                StagedFilesBar(store: self.store, recipient: self.recipient)
+            }
+
             HStack(spacing: 8) {
                 (self.staticLayout ? AnyView(Text("iMessage").foregroundStyle(.white.opacity(0.4)).frame(maxWidth: .infinity, alignment: .leading)) : AnyView(TextField("", text: self.$draft, prompt: Text("iMessage").foregroundStyle(.white.opacity(0.45))).foregroundStyle(.white).tint(.white)))
                     .textFieldStyle(.plain)
@@ -274,12 +368,25 @@ private struct ThreadView: View {
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(.black)
                         .frame(width: 26, height: 26)
-                        .background(Circle().fill(Color.white.opacity(self.draft.isEmpty ? 0.3 : 1)))
+                        .background(Circle().fill(Color.white.opacity(self.canSend ? 1 : 0.3)))
                 }
                 .buttonStyle(.plain)
-                .disabled(self.draft.trimmingCharacters(in: .whitespaces).isEmpty || self.store.isSending)
+                .disabled(!self.canSend || self.store.isSending)
             }
         }
+        .overlay {
+            if self.dropTargeted {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.8), style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.black.opacity(0.6)))
+                    .overlay(Text("Drop to attach").font(.system(size: 13, weight: .medium)).foregroundStyle(.white))
+            }
+        }
+        // A file dropped on the open chat waits above the reply box until Send is pressed.
+        .modifier(MessagesDropTarget(enabled: !self.staticLayout, targeted: self.$dropTargeted) { providers in
+            let store = self.store
+            NotchDropLoader.load(providers) { urls in store.stage(urls) }
+        })
         .onChange(of: self.store.selectedChatID) { _, _ in self.draft = "" }
         // However the field got focus (a click on the native field, or the tap handler), make sure the notch has the
         // keyboard and stays open while you type.
@@ -290,7 +397,12 @@ private struct ThreadView: View {
     }
 
     private func send() {
-        self.store.send(self.draft)
+        if self.store.stagedFiles.isEmpty {
+            self.store.send(self.draft)
+        } else {
+            // Files go first, then the text typed beside them.
+            self.store.sendStaged(thenText: self.draft)
+        }
         self.draft = ""
     }
 
@@ -320,6 +432,13 @@ private struct Bubble: View {
                     .padding(.top, 3)
             }
             self.row
+            if self.message.failed {
+                Text("Not delivered")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(Color.red.opacity(0.9))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.trailing, 10)
+            }
         }
     }
 

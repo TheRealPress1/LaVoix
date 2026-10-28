@@ -28,6 +28,8 @@ struct ThreadMessage: Identifiable, Equatable {
     let date: Date
     let isFromMe: Bool
     let senderHandle: String
+    /// A message of yours that Messages could not deliver (it shows as "Not Delivered" there).
+    var failed = false
 }
 
 struct IncomingMessage: Equatable {

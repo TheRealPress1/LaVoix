@@ -63,9 +63,18 @@ struct NotchHubView: View {
             // The area is always exactly the room left over (a clear box that content is drawn over), so a tab that wants more height than
             // that is clipped instead of pushing the tab row down into the notch's bottom edge.
             Color.clear.overlay(alignment: .top) { ZStack(alignment: .top) {
+                if self.model.dropSplit {
+                    // A file is being dragged to the notch: Shelf and iMessage side by side until one is chosen.
+                    NotchDropSplitView(model: self.model, staticLayout: self.forceOpen || Self.previewStatic)
+                        .padding(.horizontal, 34)
+                        .padding(.top, 8)
+                        .padding(.bottom, 14)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .transition(.opacity)
+                }
                 ForEach(self.model.widgets) { widget in
                     if self.mounted.contains(widget.id) || widget.id == selectedID {
-                        let active = widget.id == selectedID
+                        let active = widget.id == selectedID && !self.model.dropSplit
                         widget.content()
                             .padding(.horizontal, 34)
                             .padding(.top, 8)
@@ -110,7 +119,7 @@ struct NotchHubView: View {
                 self.model.tabsExpanded.toggle()
             } label: {
                 HStack(spacing: 5) {
-                    Text(self.model.selectedWidget?.title ?? "")
+                    Text(self.model.dropSplit ? "Drop a file" : (self.model.selectedWidget?.title ?? ""))
                         .font(.system(size: 12, weight: .medium))
                         .lineLimit(1)
                     Image(systemName: "chevron.down")

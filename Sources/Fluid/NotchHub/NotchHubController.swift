@@ -15,6 +15,11 @@ final class NotchHubController {
     private var localMonitor: Any?
     private var screenObserver: NSObjectProtocol?
     private var dragMonitor: Any?
+    private var dragEndMonitor: Any?
+    /// The half of the drop split the dragged file is over, and the wait that opens it once the file has stayed there long enough.
+    private var dwellTarget: NotchDropTarget?
+    private var dwellTask: Task<Void, Never>?
+    private var dragEndTask: Task<Void, Never>?
     private var holdsNowPlayingListener = false
     private var prewarmTask: Task<Void, Never>?
     private var openTask: Task<Void, Never>?
@@ -119,6 +124,9 @@ final class NotchHubController {
         self.dragMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] _ in
             Task { @MainActor in self?.fileDragMoved() }
         }
+        self.dragEndMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
+            Task { @MainActor in self?.fileDragEnded() }
+        }
         self.screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -151,6 +159,11 @@ final class NotchHubController {
         self.model.close()
         if let dragMonitor { NSEvent.removeMonitor(dragMonitor) }
         self.dragMonitor = nil
+        if let dragEndMonitor { NSEvent.removeMonitor(dragEndMonitor) }
+        self.dragEndMonitor = nil
+        self.dwellTask?.cancel()
+        self.dragEndTask?.cancel()
+        self.dwellTarget = nil
         if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
         self.clickMonitor = nil
         if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor) }
@@ -215,28 +228,101 @@ final class NotchHubController {
         CalendarStore.shared.start()
     }
 
-    /// While files are being dragged, open the notch on the shelf as soon as the pointer reaches it.
+    /// While a file is being dragged, open the notch as soon as the pointer reaches it. With both Shelf and Messages available it opens as a split
+    /// (Shelf on the left, iMessage on the right); holding the file over one half for `NotchDropSplitView.holdSeconds` opens that tab at full size.
     private func fileDragMoved() {
-        guard NotchShelfSettings.isEnabled, let screen = NotchGeometry.targetScreen() else { return }
+        guard let screen = NotchGeometry.targetScreen() else { return }
+        let hasShelf = self.model.widgets.contains { $0.id == "shelf" }
+        let hasMessages = self.model.widgets.contains { $0.id == "messages" }
+        guard hasShelf || hasMessages else { return }
         let point = NSEvent.mouseLocation
         if self.model.isOpen {
             // Keep it open while the drag is over it, close once the drag leaves.
             if NotchGeometry.openRect(for: screen).contains(point) {
                 self.closeTask?.cancel()
                 self.closeTask = nil
+                if self.model.dropSplit { self.setDropDwell(self.dropHalf(at: point, screen: screen)) }
             } else {
+                if self.model.dropSplit { self.setDropDwell(nil) }
                 self.scheduleClose()
             }
             return
         }
         guard NotchGeometry.triggerRect(for: screen).insetBy(dx: -24, dy: -10).contains(point),
               Self.dragPasteboardHasFiles else { return }
-        self.model.selectedWidgetID = "shelf"
+        if hasShelf && hasMessages {
+            self.model.beginDropSplit()
+        } else {
+            self.model.selectedWidgetID = hasShelf ? "shelf" : "messages"
+        }
         self.open()
     }
 
+    /// Under the band behind the camera, the left half of the open notch is Shelf and the right half is iMessage.
+    private func dropHalf(at point: NSPoint, screen: NSScreen) -> NotchDropTarget? {
+        guard point.y <= screen.frame.maxY - self.model.closedSize.height else { return nil }
+        return point.x < screen.frame.midX ? .shelf : .messages
+    }
+
+    /// Notes which half the file is over. Staying over the same half for `holdSeconds` opens it; moving to the other half (or off both) starts over.
+    private func setDropDwell(_ target: NotchDropTarget?) {
+        guard target != self.dwellTarget else { return }
+        self.dwellTarget = target
+        self.dwellTask?.cancel()
+        self.dwellTask = nil
+        self.model.setDropHover(target)
+        guard let target else { return }
+        self.dwellTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(NotchDropSplitView.holdSeconds * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.dwellTarget == target, self.model.dropSplit else { return }
+            self.chooseDropHalf(target)
+        }
+    }
+
+    /// The split gives way to the chosen tab, at full size, under the file that is still being held.
+    private func chooseDropHalf(_ target: NotchDropTarget) {
+        self.dwellTask = nil
+        self.dwellTarget = nil
+        self.model.selectedWidgetID = target == .shelf ? "shelf" : "messages"
+        self.model.endDropSplit()
+    }
+
+    /// A file was dropped on one half of the split before the hold finished: it goes there at once and that tab opens.
+    func dropFinished(on target: NotchDropTarget, urls: [URL]) {
+        self.dragEndTask?.cancel()
+        self.dwellTask?.cancel()
+        self.dwellTask = nil
+        self.dwellTarget = nil
+        guard !urls.isEmpty else { self.model.endDropSplit(); return }
+        switch target {
+        case .shelf:
+            ShelfStore.shared.add(urls)
+            self.model.selectedWidgetID = "shelf"
+        case .messages:
+            MessagesStore.shared.stage(urls)
+            self.model.selectedWidgetID = "messages"
+        }
+        self.model.endDropSplit()
+    }
+
+    /// The mouse button went up. If the split is still showing a moment later, nothing took the drop (it was let go over the camera band, or the
+    /// drag was cancelled), so the notch closes.
+    private func fileDragEnded() {
+        guard self.model.dropSplit else { return }
+        self.dragEndTask?.cancel()
+        self.dragEndTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled, let self, self.model.dropSplit else { return }
+            self.dwellTask?.cancel()
+            self.dwellTask = nil
+            self.dwellTarget = nil
+            self.close()
+        }
+    }
+
     private static var dragPasteboardHasFiles: Bool {
-        NSPasteboard(name: .drag).types?.contains(.fileURL) ?? false
+        let types = NSPasteboard(name: .drag).types ?? []
+        return types.contains(.fileURL) || types.contains(.tiff) || types.contains(.png)
     }
 
     // MARK: - Messages
@@ -561,6 +647,9 @@ final class NotchHubController {
     }
 
     private func close() {
+        self.dwellTask?.cancel()
+        self.dwellTask = nil
+        self.dwellTarget = nil
         self.model.close()
         self.stopStallWatch()
         // Let the closing animation finish before clicks start passing through again.

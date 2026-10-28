@@ -116,7 +116,7 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
     /// nil when the database couldn't be read right now.
     func messages(chatID: Int64, limit: Int) -> [ThreadMessage]? {
         let sql = """
-        SELECT m.ROWID, m.text, m.attributedBody, m.date, m.is_from_me, COALESCE(m.cache_has_attachments, 0), COALESCE(h.id, '')
+        SELECT m.ROWID, m.text, m.attributedBody, m.date, m.is_from_me, COALESCE(m.cache_has_attachments, 0), COALESCE(h.id, ''), COALESCE(m.error, 0)
         FROM chat_message_join j
         JOIN message m ON m.ROWID = j.message_id
         LEFT JOIN handle h ON h.ROWID = m.handle_id
@@ -133,7 +133,8 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
                 text: Self.messageText(text: Self.optionalString(row, 1), body: Self.blob(row, 2), hasAttachment: sqlite3_column_int(row, 5) != 0),
                 date: Self.date(sqlite3_column_int64(row, 3)),
                 isFromMe: sqlite3_column_int(row, 4) != 0,
-                senderHandle: Self.string(row, 6)
+                senderHandle: Self.string(row, 6),
+                failed: sqlite3_column_int(row, 4) != 0 && sqlite3_column_int(row, 7) != 0
             )
         }
         guard let newestFirst = queried else { return nil }

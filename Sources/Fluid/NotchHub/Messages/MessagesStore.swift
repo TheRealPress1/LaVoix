@@ -72,6 +72,10 @@ final class MessagesStore: ObservableObject {
     var sendHandler: (String, String) async throws -> Void = { text, chatGUID in
         try await MessagesSender.send(text, toChat: chatGUID)
     }
+    /// How a file is actually sent into a chat. Tests replace this so no real file is ever sent.
+    var sendFileHandler: (URL, String) async throws -> Void = { url, chatGUID in
+        try await MessagesSender.sendFile(url, toChat: chatGUID)
+    }
     /// How a first message to someone with no chat is sent. Tests replace this too.
     var sendNewHandler: (String, String) async throws -> Void = { text, handle in
         try await MessagesSender.sendNew(text, toHandle: handle)
@@ -455,6 +459,106 @@ final class MessagesStore: ObservableObject {
             } catch {
                 self.sendError = error.localizedDescription
                 if let tempID { self.removePending(tempID) }
+            }
+        }
+    }
+
+    // MARK: - Files
+
+    /// Files dropped on the notch for a chat. Nothing is sent until Send is pressed, and the chip shows who they would go to.
+    @Published private(set) var stagedFiles: [URL] = []
+    private var stagedStamp = Date.distantPast
+
+    /// Holds dropped files for sending. With a `chatID` that chat is opened first (a drop on a conversation). Folders are refused: Messages
+    /// sends files.
+    func stage(_ urls: [URL], chatID: Int64? = nil) {
+        var isFolder: ObjCBool = false
+        let files = urls.filter { $0.isFileURL && FileManager.default.fileExists(atPath: $0.path, isDirectory: &isFolder) && !isFolder.boolValue }
+        guard !files.isEmpty else {
+            if !urls.isEmpty { self.sendError = "Messages sends files, not folders. Zip the folder first." }
+            return
+        }
+        if let chatID { self.select(chatID) }
+        self.sendError = nil
+        for file in files where !self.stagedFiles.contains(file) { self.stagedFiles.append(file) }
+        self.stagedStamp = Date()
+        let stamp = self.stagedStamp
+        // A file left waiting for ten minutes is let go, so it can never be sent by a stray press much later.
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 600_000_000_000)
+            guard let self, self.stagedStamp == stamp else { return }
+            self.stagedFiles = []
+        }
+    }
+
+    func unstage(_ url: URL) {
+        self.stagedFiles.removeAll { $0 == url }
+    }
+
+    func clearStaged() {
+        self.stagedFiles = []
+    }
+
+    /// Sends the waiting files into the open chat, one after the other, then the typed text if there is any (so the order you see is the order they go).
+    func sendStaged(thenText text: String = "") {
+        guard !self.stagedFiles.isEmpty else { return }
+        guard self.newChat == nil, let chat = self.conversations.first(where: { $0.id == self.selectedChatID }) else {
+            self.sendError = "Open a chat to send the file to."
+            return
+        }
+        let files = self.stagedFiles
+        self.stagedFiles = []
+        self.deliverFiles(files, chatID: chat.id, chatGUID: chat.guid, thenText: text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// A file shows in the thread as "Attachment" (what Messages' own database calls a message with only a file), so the dimmed copy is replaced
+    /// by the real one when it arrives. A file only counts as sent once that happens; AppleScript saying nothing is not proof.
+    private func deliverFiles(_ files: [URL], chatID: Int64, chatGUID: String, thenText text: String) {
+        self.sendError = nil
+        // The first file shows at once, on this very tick, like a typed message; the rest show as their turn comes.
+        let firstTempID = self.addPending("Attachment", chatID: chatID)
+        Task {
+            for (index, url) in files.enumerated() {
+                let started = Date()
+                let tempID = index == 0 ? firstTempID : self.addPending("Attachment", chatID: chatID)
+                do {
+                    try await self.sendFileHandler(url, chatGUID)
+                } catch {
+                    self.sendError = error.localizedDescription
+                    self.removePending(tempID)
+                    return
+                }
+                self.markSeen(chatID)
+                var confirmed = false
+                for delay in [0.5, 1.0, 2.0, 4.0, 8.0] as [Double] {
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    self.refresh(announce: false)
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    if !self.pending.contains(where: { $0.tempID == tempID }) { confirmed = true; break }
+                }
+                if !confirmed {
+                    self.removePending(tempID)
+                    self.sendError = "Messages did not show \(url.lastPathComponent) as sent. Check the chat in Messages."
+                    return
+                }
+                self.watchForFailure(of: url.lastPathComponent, chatID: chatID, since: started)
+            }
+            if !text.isEmpty { self.deliver(text, chatID: chatID, chatGUID: chatGUID) }
+        }
+    }
+
+    /// Messages can take a file and still fail to deliver it, and says so a moment later (the message turns to "Not Delivered"). The thread is
+    /// watched for half a minute so that shows up here too, instead of looking like a success.
+    private func watchForFailure(of name: String, chatID: Int64, since: Date) {
+        Task {
+            for _ in 0..<12 {
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                self.refresh(announce: false)
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                if (self.threadCache[chatID] ?? []).contains(where: { $0.isFromMe && $0.failed && $0.date >= since.addingTimeInterval(-10) }) {
+                    self.sendError = "Messages couldn't deliver \(name). It shows as Not Delivered in the chat."
+                    return
+                }
             }
         }
     }

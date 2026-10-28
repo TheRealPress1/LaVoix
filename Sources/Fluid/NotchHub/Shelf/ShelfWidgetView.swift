@@ -102,13 +102,10 @@ private struct ShelfDropTarget: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         if self.enabled {
-            content.onDrop(of: [.fileURL], isTargeted: self.$targeted) { providers in
-                for provider in providers {
-                    _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                        guard let url else { return }
-                        Task { @MainActor in self.store.add([url]) }
-                    }
-                }
+            content.onDrop(of: [.fileURL, .image], isTargeted: self.$targeted) { providers in
+                // Files from Finder, or image data from a browser (saved to a file first).
+                let store = self.store
+                NotchDropLoader.load(providers) { urls in store.add(urls) }
                 return true
             }
         } else {

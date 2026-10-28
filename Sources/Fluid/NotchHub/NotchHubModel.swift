@@ -65,6 +65,28 @@ final class NotchHubModel: ObservableObject {
         }
     }
 
+    // MARK: - Dragging a file to the notch
+
+    /// True while a file is held over the open notch and no section has been chosen yet: the notch shows Shelf and iMessage side by side.
+    @Published private(set) var dropSplit = false
+    /// The half the pointer is over (it opens full size after `NotchDropSplitView.holdSeconds`).
+    @Published private(set) var dropHover: NotchDropTarget?
+
+    func beginDropSplit() {
+        self.dropHover = nil
+        self.dropSplit = true
+    }
+
+    func endDropSplit() {
+        self.dropHover = nil
+        self.dropSplit = false
+    }
+
+    func setDropHover(_ target: NotchDropTarget?) {
+        guard self.dropHover != target else { return }
+        self.dropHover = target
+    }
+
     func setBadge(_ id: String, _ count: Int) {
         guard self.badges[id] != count else { return }
         self.badges[id] = count
@@ -82,6 +104,7 @@ final class NotchHubModel: ObservableObject {
 
     /// The tab icons stay unfolded when the notch closes or a tab is picked: only the arrow in the header folds them.
     func close() {
+        self.endDropSplit()
         guard self.isOpen else { return }
         self.isOpen = false
     }

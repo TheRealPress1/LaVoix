@@ -2,6 +2,7 @@ import Contacts
 import CryptoKit
 import SQLite3
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// `LAVOIX_NOTCH_RENDER=<file.png>` renders the open notch to an image and exits. Used to check the design
 /// without needing screen-capture permission.
@@ -131,6 +132,24 @@ enum NotchHubDebug {
                 ])
                 model.selectedWidgetID = "messages"
                 model.setBadge("messages", 3)
+            } else if widgetName.hasPrefix("dropsplit") {
+                model = NotchHubModel(widgets: [
+                    NotchWidget(id: "shelf", title: "Shelf", systemImage: "tray.fill") { AnyView(EmptyView()) },
+                    NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") { AnyView(EmptyView()) },
+                ])
+                model.beginDropSplit()
+                if widgetName == "dropsplit-hover" { model.setDropHover(.messages) }
+            } else if widgetName == "staged-messages" {
+                let store = MessagesStore.sample(access: .granted)
+                let attachment = FileManager.default.temporaryDirectory.appendingPathComponent("Truist-Emblem.png")
+                try? Data([0x89, 0x50, 0x4E, 0x47]).write(to: attachment)
+                store.select(1)
+                store.stage([attachment])
+                model = NotchHubModel(widgets: [
+                    NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
+                    NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") { AnyView(MessagesWidgetView(store: store, staticLayout: true)) },
+                ])
+                model.selectedWidgetID = "messages"
             } else if widgetName.hasPrefix("people") {
                 let store = widgetName == "people-empty" ? PeopleStore() : PeopleStore.sample(full: widgetName == "people-full")
                 if widgetName == "people-empty" { store.refresh() }
@@ -869,6 +888,88 @@ enum NotchHubDebug {
             print("\(failing.thread.last?.text == "this will fail" ? "PASS" : "FAIL") a message shows immediately even if it will fail")
             try? await Task.sleep(nanoseconds: 300_000_000)
             print("\(failing.thread.last?.text != "this will fail" && failing.sendError != nil ? "PASS" : "FAIL") a failed send is removed and the error is shown")
+
+            // Files dropped on the notch: held until Send, then sent through a fake sender (nothing is ever really sent).
+            let dropDir = FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-drop-test-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: dropDir, withIntermediateDirectories: true)
+            let photo = dropDir.appendingPathComponent("photo.png")
+            try? Data([0x89, 0x50, 0x4E, 0x47]).write(to: photo)
+            let folder = dropDir.appendingPathComponent("a folder")
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let filer = MessagesStore.sample()
+            // The text that follows a file goes through the fake text sender too.
+            filer.sendHandler = { _, _ in }
+            var fileCalls: [String] = []
+            filer.sendFileHandler = { url, guid in
+                fileCalls.append("\(guid):\(url.lastPathComponent)")
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
+            filer.stage([photo], chatID: 3)
+            print("\(filer.stagedFiles == [photo] && filer.selectedChatID == 3 ? "PASS" : "FAIL") a file dropped on a conversation opens it and waits there")
+            filer.stage([folder])
+            print("\(filer.stagedFiles == [photo] && filer.sendError != nil ? "PASS" : "FAIL") a folder is refused with a reason and the waiting file stays")
+            filer.stage([photo])
+            print("\(filer.stagedFiles.count == 1 ? "PASS" : "FAIL") the same file dropped twice waits once")
+            print("\(fileCalls.isEmpty ? "PASS" : "FAIL") nothing is sent before Send is pressed")
+            filer.sendStaged(thenText: "here you go")
+            print("\(filer.stagedFiles.isEmpty && filer.thread.last?.text == "Attachment" && (filer.thread.last?.id ?? 0) < 0 ? "PASS" : "FAIL") pressing Send shows the file in the thread at once and empties the waiting list")
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            print("\(fileCalls == ["g3:photo.png"] ? "PASS" : "FAIL") the file went once to the right chat")
+            let realFile = ThreadMessage(id: 700, text: "Attachment", date: Date(), isFromMe: true, senderHandle: "")
+            let withFile = filer.thread.filter { $0.id > 0 } + [realFile]
+            filer.apply(conversations: filer.conversations, threads: [3: withFile], incoming: [], announce: false)
+            print("\(filer.thread.filter { $0.text == "Attachment" }.count == 1 && filer.thread.last?.id == 700 ? "PASS" : "FAIL") when Messages shows it, the real attachment replaces the dimmed one")
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            print("\(filer.thread.last?.text == "here you go" ? "PASS" : "FAIL") the typed text follows the file once the file is confirmed")
+
+            let brokenFiler = MessagesStore.sample()
+            brokenFiler.sendFileHandler = { _, _ in throw MessagesSender.SendError.failed("no file for you") }
+            brokenFiler.stage([photo], chatID: 3)
+            brokenFiler.sendStaged()
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            print("\(brokenFiler.thread.last?.text != "Attachment" && brokenFiler.sendError == "no file for you" ? "PASS" : "FAIL") a file Messages refuses is removed from the thread and the reason is shown")
+            print("\(MessagesSender.compiles(MessagesSender.fileScript(chatGUID: "iMessage;-;+15551230001", path: "/tmp/a \"b\" \\ c.png")) ? "PASS" : "FAIL") the AppleScript that sends a file compiles, with quotes and backslashes in the path")
+
+            // Where a file waits for Messages: the user temp folder, the one place outside ~/Pictures that Messages' own daemon may read.
+            let waiting = try? MessagesSender.stageCopy(of: photo)
+            let tempRoot = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path
+            print("\(waiting?.path.hasPrefix(tempRoot) == true && (try? Data(contentsOf: waiting ?? photo)) == (try? Data(contentsOf: photo)) ? "PASS" : "FAIL") a file waits in the user temp folder (where Messages' daemon may read), as a faithful copy")
+            print("\(waiting?.path.contains("Application Support") == false ? "PASS" : "FAIL") it does not wait under Application Support (Messages' daemon is refused there)")
+            // Messages takes a file and then fails to deliver it: the thread says so and the error is shown.
+            let failer = MessagesStore.sample()
+            failer.sendHandler = { _, _ in }
+            failer.sendFileHandler = { _, _ in }
+            failer.stage([photo], chatID: 3)
+            failer.sendStaged()
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            let badFile = ThreadMessage(id: 800, text: "Attachment", date: Date(), isFromMe: true, senderHandle: "", failed: true)
+            failer.apply(conversations: failer.conversations, threads: [3: failer.thread.filter { $0.id > 0 } + [badFile]], incoming: [], announce: false)
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            print("\(failer.sendError?.contains("Not Delivered") == true && failer.thread.last?.failed == true ? "PASS" : "FAIL") a file Messages could not deliver is reported, not counted as sent")
+
+            // The drop split: both halves, the hover, and back to normal when the notch closes.
+            let splitModel = NotchHubModel()
+            splitModel.beginDropSplit()
+            splitModel.setDropHover(.messages)
+            print("\(splitModel.dropSplit && splitModel.dropHover == .messages ? "PASS" : "FAIL") the split shows with the hovered half noted")
+            splitModel.open()
+            splitModel.close()
+            print("\(!splitModel.dropSplit && splitModel.dropHover == nil ? "PASS" : "FAIL") closing the notch ends the split")
+
+            // What a drop hands over: a file stays where it is, image data from a browser becomes a file.
+            let fileProvider = NSItemProvider(object: photo as NSURL)
+            let loadedFile: [URL] = await withCheckedContinuation { continuation in
+                NotchDropLoader.load([fileProvider]) { continuation.resume(returning: $0) }
+            }
+            print("\(loadedFile.map(\.path) == [photo.path] ? "PASS" : "FAIL") a dropped file is used where it is")
+            let pngBytes = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==") ?? Data()
+            let imageProvider = NSItemProvider(item: pngBytes as NSData, typeIdentifier: UTType.png.identifier)
+            imageProvider.suggestedName = "from the web"
+            let loadedImage: [URL] = await withCheckedContinuation { continuation in
+                NotchDropLoader.load([imageProvider]) { continuation.resume(returning: $0) }
+            }
+            print("\(loadedImage.count == 1 && loadedImage[0].lastPathComponent == "from the web.png" && (try? Data(contentsOf: loadedImage[0])) == pngBytes ? "PASS" : "FAIL") image data from a browser is saved as a file with its name and type")
+            try? FileManager.default.removeItem(at: dropDir)
 
             exit(0)
         }
