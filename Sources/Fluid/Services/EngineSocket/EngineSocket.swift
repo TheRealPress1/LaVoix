@@ -136,6 +136,8 @@ nonisolated enum EngineSocket {
     private static let lock = NSLock()
     /// One listener per socket path (the autotest serves a temp path while the app serves the real one).
     private nonisolated(unsafe) static var listeners: [String: Int32] = [:]
+    /// The file this process created for each path, so `stop` only removes its own socket (never one another process has since put there).
+    private nonisolated(unsafe) static var boundFiles: [String: UInt64] = [:]
 
     static func startIfEnabled() {
         // A test or render run is not the engine: it must never serve (or take) the engine's socket.
@@ -265,6 +267,8 @@ nonisolated enum EngineSocket {
         chmod(url.path, 0o600)
         guard listen(fd, 128) == 0 else { close(fd); unlink(url.path); return false }
         self.listeners[url.path] = fd
+        var made = stat()
+        if stat(url.path, &made) == 0 { self.boundFiles[url.path] = UInt64(made.st_ino) }
 
         DispatchQueue.global(qos: .utility).async {
             while true {
@@ -276,10 +280,15 @@ nonisolated enum EngineSocket {
         return true
     }
 
+    /// Closes this process's listener and removes the socket file IT made. A process that never bound the path (a second copy, a test) must not
+    /// delete the live engine's socket when it quits, and neither may one whose socket has since been replaced by another process's.
     static func stop(removing url: URL = EngineSocket.defaultURL) {
         self.lock.lock(); defer { self.lock.unlock() }
-        if let fd = self.listeners.removeValue(forKey: url.path) { close(fd) }
-        unlink(url.path)
+        guard let fd = self.listeners.removeValue(forKey: url.path) else { return }
+        close(fd)
+        let mine = self.boundFiles.removeValue(forKey: url.path)
+        var now = stat()
+        if let mine, stat(url.path, &now) == 0, UInt64(now.st_ino) == mine { unlink(url.path) }
     }
 
     private static func serve(client: Int32, services: Services) {
@@ -1324,6 +1333,8 @@ nonisolated enum EngineSocketAutotest {
             check("no file means nobody owns the path", EngineSocket.owner(of: ownedPath.path) == .none)
             if let live = RawOwner(path: ownedPath.path, answers: true) {
                 check("a live owner is recognised by its answer", EngineSocket.owner(of: ownedPath.path) == .answering)
+                EngineSocket.stop(removing: ownedURL)
+                check("stopping a socket this process never bound leaves the owner's socket alone", EngineSocket.owner(of: ownedPath.path) == .answering)
                 check("a second process does not take a live engine's socket", EngineSocket.start(at: ownedURL, services: services) == false)
                 check("...and the live engine still answers afterwards", EngineSocket.owner(of: ownedPath.path) == .answering)
                 live.close()

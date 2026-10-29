@@ -12,6 +12,8 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     func loadForDisplay(id: MeetingSessionID) async throws -> MeetingSession?
     func loadAllForDisplay() async throws -> [MeetingSession]
     func loadRecoverable() async throws -> [MeetingSession]
+    /// Sessions whose recording or processing another process is carrying on right now (it holds the session's ownership lock).
+    func sessionIDsOwnedByAnotherProcess() async -> [MeetingSessionID]
     func sessionDirectory(for id: MeetingSessionID) async throws -> URL
     func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL?
     func delete(id: MeetingSessionID) async throws
@@ -21,8 +23,63 @@ nonisolated protocol MeetingSessionStoring: Sendable {
 }
 
 extension MeetingSessionStoring {
+    func sessionIDsOwnedByAnotherProcess() async -> [MeetingSessionID] { [] }
     func loadForDisplay(id: MeetingSessionID) async throws -> MeetingSession? { try await self.load(id: id) }
     func loadAllForDisplay() async throws -> [MeetingSession] { try await self.loadAll() }
+}
+
+/// Which process is carrying a session on right now. The process that records (or processes) a session holds an exclusive OS lock on
+/// `<session>/owner.lock` for as long as the session is live, and writes its pid into the file. The kernel drops the lock the moment that process
+/// dies, however it dies, so:
+///  - another process (a second copy of the app, or the engine next to a recorder helper) can tell a live recording from a dead one exactly, with
+///    no guessing from file times, and must leave a live one alone (restoring it would rewrite a healthy recording as "interrupted");
+///  - after a crash the lock is free at once, so recovery needs no waiting.
+/// The pid lets a second store object inside the same process (a relaunch simulated in a test) see the lock as its own.
+nonisolated final class MeetingSessionOwnership: @unchecked Sendable {
+    static let fileName = "owner.lock"
+    private let lock = NSLock()
+    private var held: [MeetingSessionID: Int32] = [:]
+
+    /// Takes the lock for a live session. Does nothing if another process already holds it (two writers must never fight over one session).
+    func acquire(_ id: MeetingSessionID, directory: URL) {
+        self.lock.lock(); defer { self.lock.unlock() }
+        guard self.held[id] == nil else { return }
+        let fd = open(directory.appendingPathComponent(Self.fileName).path, O_CREAT | O_RDWR, 0o600)
+        guard fd >= 0 else { return }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { close(fd); return }
+        let pid = "\(getpid())\n"
+        ftruncate(fd, 0)
+        _ = pid.withCString { write(fd, $0, strlen($0)) }
+        self.held[id] = fd
+    }
+
+    func release(_ id: MeetingSessionID) {
+        self.lock.lock(); defer { self.lock.unlock() }
+        guard let fd = self.held.removeValue(forKey: id) else { return }
+        flock(fd, LOCK_UN)
+        close(fd)
+    }
+
+    /// True when a DIFFERENT process holds the lock.
+    func isHeldByAnotherProcess(_ id: MeetingSessionID, directory: URL) -> Bool {
+        self.lock.lock(); defer { self.lock.unlock() }
+        if self.held[id] != nil { return false }
+        let fd = open(directory.appendingPathComponent(Self.fileName).path, O_RDONLY)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        if flock(fd, LOCK_SH | LOCK_NB) == 0 {
+            flock(fd, LOCK_UN)
+            return false
+        }
+        var buffer = [UInt8](repeating: 0, count: 32)
+        let count = read(fd, &buffer, 31)
+        if count > 0, let text = String(bytes: buffer[0 ..< count], encoding: .utf8),
+           Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)) == getpid()
+        {
+            return false
+        }
+        return true
+    }
 }
 
 private final nonisolated class MeetingSessionFileSystem: @unchecked Sendable {
@@ -49,6 +106,25 @@ actor MeetingSessionStore: MeetingSessionStoring {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private var tombstonedIDs: Set<MeetingSessionID> = []
+    private let ownership = MeetingSessionOwnership()
+
+    /// A session being recorded or processed is held by the process doing it; a finished, interrupted or failed one is let go.
+    private func syncOwnership(_ session: MeetingSession) {
+        switch session.state {
+        case .preparing, .recording, .recordingDegraded, .stopping, .processing:
+            self.ownership.acquire(session.id, directory: self.sessionDirectoryURL(for: session.id))
+        case .interrupted, .failed, .completed:
+            self.ownership.release(session.id)
+        }
+    }
+
+    // `async` on purpose, matching the protocol: a synchronous twin next to the protocol's async default makes Swift pick the default (an empty
+    // list) whenever a caller holds the concrete store inside an async function.
+    func sessionIDsOwnedByAnotherProcess() async -> [MeetingSessionID] {
+        ((try? self.discoverSessionIDs()) ?? []).filter {
+            self.ownership.isHeldByAnotherProcess($0, directory: self.sessionDirectoryURL(for: $0))
+        }
+    }
 
     init(rootDirectory: URL? = nil, fileManager: FileManager = .default) {
         self.fileSystem = MeetingSessionFileSystem(manager: fileManager)
@@ -89,6 +165,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
         try self.createPrivateDirectory(directory.appendingPathComponent("tracks", isDirectory: true))
         try self.writeSession(session)
         try self.addToIndex(session.id)
+        self.syncOwnership(session)
     }
 
     func save(_ session: MeetingSession) throws {
@@ -104,6 +181,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
         }
         try self.writeSession(session)
         try self.addToIndex(session.id)
+        self.syncOwnership(session)
     }
 
     func load(id: MeetingSessionID) throws -> MeetingSession? {
@@ -158,6 +236,8 @@ actor MeetingSessionStore: MeetingSessionStoring {
     func loadRecoverable() throws -> [MeetingSession] {
         try self.loadAll().filter {
             guard $0.recoveryResolvedAt == nil, $0.retention.audioDeletedAt == nil else { return false }
+            // A session another process is recording or processing right now is not "recoverable": it is not broken.
+            guard !self.ownership.isHeldByAnotherProcess($0.id, directory: self.sessionDirectoryURL(for: $0.id)) else { return false }
             switch $0.state {
             case .preparing, .recording, .recordingDegraded, .stopping, .processing, .interrupted:
                 return true
@@ -194,6 +274,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
     }
 
     func delete(id: MeetingSessionID) throws {
+        self.ownership.release(id)
         self.tombstonedIDs.insert(id)
         let directory = self.sessionDirectoryURL(for: id)
         if self.fileSystem.manager.fileExists(atPath: directory.path) {

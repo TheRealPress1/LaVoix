@@ -10,10 +10,8 @@
 		D63B0F8456B440F1A123B987 /* PronunciationModelRevisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */; };
 		5D4A9F54826FD6BB32CE13F8 /* SpeechModelInstallationSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D47EF42AC1B641A705AC302 /* SpeechModelInstallationSnapshotTests.swift */; };
 		B51B7EE5BA8CE09BC09A47DB /* ProgressiveFileDownloaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70362FCD2F941BFB800AD8E8 /* ProgressiveFileDownloaderTests.swift */; };
-		9F12D6C37B0166B549AECB61 /* ParakeetCompactModelDemoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16DE344948E4DBF0E1739769 /* ParakeetCompactModelDemoTests.swift */; };
 		209C92C604F912C74A733D21 /* ParakeetCompactModelSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9A7E0C9B501E87114F7A88 /* ParakeetCompactModelSmokeTests.swift */; };
 		67F6BBBA604C996A20BEE7AC /* ParakeetArchiveDownloaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3398800F76A93226E76A5C9 /* ParakeetArchiveDownloaderTests.swift */; };
-		EA91B858DDC9E68655DCA343 /* ParakeetSpeechModelCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BF00D40A027DC3970C2D0AE /* ParakeetSpeechModelCatalogTests.swift */; };
 		24AFD1DFC6BFC9DB5BC6329B /* UpdateRollbackBackupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91C92FF93D3D21E0FD4D93EE /* UpdateRollbackBackupTests.swift */; };
 		563881F82B15C86EDB50E198 /* UpdateInstallationPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12B5FA911AD928DAFD058FB /* UpdateInstallationPipelineTests.swift */; };
 		7EAA9E7C4E4155A44F9CC415 /* UpdateAppReplacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E4FCA0BC854678A142D944F /* UpdateAppReplacementTests.swift */; };
@@ -38,7 +36,6 @@
 		A1C0DE000000000000000025 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = A1C0DE000000000000000015 /* Tokenizers */; };
 		7C91B0012F42AA0100C0DEF0 /* HotkeyShortcutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */; };
 		DAB600000000000000000001 /* DashboardLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAB600000000000000000002 /* DashboardLayoutTests.swift */; };
-		FEB700000000000000000001 /* FeedbackClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEB700000000000000000002 /* FeedbackClientTests.swift */; };
 		7C91B0A12F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C91B0A22F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift */; };
 		C0DE89000000000000000002 /* SettingsNavigationStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE89000000000000000001 /* SettingsNavigationStateTests.swift */; };
 		7CDB0A2D2F3C4D5600FB7CAD /* DictationE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */; };
@@ -250,7 +247,6 @@
 		7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "FluidVoice Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyShortcutTests.swift; sourceTree = "<group>"; };
 		DAB600000000000000000002 /* DashboardLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLayoutTests.swift; sourceTree = "<group>"; };
-		FEB700000000000000000002 /* FeedbackClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedbackClientTests.swift; sourceTree = "<group>"; };
 		7C91B0A22F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeliveryTargetAssessmentTests.swift; sourceTree = "<group>"; };
 		C0DE89000000000000000001 /* SettingsNavigationStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsNavigationStateTests.swift; sourceTree = "<group>"; };
 		7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluidDictationIntegrationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -425,7 +421,6 @@
 				CD1C7A0000000000000000B1 /* CustomDictionaryManualEntryTests.swift */,
 				7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */,
 				DAB600000000000000000002 /* DashboardLayoutTests.swift */,
-				FEB700000000000000000002 /* FeedbackClientTests.swift */,
 				7C91B0A22F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift */,
 				C0DE89000000000000000001 /* SettingsNavigationStateTests.swift */,
 				343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */,
@@ -794,18 +789,15 @@
 				5D4A9F54826FD6BB32CE13F8 /* SpeechModelInstallationSnapshotTests.swift in Sources */,
 				B51B7EE5BA8CE09BC09A47DB /* ProgressiveFileDownloaderTests.swift in Sources */,
 				D63B0F8456B440F1A123B987 /* PronunciationModelRevisionTests.swift in Sources */,
-				9F12D6C37B0166B549AECB61 /* ParakeetCompactModelDemoTests.swift in Sources */,
 				209C92C604F912C74A733D21 /* ParakeetCompactModelSmokeTests.swift in Sources */,
 				67F6BBBA604C996A20BEE7AC /* ParakeetArchiveDownloaderTests.swift in Sources */,
 				640AB09C7781553DF72D1156 /* CompactSpeechModelArchiveTransportTests.swift in Sources */,
 				C093F64545C6FDD2D79BF559 /* ParakeetArchiveInstallerTests.swift in Sources */,
-				EA91B858DDC9E68655DCA343 /* ParakeetSpeechModelCatalogTests.swift in Sources */,
 				7CDB0A2D2F3C4D5600FB7CAD /* DictationE2ETests.swift in Sources */,
 				B52000000000000000000002 /* PrivateAIDictationTokenBudgetTests.swift in Sources */,
 				CD1C7A0000000000000000B2 /* CustomDictionaryManualEntryTests.swift in Sources */,
 				7C91B0012F42AA0100C0DEF0 /* HotkeyShortcutTests.swift in Sources */,
 				DAB600000000000000000001 /* DashboardLayoutTests.swift in Sources */,
-				FEB700000000000000000001 /* FeedbackClientTests.swift in Sources */,
 				7C91B0A12F42AA0100C0DEF0 /* DeliveryTargetAssessmentTests.swift in Sources */,
 				C0DE89000000000000000002 /* SettingsNavigationStateTests.swift in Sources */,
 				86CAA2D4EF18433096185602 /* LLMClientRequestBodyTests.swift in Sources */,
@@ -1085,6 +1077,7 @@
 				MARKETING_VERSION = "1.6.10-beta.8";
 				PRODUCT_BUNDLE_IDENTIFIER = com.lavoix.app;
 				PRODUCT_NAME = LaVoix;
+				PRODUCT_MODULE_NAME = FluidVoice_Debug;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -1159,7 +1152,7 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ARCHS = "$(ARCHS_STANDARD)";
-				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidVoice Debug.app/Contents/MacOS/FluidVoice Debug";
+				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/LaVoix.app/Contents/MacOS/LaVoix";
 				CLANG_ENABLE_MODULES = YES;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -1175,7 +1168,7 @@
 				PRODUCT_NAME = FluidDictationIntegrationTests;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidVoice Debug.app/Contents/MacOS/FluidVoice Debug";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LaVoix.app/Contents/MacOS/LaVoix";
 			};
 			name = Debug;
 		};

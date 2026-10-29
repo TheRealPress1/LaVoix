@@ -1342,6 +1342,121 @@ final class MeetingRecoveryTests: XCTestCase {
         return (session, speakerA.id, speakerB.id, segment.id)
     }
 
+    // MARK: - Ownership: a meeting another process is carrying on is left alone
+
+    /// Another process holding a session's ownership lock, the way a recorder helper would while it records.
+    private func startForeignOwner(of sessionDirectory: URL, seconds: Int) throws -> Process {
+        let script = """
+        import fcntl, os, sys, time
+        fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.ftruncate(fd, 0); os.write(fd, (str(os.getpid()) + "\\n").encode())
+        print("held", flush=True)
+        time.sleep(float(sys.argv[2]))
+        """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = ["-I", "-c", script, sessionDirectory.appendingPathComponent(MeetingSessionOwnership.fileName).path, String(seconds)]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        _ = pipe.fileHandleForReading.availableData // returns once the lock is held
+        return process
+    }
+
+    /// Whether a different process could take the session's lock right now (true = nobody holds it).
+    private func anotherProcessCanTakeTheLock(of sessionDirectory: URL) throws -> Bool {
+        let script = "import fcntl, os, sys\nfd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o600)\ntry:\n    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\nexcept OSError:\n    sys.exit(1)\n"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = ["-I", "-c", script, sessionDirectory.appendingPathComponent(MeetingSessionOwnership.fileName).path]
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+    }
+
+    func testRestoreLeavesAMeetingThatAnotherProcessIsCarryingOnAlone() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let now = Date()
+        let session = self.makeSession(
+            state: .interrupted,
+            startedAt: now.addingTimeInterval(-600),
+            endedAt: now.addingTimeInterval(-590),
+            audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
+        )
+        try await store.create(session)
+        let sessionDirectory = try await store.sessionDirectory(for: session.id)
+
+        let owner = try self.startForeignOwner(of: sessionDirectory, seconds: 30)
+        defer { if owner.isRunning { owner.terminate() } }
+        let owned = await store.sessionIDsOwnedByAnotherProcess()
+        XCTAssertEqual(owned, [session.id], "A lock held by another process must be seen as that process still working on the session")
+        let hidden = try await store.loadRecoverable()
+        XCTAssertFalse(hidden.contains { $0.id == session.id }, "A meeting another process is recording is not broken, so it is not recoverable")
+
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+        await coordinator.ensureRestored()
+        XCTAssertNil(coordinator.activeSession, "Restore must not take over, or rewrite, a meeting someone else is carrying on")
+        let untouched = try await store.load(id: session.id)
+        XCTAssertEqual(untouched?.events.count, session.events.count)
+        XCTAssertTrue(untouched?.processingAttempts.isEmpty == true)
+
+        // That process dies (however it dies, the kernel drops its lock): the meeting is now recoverable at once.
+        owner.terminate()
+        owner.waitUntilExit()
+        let nowOwned = await store.sessionIDsOwnedByAnotherProcess()
+        XCTAssertTrue(nowOwned.isEmpty)
+        let recoverable = try await store.loadRecoverable()
+        XCTAssertTrue(recoverable.contains { $0.id == session.id }, "After the owner dies the meeting must be recoverable straight away")
+    }
+
+    func testAnotherStoreInTheSameProcessDoesNotHideALiveMeetingFromRestore() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let first = MeetingSessionStore(rootDirectory: dir)
+        let live = self.makeSession(
+            state: .recording,
+            startedAt: Date(timeIntervalSinceNow: -600),
+            audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
+        )
+        try await first.create(live)
+        // The store holds the lock for a live meeting, from this process.
+        let sessionDirectory = try await first.sessionDirectory(for: live.id)
+        XCTAssertFalse(try self.anotherProcessCanTakeTheLock(of: sessionDirectory), "A live meeting's lock must be held while it is live")
+        // A second store object in this same process (a relaunch simulated in a test) sees the lock as its own.
+        let second = MeetingSessionStore(rootDirectory: dir)
+        let owned = await second.sessionIDsOwnedByAnotherProcess()
+        XCTAssertTrue(owned.isEmpty)
+        let recoverable = try await second.loadRecoverable()
+        XCTAssertTrue(recoverable.contains { $0.id == live.id })
+    }
+
+    func testAMeetingThatEndsLetsGoOfItsOwnershipLock() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        var session = self.makeSession(
+            state: .recording,
+            startedAt: Date(timeIntervalSinceNow: -600),
+            audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])]
+        )
+        try await store.create(session)
+        let sessionDirectory = try await store.sessionDirectory(for: session.id)
+        XCTAssertFalse(try self.anotherProcessCanTakeTheLock(of: sessionDirectory))
+        for next in [MeetingSessionState.stopping, .processing] {
+            session.state = next
+            try await store.save(session)
+            XCTAssertFalse(try self.anotherProcessCanTakeTheLock(of: sessionDirectory), "Still live while \(next)")
+        }
+        session.state = .completed
+        try await store.save(session)
+        XCTAssertTrue(try self.anotherProcessCanTakeTheLock(of: sessionDirectory), "A finished meeting must release its lock")
+    }
+
     // MARK: - Test 1: loadRecoverable classification
 
     func testLoadRecoverableClassification() async throws {

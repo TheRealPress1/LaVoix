@@ -8,8 +8,9 @@ nonisolated enum MeetingDetectionTier: Sendable, Equatable {
 }
 
 /// Static, data-driven table of the apps the auto-detector watches. Every ambiguity resolves to
-/// "not in the registry" — Slack, Discord, FaceTime and generic browsers-without-a-known-meeting-URL
-/// are deliberately absent (see Phase A plan: dropped from v1).
+/// "not in the registry" — Slack, Discord and generic browsers-without-a-known-meeting-URL are
+/// deliberately absent (see Phase A plan: dropped from v1). FaceTime was added later, once a probe of a
+/// real call showed how its audio is attributed (see `faceTimeAudioHelperPath`).
 nonisolated enum MeetingAppRegistry {
     /// Bundle identifiers for native meeting apps (Tier 1). Includes legacy Teams alongside the
     /// current "new Teams" bundle since both ship in the wild.
@@ -19,7 +20,13 @@ nonisolated enum MeetingAppRegistry {
         "com.microsoft.teams",
         "com.cisco.webexmeetingsapp",
         "Cisco-Systems.Spark",
+        "com.apple.FaceTime",
     ]
+
+    static let faceTimeBundleIdentifier = "com.apple.FaceTime"
+    /// FaceTime does not hold the microphone itself. In a probe of a real call (2026-10-29) the FaceTime app had only audio OUTPUT running, while
+    /// the system helper `avconferenced` had both input and output running. While FaceTime is running, that helper's audio is FaceTime's.
+    static let faceTimeAudioHelperPath = "/usr/libexec/avconferenced"
 
     /// Bundle identifiers for browsers eligible for Tier 2 URL reading. Google Meet's "app" is a
     /// Chrome/Edge PWA, not a separate bundle — it is matched via `pwaBundlePrefixes` instead.

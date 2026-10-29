@@ -8,7 +8,9 @@ enum DiagnosticRun {
     private static let suffixes = ["_AUTOTEST", "_E2E", "_SELFTEST", "_PROBE", "_TEST"]
 
     static func isDiagnostic(environment: [String: String]) -> Bool {
-        environment.contains { key, value in
+        // The app started by Xcode as a test host is a second copy of the app too.
+        if environment["XCTestConfigurationFilePath"] != nil || environment["XCTestBundlePath"] != nil { return true }
+        return environment.contains { key, value in
             guard key.hasPrefix("LAVOIX_"), !value.isEmpty, value != "0" else { return false }
             return self.suffixes.contains { key.hasSuffix($0) } || key == "LAVOIX_NOTCH_RENDER" || key == "LAVOIX_EVAL" || key.hasPrefix("LAVOIX_ATTACH_")
         }

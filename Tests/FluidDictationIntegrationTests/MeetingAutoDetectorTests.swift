@@ -1210,7 +1210,36 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(MeetingAppRegistry.tier(forBundleIdentifier: "com.google.Chrome"), .browserTier2)
         XCTAssertEqual(MeetingAppRegistry.tier(forBundleIdentifier: "com.google.Chrome.app.abcdef"), .browserTier2)
         XCTAssertNil(MeetingAppRegistry.tier(forBundleIdentifier: "com.tinyspeck.slackmacgap"))
-        XCTAssertNil(MeetingAppRegistry.tier(forBundleIdentifier: "com.apple.FaceTime"))
+        // FaceTime joined the registry once a probe of a real call showed how its audio is attributed (see the resolver tests below).
+        XCTAssertEqual(MeetingAppRegistry.tier(forBundleIdentifier: "com.apple.FaceTime"), .nativeTier1)
+    }
+
+    // MARK: - FaceTime (audio is held by the avconferenced helper, as seen in a probe of a real call on 2026-10-29)
+
+    private func faceTimeSnapshot(helperInput: Bool, helperOutput: Bool = true, faceTimeRunning: Bool = true) -> AudioProcessActivitySnapshot {
+        .init(
+            processes: [
+                .init(processID: 799, bundleIdentifier: "com.apple.avconferenced", executablePath: MeetingAppRegistry.faceTimeAudioHelperPath, isInputRunning: helperInput, isOutputRunning: helperOutput),
+                .init(processID: 700, bundleIdentifier: "com.apple.FaceTime", executablePath: "/System/Applications/FaceTime.app/Contents/MacOS/FaceTime", isInputRunning: false, isOutputRunning: true),
+            ],
+            owners: faceTimeRunning ? [.init(processID: 700, bundleIdentifier: "com.apple.FaceTime", bundlePath: "/System/Applications/FaceTime.app")] : [],
+            queryState: .valid
+        )
+    }
+
+    func testFaceTimeCallAudioHeldByTheHelperCountsAsFaceTimeInput() {
+        let result = MeetingAudioProcessResolver.activeOwnerInputByPID(snapshot: self.faceTimeSnapshot(helperInput: true))
+        XCTAssertEqual(result, [700: true], "The helper's microphone must be credited to the running FaceTime app")
+    }
+
+    func testFaceTimeHelperWithoutMicrophoneInputIsNotACallYet() {
+        let result = MeetingAudioProcessResolver.activeOwnerInputByPID(snapshot: self.faceTimeSnapshot(helperInput: false))
+        XCTAssertEqual(result, [700: false], "Output alone (the FaceTime app itself playing sound) is not a call")
+    }
+
+    func testTheFaceTimeHelperIsIgnoredWhenFaceTimeIsNotRunning() {
+        let result = MeetingAudioProcessResolver.activeOwnerInputByPID(snapshot: self.faceTimeSnapshot(helperInput: true, faceTimeRunning: false))
+        XCTAssertEqual(result, [:], "Without the FaceTime app running, the helper's audio belongs to no registered app")
     }
 
     func testInCallURLMatcherAcceptsRoomsAndRejectsLandingPages() {

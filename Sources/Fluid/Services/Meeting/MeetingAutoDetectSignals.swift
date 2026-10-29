@@ -94,6 +94,15 @@ nonisolated enum MeetingAudioProcessResolver {
         var matches: [Int32: Bool] = [:]
         for process in snapshot.processes where process.isInputRunning || process.isOutputRunning {
             guard let path = canonicalPath(process.executablePath), process.processID > 0 else { return nil }
+            // FaceTime's call audio runs in a system helper, not in the app: while FaceTime is running, the helper's audio is FaceTime's.
+            if path == MeetingAppRegistry.faceTimeAudioHelperPath {
+                if let faceTime = snapshot.owners.first(where: {
+                    $0.bundleIdentifier == MeetingAppRegistry.faceTimeBundleIdentifier && $0.processID > 0
+                }) {
+                    matches[faceTime.processID] = (matches[faceTime.processID] ?? false) || process.isInputRunning
+                }
+                continue
+            }
             let candidates = snapshot.owners.filter { owner in
                 guard MeetingAppRegistry.isNativeMeetingApp(bundleIdentifier: owner.bundleIdentifier),
                       let ownerPath = canonicalPath(owner.bundlePath), ownerPath.hasSuffix(".app")

@@ -511,9 +511,18 @@ final class NotchMeetingCardController {
             if let session = self.coordinator?.latestCompletedSession { MeetingAutoAnalysis.shared.start(session: session) }
             self.scheduleDismiss(after: 60)
         case .interrupted:
-            self.model.phase = .failed("Recording was interrupted. Your audio is saved.")
-            self.wantsVisible = true
-            self.scheduleDismiss(after: 25)
+            if let session = self.coordinator?.activeSession, Self.callSourceEnded(session) {
+                // The call's window or app went away: that is how every call ends, not a fault. The audio is already saved, so finish like a
+                // normal stop (transcribe, then the usual notes) and say so, instead of showing a warning.
+                self.model.endedAt = session.endedAt ?? Date()
+                self.model.phase = .processing
+                self.wantsVisible = true
+                self.finishEndedCall()
+            } else {
+                self.model.phase = .failed("Recording was interrupted. Your audio is saved.")
+                self.wantsVisible = true
+                self.scheduleDismiss(after: 25)
+            }
         case let .failed(_, failure):
             self.model.phase = .failed(failure.message)
             self.wantsVisible = true
@@ -723,6 +732,31 @@ final class NotchMeetingCardController {
     }
 
     /// What myOS shows while a meeting is recording: the running time and the latest live captions. Read-only.
+    /// True when the recording stopped because what it was capturing went away (the call's window or app closed), and the saved audio can be processed.
+    nonisolated static func callSourceEnded(_ session: MeetingSession) -> Bool {
+        session.events.contains { $0.kind == .sourceLost } && session.hasRetryableAudio
+    }
+
+    /// Waits for the recorder to settle (it hands the audio devices back first), then processes the saved audio as a normal stop would. If that
+    /// cannot be done, the usual warning is shown instead.
+    private func finishEndedCall() {
+        Task { @MainActor [weak self] in
+            for _ in 0 ..< 150 {
+                if self?.coordinator?.isQuiescent == true { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard let self, let coordinator = self.coordinator else { return }
+            do {
+                _ = try await coordinator.retryProcessing()
+            } catch {
+                DebugLogger.shared.info("Ended call could not be processed automatically: \(error)", source: "NotchMeetingCard")
+                self.model.phase = .failed("Recording was interrupted. Your audio is saved.")
+                self.wantsVisible = true
+                self.scheduleDismiss(after: 25)
+            }
+        }
+    }
+
     var engineCoordinator: MeetingSessionCoordinator? { self.coordinator }
 
     /// Starts a recording on behalf of myOS. The recording strip and the rest of the flow follow from the coordinator's state,

@@ -1315,6 +1315,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         await task.value
     }
 
+    private var deferredRestoreTask: Task<Void, Never>?
+
     private func restoreRecoverableSessionIfNeeded() async {
         guard self.activeSession == nil else { return }
         let recoverable: [MeetingSession]
@@ -1324,6 +1326,17 @@ final class MeetingSessionCoordinator: ObservableObject {
             DebugLogger.shared.log("Meeting recovery scan failed; will retry next ensureRestored: \(error)")
             self.restoreTask = nil
             return
+        }
+        // A meeting that another process is still recording or processing is left alone (it is not broken). If that process dies its lock is
+        // released at once, so look again in a little while.
+        if !(await self.store.sessionIDsOwnedByAnotherProcess()).isEmpty, self.deferredRestoreTask == nil {
+            self.deferredRestoreTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                self.deferredRestoreTask = nil
+                self.restoreTask = nil
+                await self.ensureRestored()
+            }
         }
         guard !recoverable.isEmpty else { return }
 

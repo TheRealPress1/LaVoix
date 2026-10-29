@@ -15,6 +15,7 @@
 //
 
 import Combine
+import CoreGraphics
 import Foundation
 
 /// Centralized container for app-wide services.
@@ -217,6 +218,18 @@ final class AppServices: ObservableObject {
         }
     }
 
+    /// "FT w/ Name" when the call window carries the person's name (a one-to-one call's window is titled with who you are talking to), else "FT call".
+    /// The window title is read here only to name the recording; it is never logged.
+    nonisolated static func faceTimeCallTitle(processID: Int32, windowID: UInt32?) -> String {
+        guard let windowID,
+              let windows = CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(windowID)) as? [[String: Any]],
+              let window = windows.first(where: { ($0[kCGWindowNumber as String] as? UInt32) == windowID && ($0[kCGWindowOwnerPID as String] as? Int32) == processID }),
+              let name = (window[kCGWindowName as String] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !name.isEmpty, name.caseInsensitiveCompare("FaceTime") != .orderedSame
+        else { return "FT call" }
+        return "FT w/ \(name)"
+    }
+
     private func startAutoDetectedRecording(episodeID: UUID) async throws {
         guard let detector = self._meetingAutoDetector,
               let target = detector.resolvedTarget(for: episodeID),
@@ -225,9 +238,12 @@ final class AppServices: ObservableObject {
             throw MeetingAutoDetector.StartError.cannotStart
         }
         let coordinator = self.meetingSessionCoordinator
+        let title = target.bundleIdentifier == MeetingAppRegistry.faceTimeBundleIdentifier
+            ? Self.faceTimeCallTitle(processID: target.pid, windowID: target.windowID)
+            : MeetingTranscriptionSetupDraft.defaultTitle(mode: .onlineCall, applicationDisplayName: nil)
         let configuration = try await coordinator.defaultConfiguration(
             mode: .onlineCall,
-            title: MeetingTranscriptionSetupDraft.defaultTitle(mode: .onlineCall, applicationDisplayName: nil),
+            title: title,
             preferredBundleIdentifier: target.bundleIdentifier,
             preferredWindowID: target.windowID,
             requirePreferredApplication: true

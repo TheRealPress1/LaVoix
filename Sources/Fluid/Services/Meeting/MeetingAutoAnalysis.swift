@@ -36,7 +36,14 @@ final class MeetingAutoAnalysis: ObservableObject {
         self.task?.cancel()
         self.status = .writing("Writing notes…")
         self.task = Task { [weak self] in
-            await self?.run(session: session)
+            // Right after a call ends, the meeting's transcription may still hold the speech engine for a few seconds ("Wait for the active ... to
+            // finish"). That is a wait, not a failure: try again shortly instead of leaving the notes unwritten.
+            for _ in 0 ..< 9 {
+                await self?.run(session: session)
+                guard let self, !Task.isCancelled, case let .failed(message) = self.status, message.hasPrefix("Wait for the active") else { return }
+                self.status = .writing("Waiting for the transcript to finish…")
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            }
         }
     }
 

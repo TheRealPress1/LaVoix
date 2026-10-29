@@ -766,9 +766,12 @@ struct ContentView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             DebugLogger.shared.info("🚦 Startup delay complete, signaling UI ready...", source: "ContentView")
             self.appServices.signalUIReady()
-            self.menuBarManager.configure(
-                meetingCoordinator: self.appServices.meetingSessionCoordinator
-            )
+            // A test or render run must not create the meeting coordinator: creating it scans (and used to rewrite) the real meetings.
+            if !DiagnosticRun.isActive {
+                self.menuBarManager.configure(
+                    meetingCoordinator: self.appServices.meetingSessionCoordinator
+                )
+            }
 
             Task { @MainActor in
                 await AudioStartupGate.shared.scheduleOpenAfterInitialUISettled()
