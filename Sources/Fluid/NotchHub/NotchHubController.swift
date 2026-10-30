@@ -102,6 +102,9 @@ final class NotchHubController {
         }
         // Clicks delivered to this app while the notch is open: says which window and view took them.
         self.localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
+            // The notch only takes the keyboard when told to, and a click on a text field in a window that cannot be the key window never focuses it: the
+            // first click must make the window key before the field sees it, or typing goes nowhere until a second click happens to work.
+            if let self, self.clickIsOnTextField(event), !(self.window?.isKeyWindow ?? false) { self.beginTextEntry() }
             self?.noteClickInsideApp(event)
             // The title's arrow is handled here, not left to the SwiftUI button: a click that also made the notch the key window (and
             // moved the focus into a text field) was often used up by that, so it took a second click to unfold the tab icons.
@@ -689,6 +692,17 @@ final class NotchHubController {
         self.model.tabsExpanded.toggle()
         DebugLogger.shared.info("Tabs \(self.model.tabsExpanded ? "unfolded" : "folded") by a click on the title", source: "NotchHub")
         return true
+    }
+
+    /// True when the click landed on a text field (or its editor) of the notch window.
+    private func clickIsOnTextField(_ event: NSEvent) -> Bool {
+        guard let window = self.window, event.window === window, self.model.isOpen || self.model.banner != nil,
+              var view = window.contentView?.hitTest(event.locationInWindow) else { return false }
+        while true {
+            if view is NSTextField || view is NSTextView { return true }
+            guard let parent = view.superview else { return false }
+            view = parent
+        }
     }
 
     private func noteClickInsideApp(_ event: NSEvent) {
