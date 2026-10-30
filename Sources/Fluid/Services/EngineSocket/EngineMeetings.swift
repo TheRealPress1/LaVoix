@@ -261,21 +261,23 @@ nonisolated struct LiveEngineMeetings: EngineMeetingsProviding {
             if auto { _ = emit(["event": "skipped", "reason": "no transcript"]); return }
             throw EngineMeetingsError.noTranscript
         }
+        let marker = directory.appendingPathComponent("auto-notes-attempted")
         if auto {
             let hasSummary = FileManager.default.fileExists(atPath: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json").path)
-            let marker = directory.appendingPathComponent("auto-notes-attempted")
             let enabled = await MainActor.run { SettingsStore.shared.meetingAutoNotesEnabled }
             let recent = session.endedAt.map { Date().timeIntervalSince($0) < MeetingNotesViewModel.autoNotesMaxAge } ?? false
             guard enabled, kind == .executive, !hasSummary, session.state == .completed, recent,
                   !FileManager.default.fileExists(atPath: marker.path) else {
                 _ = emit(["event": "skipped", "reason": "not needed"]); return
             }
-            try? Data().write(to: marker)
         }
         let backend = await MainActor.run { MeetingNotesBackend.current }
         guard backend.isReady else { throw EngineMeetingsError.modelMissing }
         guard let lock = await MainActor.run(body: { MeetingSummaryActivityCoordinator.shared.lockSelection() }) else { throw EngineMeetingsError.busy }
         defer { Task { @MainActor in MeetingSummaryActivityCoordinator.shared.unlockSelection(lock) } }
+        // The one automatic attempt is spent only now that the notes really are about to be written. Written earlier, an attempt that found no
+        // model (the FT call of 2026-10-30) or found another run holding the writer used it up, and the meeting never got notes by itself.
+        if auto { try? Data().write(to: marker) }
 
         _ = emit(["event": "progress", "message": "Preparing…"])
         let notes = (try? String(contentsOf: directory.appendingPathComponent("notes.md"), encoding: .utf8)) ?? ""
