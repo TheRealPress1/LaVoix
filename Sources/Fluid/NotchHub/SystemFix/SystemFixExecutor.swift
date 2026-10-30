@@ -134,11 +134,19 @@ enum SystemFixExecutor {
         return report
     }
 
-    /// Asks Finder to empty the Trash (the first time macOS asks whether this app may control Finder).
-    @MainActor
-    static func emptyTrash() -> Bool {
-        var error: NSDictionary?
-        NSAppleScript(source: "tell application \"Finder\" to empty the trash")?.executeAndReturnError(&error)
-        return error == nil
+    /// Where Finder is asked to empty the Trash. Never the main thread: Finder only answers once the Trash really is empty, and on a busy Mac with a
+    /// big Trash that took half a minute or more. Waiting for it on the main thread (as this once did) stops the whole engine for that long: no
+    /// dictation, no notch, and the freeze watchdog restarts it (2026-10-30, 38 s).
+    private static let trashQueue = DispatchQueue(label: "com.myos.systemfix.empty-trash", qos: .utility)
+
+    /// Asks Finder to empty the Trash (the first time macOS asks whether this app may control Finder). Returns when Finder has answered.
+    nonisolated static func emptyTrash() async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            self.trashQueue.async {
+                var error: NSDictionary?
+                NSAppleScript(source: "tell application \"Finder\" to empty the trash")?.executeAndReturnError(&error)
+                continuation.resume(returning: error == nil)
+            }
+        }
     }
 }

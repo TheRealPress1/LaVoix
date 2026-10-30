@@ -72,7 +72,9 @@ enum LocalCleanupError: LocalizedError {
 actor LocalCleanupEngine {
     static let shared = LocalCleanupEngine()
 
-    private let idleUnloadSeconds: TimeInterval = 60 * 60
+    /// How long the model stays in memory after its last use. It holds 2.5 to 3 GB: at an hour it sat resident through a whole afternoon on a 16 GB Mac
+    /// whose swap was nearly full (2026-10-30), and the memory-pressure valve below only fires when the pressure level changes, not while it stays high.
+    private let idleUnloadSeconds: TimeInterval = 10 * 60
     private var lastUsed = Date()
     private var memoryPressureSource: DispatchSourceMemoryPressure?
 

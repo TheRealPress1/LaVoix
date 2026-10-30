@@ -88,10 +88,15 @@ final class SystemFixAgent: ObservableObject {
         }
     }
 
+    /// Empties the Trash. Finder can take a long time over a big Trash, so the panel shows its working state meanwhile and the main thread stays free.
     func emptyTrash(resource: SystemResource, report: SystemFixReport) {
-        var next = report
-        next.trashEmptied = SystemFixExecutor.emptyTrash()
-        self.phase = .finished(resource, next)
+        guard case .finished = self.phase else { return }
+        self.phase = .applying(resource)
+        self.task = Task { [weak self] in
+            var next = report
+            next.trashEmptied = await SystemFixExecutor.emptyTrash()
+            self?.phase = .finished(resource, next)
+        }
     }
 
     /// Back to the tiles; also stops a running investigation.
