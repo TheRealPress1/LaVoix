@@ -92,7 +92,8 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 microphone: configuration.microphone,
                 outputRoute: outputRoute,
                 forcePairedScreenCaptureKit: forcePairedScreenCaptureKit,
-                preferDirectAEC3: preferDirectAEC3
+                preferDirectAEC3: preferDirectAEC3,
+                applicationBundleIdentifier: application.bundleIdentifier
             )
             switch decision {
             case let .screenCaptureKit(reason):
@@ -775,7 +776,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     /// Maps the app's own windows to selection candidates and picks one via `MeetingWindowSelector`.
     /// Deliberately does not require `isOnScreen` (unreliable for other-Space/hidden windows).
     /// Window titles are PII and must never be logged or persisted.
-    private static func selectWindow(
+    fileprivate static func selectWindow(
         for runningApplication: SCRunningApplication,
         in content: SCShareableContent,
         preferredWindowID: UInt32? = nil
@@ -1890,6 +1891,128 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             trackID: nil,
             detail: triggeringError.localizedDescription
         ))
+    }
+}
+
+/// The other side of a FaceTime call. FaceTime's voice is played by a system helper, not by the app, so a ScreenCaptureKit stream on the app (or on
+/// the whole Mac) records it as silence; a Core Audio tap on the helper hears it (`MeetingCallAudioTap`). The call window is only the anchor for
+/// when the call is over: when it is gone the recording ends with the same two events a window stream used to produce (source lost, then capture
+/// stopped), which the notch turns into a finished call, not a warning. A window that comes back within the grace period is a recovery.
+private final nonisolated class CallAudioTapMeetingRuntime: MeetingCaptureRuntime, @unchecked Sendable {
+    private static let pollSeconds: Double = 1.5
+    private static let missesToEnd = 2
+    private static let graceSeconds: Double = 3.5
+
+    private let application: MeetingApplicationIdentity
+    private let callWindowID: UInt32
+    private let eventHandler: @Sendable (MeetingCaptureEvent) -> Void
+    private let tap: MeetingCallAudioTap
+    private let stateLock = NSLock()
+    private var watch: Task<Void, Never>?
+    private var stopped = false
+
+    /// There is no ScreenCaptureKit stream.
+    var captureScope: MeetingCaptureScope? { nil }
+
+    private init(
+        application: MeetingApplicationIdentity,
+        callWindowID: UInt32,
+        applicationWriter: MeetingAudioChunkWriter,
+        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
+        liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
+    ) {
+        self.application = application
+        self.callWindowID = callWindowID
+        self.eventHandler = eventHandler
+        let environment = ProcessInfo.processInfo.environment
+        // A diagnostic run with a stand-in app has no helper audio to tap, so it may tap the whole Mac to exercise the rest of the path.
+        let forceWholeMac = environment["LAVOIX_FACETIME_CAPTURE_AUTOTEST"] != nil && environment["LAVOIX_FACETIME_TAP_WHOLE_MAC"] == "1"
+        self.tap = MeetingCallAudioTap(helperPath: MeetingAppRegistry.faceTimeAudioHelperPath, forceWholeMac: forceWholeMac) { sampleBuffer, epoch in
+            applicationWriter.enqueue(sampleBuffer, producerEpoch: epoch)
+            liveAudioHandler?(.applicationAudio, sampleBuffer)
+        }
+    }
+
+    static func make(
+        application: MeetingApplicationIdentity,
+        applicationWriter: MeetingAudioChunkWriter,
+        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
+        liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
+    ) async throws -> CallAudioTapMeetingRuntime {
+        let content: SCShareableContent
+        do {
+            content = try await SCShareableContent.current
+        } catch {
+            throw MeetingCaptureError.screenCapturePermissionDenied(error.localizedDescription)
+        }
+        let byProcessID = application.processID.flatMap { processID in
+            content.applications.first(where: { $0.processID == processID })
+        }
+        guard let runningApplication = byProcessID ?? content.applications.first(where: {
+            $0.bundleIdentifier == application.bundleIdentifier
+        }), let window = ScreenCaptureMeetingRuntime.selectWindow(
+            for: runningApplication, in: content, preferredWindowID: application.windowID
+        ) else {
+            throw MeetingCaptureError.applicationUnavailable(application.displayName)
+        }
+        return CallAudioTapMeetingRuntime(
+            application: application,
+            callWindowID: window.windowID,
+            applicationWriter: applicationWriter,
+            eventHandler: eventHandler,
+            liveAudioHandler: liveAudioHandler
+        )
+    }
+
+    func start() async throws {
+        let source = try self.tap.start()
+        DebugLogger.shared.log("Call audio tap started (\(source == .wholeMac ? "whole Mac" : "system call helper")).", source: "MeetingCaptureEngine")
+        self.startWatch()
+    }
+
+    func stop() async throws {
+        let task = self.stateLock.withLock { () -> Task<Void, Never>? in
+            self.stopped = true
+            defer { self.watch = nil }
+            return self.watch
+        }
+        task?.cancel()
+        self.tap.stop()
+    }
+
+    private func startWatch() {
+        let task = Task { [weak self] in
+            var misses = 0
+            var lostSince: Date?
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64((lostSince == nil ? Self.pollSeconds : 0.5) * 1_000_000_000))
+                guard let self, !Task.isCancelled, !self.stateLock.withLock({ self.stopped }) else { return }
+                if let reason = self.tap.restartIfNeeded() {
+                    DebugLogger.shared.log("Call audio tap rebuilt: \(reason).", source: "MeetingCaptureEngine")
+                }
+                // A failed lookup says nothing about the window.
+                guard let content = try? await SCShareableContent.current else { continue }
+                if content.windows.contains(where: { $0.windowID == self.callWindowID }) {
+                    misses = 0
+                    if lostSince != nil {
+                        lostSince = nil
+                        self.eventHandler(.interrupted(kind: .sourceRecovered, trackID: nil, detail: nil))
+                    }
+                    continue
+                }
+                misses += 1
+                guard misses >= Self.missesToEnd else { continue }
+                let detail = MeetingCaptureError.applicationUnavailable(self.application.displayName).localizedDescription
+                if lostSince == nil {
+                    lostSince = Date()
+                    self.eventHandler(.interrupted(kind: .sourceLost, trackID: nil, detail: detail))
+                } else if let lostSince, Date().timeIntervalSince(lostSince) >= Self.graceSeconds {
+                    self.eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: nil, detail: detail))
+                    return
+                }
+            }
+        }
+        self.stateLock.withLock { self.watch = task }
     }
 }
 
@@ -3093,13 +3216,22 @@ nonisolated enum MeetingCapturePathDecider {
         microphone: MeetingMicrophoneIdentity,
         outputRoute: MeetingOutputRouteSnapshot,
         forcePairedScreenCaptureKit: Bool = false,
-        preferDirectAEC3: Bool = false
+        preferDirectAEC3: Bool = false,
+        applicationBundleIdentifier: String? = nil
     ) -> MeetingCapturePathDecision {
         guard mode == .onlineCall else {
             return .screenCaptureKit(reason: "Voice-processing capture only applies to online-call recordings.")
         }
         guard let coreAudioUID = microphone.coreAudioUID, !coreAudioUID.isEmpty else {
             return .screenCaptureKit(reason: "The selected microphone has no CoreAudio device UID.")
+        }
+        // While FaceTime's helper runs voice processing on the built-in microphone, any other reader of it gets a starved 3-channel stream
+        // (real call 2026-10-29 and a stand-in: about -70 dB, speech inaudible), and the echo-protection gate would exclude it anyway.
+        // Joining voice processing is the one way to receive the voice, whatever the output route.
+        if MeetingAppRegistry.callAudioComesFromSystemHelper(bundleIdentifier: applicationBundleIdentifier),
+           coreAudioUID.hasPrefix("BuiltIn")
+        {
+            return .voiceProcessing
         }
         if let reason = Self.outputRouteDeclineReason(outputRoute) {
             return .screenCaptureKit(reason: reason)
@@ -4031,7 +4163,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     private var currentFence = MeetingEraAcceptanceFence()
     private var interruptedThisEra = false
 
-    private var appOnlyRuntime: ScreenCaptureMeetingRuntime?
+    private var appOnlyRuntime: (any MeetingCaptureRuntime)?
     private var fallbackRuntime: ScreenCaptureMeetingRuntime?
     private var phase: Phase = .starting
     private var watchdogTask: Task<Void, Never>?
@@ -4117,6 +4249,11 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         } catch {
             if error is CancellationError { throw error }
             if self.stateLock.withLock({ self.phase != .starting }) { throw error }
+            // The fallback below is silent otherwise: say why voice processing did not start.
+            DebugLogger.shared.log("Voice-processing capture did not start, using ScreenCaptureKit: \(error.localizedDescription)", source: "MeetingCaptureEngine")
+            self.eventHandler(.interrupted(
+                kind: .voiceProcessingDeclined, trackID: nil, detail: "Voice processing did not start: \(error.localizedDescription)"
+            ))
             let (gateToAbort, captureToStop, staleListener) = self.stateLock.withLock {
                 () -> (MeetingVoiceProcessingCommitGate, MeetingMicrophoneCapture, MeetingOutputRouteListener?) in
                 defer { self.outputRouteListener = nil }
@@ -4194,19 +4331,13 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         }
 
         guard await self.waitForBufferProgress(timeoutSeconds: Self.firstBufferDeadlineSeconds) else {
-            throw MeetingCaptureError.captureStartFailed("No microphone audio was captured within 2s.")
+            let stats = await capture.statistics()
+            throw MeetingCaptureError.captureStartFailed(
+                "No microphone audio was captured within 2s (buffers=\(stats.buffersEmitted), conversionFailures=\(stats.conversionFailures), dropped=\(stats.droppedPostCapCount), configChanges=\(stats.configurationChangeEvents))."
+            )
         }
 
-        let appOnly = try await ScreenCaptureMeetingRuntime.make(
-            application: self.application,
-            microphone: self.originalMicrophone,
-            includeMicrophone: false,
-            applicationWriter: self.applicationWriter,
-            microphoneWriter: self.microphoneWriter,
-            eventHandler: self.eventHandler,
-            liveAudioHandler: self.liveAudioHandler
-        )
-        try await appOnly.start()
+        let appOnly = try await self.startApplicationAudio()
         self.stateLock.withLock { self.appOnlyRuntime = appOnly }
 
         guard var batch = self.gate.beginCommitFlush() else {
@@ -4237,6 +4368,47 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         }
         await self.startOutputRouteWatch()
         self.startWatchdog()
+    }
+
+    /// The application's side of the call. FaceTime's is read with a tap on the system helper that plays it. If that cannot start, the app's own
+    /// audio is recorded as before (silent for FaceTime) so the recording and the end-of-call detection still work, and the session says so.
+    private func startApplicationAudio() async throws -> any MeetingCaptureRuntime {
+        if MeetingAppRegistry.callAudioComesFromSystemHelper(bundleIdentifier: self.application.bundleIdentifier) {
+            do {
+                let tapRuntime = try await CallAudioTapMeetingRuntime.make(
+                    application: self.application,
+                    applicationWriter: self.applicationWriter,
+                    eventHandler: self.eventHandler,
+                    liveAudioHandler: self.liveAudioHandler
+                )
+                do {
+                    try await tapRuntime.start()
+                    return tapRuntime
+                } catch {
+                    try? await tapRuntime.stop()
+                    throw error
+                }
+            } catch {
+                if error is CancellationError { throw error }
+                DebugLogger.shared.log("Call audio tap did not start: \(error.localizedDescription)", source: "MeetingCaptureEngine")
+                self.eventHandler(.interrupted(
+                    kind: .voiceProcessingDeclined,
+                    trackID: nil,
+                    detail: "The other person's voice could not be read, only your side is recorded: \(error.localizedDescription)"
+                ))
+            }
+        }
+        let appOnly = try await ScreenCaptureMeetingRuntime.make(
+            application: self.application,
+            microphone: self.originalMicrophone,
+            includeMicrophone: false,
+            applicationWriter: self.applicationWriter,
+            microphoneWriter: self.microphoneWriter,
+            eventHandler: self.eventHandler,
+            liveAudioHandler: self.liveAudioHandler
+        )
+        try await appOnly.start()
+        return appOnly
     }
 
     private func stopAppOnlyIfStarted() async {

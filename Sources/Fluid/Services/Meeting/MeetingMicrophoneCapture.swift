@@ -737,6 +737,8 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
     private var clock = MeetingMicrophonePTSClock()
     private var converter: AVAudioConverter?
     private var converterSourceFormat: AVAudioFormat?
+    private var monoConverter: AVAudioConverter?
+    private var monoConverterRate: Double = 0
     private var accumulated: [Float] = []
     private var windowHostTime: UInt64?
     private var windowHostTimeValid = false
@@ -845,6 +847,8 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
             self.lastExpectedSampleTime = nil
             self.converter = nil
             self.converterSourceFormat = nil
+            self.monoConverter = nil
+            self.monoConverterRate = 0
         }
     }
 
@@ -857,6 +861,13 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
 
         if sourceFormat.sampleRate == self.canonicalFormat.sampleRate, sourceFormat.commonFormat == .pcmFormatFloat32 {
             return Self.downmixToMono(buffer)
+        }
+
+        // Next to another voice-processing client (FaceTime's) the unit delivers 3, 5 or 9 channels at 44.1 kHz. AVAudioFormat cannot describe more
+        // than two channels without a channel layout, so the converter below would never be built and no audio would be captured: mix down first,
+        // then resample the mono signal.
+        if sourceFormat.channelCount > 2, sourceFormat.commonFormat == .pcmFormatFloat32, buffer.floatChannelData != nil {
+            return self.resampleToCanonical(Self.downmixToMono(buffer), from: sourceFormat.sampleRate)
         }
 
         if self.converter == nil || self.converterSourceFormat != sourceFormat {
@@ -887,6 +898,44 @@ private final class MeetingMicrophoneTapState: @unchecked Sendable {
             consumed = true
             status.pointee = .haveData
             return buffer
+        }
+        guard conversionError == nil else { return nil }
+        return Self.downmixToMono(output)
+    }
+
+    /// Streaming mono resample (state is kept between calls); nil when no converter can be built or the conversion fails.
+    // swiftlint:disable:next discouraged_optional_collection
+    private func resampleToCanonical(_ mono: [Float], from sampleRate: Double) -> [Float]? {
+        guard sampleRate > 0 else { return nil }
+        if sampleRate == self.canonicalFormat.sampleRate { return mono }
+        if self.monoConverter == nil || self.monoConverterRate != sampleRate {
+            guard let sourceFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false),
+                  let converter = AVAudioConverter(from: sourceFormat, to: self.canonicalFormat)
+            else { return nil }
+            self.monoConverter = converter
+            self.monoConverterRate = sampleRate
+        }
+        guard let converter = self.monoConverter,
+              let input = AVAudioPCMBuffer(pcmFormat: converter.inputFormat, frameCapacity: AVAudioFrameCount(mono.count)),
+              let output = AVAudioPCMBuffer(
+                  pcmFormat: converter.outputFormat,
+                  frameCapacity: AVAudioFrameCount((Double(mono.count) * self.canonicalFormat.sampleRate / sampleRate).rounded(.up)) + 32
+              )
+        else { return nil }
+        input.frameLength = AVAudioFrameCount(mono.count)
+        mono.withUnsafeBufferPointer { source in
+            if let base = source.baseAddress { input.floatChannelData?[0].update(from: base, count: mono.count) }
+        }
+        var conversionError: NSError?
+        var consumed = false
+        converter.convert(to: output, error: &conversionError) { _, status in
+            if consumed {
+                status.pointee = .noDataNow
+                return nil
+            }
+            consumed = true
+            status.pointee = .haveData
+            return input
         }
         guard conversionError == nil else { return nil }
         return Self.downmixToMono(output)

@@ -28,6 +28,17 @@ nonisolated enum MeetingAppRegistry {
     /// the system helper `avconferenced` had both input and output running. While FaceTime is running, that helper's audio is FaceTime's.
     static let faceTimeAudioHelperPath = "/usr/libexec/avconferenced"
 
+    /// That same helper plays the other person's voice, so the FaceTime app's own audio is silent (measured 2026-10-29: digital silence for a whole
+    /// call), and ScreenCaptureKit's whole-Mac sound does not carry the voice either. A Core Audio tap on the helper does (measured on a live call).
+    /// The microphone is then held in voice-processing mode by the helper, so ours has to join it. The call window only marks when the call ends.
+    static func callAudioComesFromSystemHelper(bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier else { return false }
+        if bundleIdentifier == self.faceTimeBundleIdentifier { return true }
+        // FaceTime quits itself when there is no call to show, so a test cannot record it. A diagnostic run may name a stand-in app.
+        let environment = ProcessInfo.processInfo.environment
+        return environment["LAVOIX_FACETIME_CAPTURE_AUTOTEST"] != nil && environment["LAVOIX_FACETIME_STANDIN_BUNDLE"] == bundleIdentifier
+    }
+
     /// Bundle identifiers for browsers eligible for Tier 2 URL reading. Google Meet's "app" is a
     /// Chrome/Edge PWA, not a separate bundle — it is matched via `pwaBundlePrefixes` instead.
     static let browserBundleIdentifiers: Set<String> = [

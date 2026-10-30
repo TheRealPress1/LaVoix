@@ -45,6 +45,46 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         )
     }
 
+    func testFaceTimeOnTheBuiltInMicrophoneJoinsVoiceProcessingOnAnyOutputRoute() {
+        let builtIn = self.mic(uid: "BuiltInMicrophoneDevice")
+        let bluetooth = MeetingOutputRouteSnapshot(deviceExists: true, isBluetooth: true, isBuiltIn: false, isHeadphonesDataSource: false)
+        let headphones = MeetingOutputRouteSnapshot(deviceExists: true, isBluetooth: false, isBuiltIn: true, isHeadphonesDataSource: true)
+        for route in [self.viableRoute(), bluetooth, headphones] {
+            XCTAssertEqual(
+                MeetingCapturePathDecider.decide(
+                    mode: .onlineCall, microphone: builtIn, outputRoute: route, preferDirectAEC3: true,
+                    applicationBundleIdentifier: MeetingAppRegistry.faceTimeBundleIdentifier
+                ),
+                .voiceProcessing
+            )
+        }
+    }
+
+    func testOtherAppsAndOtherMicrophonesKeepTheirCaptureDecision() {
+        let builtIn = self.mic(uid: "BuiltInMicrophoneDevice")
+        let zoom = MeetingCapturePathDecider.decide(
+            mode: .onlineCall, microphone: builtIn, outputRoute: self.viableRoute(), preferDirectAEC3: true,
+            applicationBundleIdentifier: "us.zoom.xos"
+        )
+        XCTAssertEqual(zoom, .screenCaptureKit(reason: MeetingCapturePathDecider.directAEC3DefaultReason))
+        let faceTimeOnAirPods = MeetingCapturePathDecider.decide(
+            mode: .onlineCall, microphone: self.mic(uid: "AA-BB-CC-airpods"), outputRoute: self.viableRoute(), preferDirectAEC3: true,
+            applicationBundleIdentifier: MeetingAppRegistry.faceTimeBundleIdentifier
+        )
+        XCTAssertEqual(faceTimeOnAirPods, .screenCaptureKit(reason: MeetingCapturePathDecider.directAEC3DefaultReason))
+        let inRoom = MeetingCapturePathDecider.decide(
+            mode: .inRoom, microphone: builtIn, outputRoute: self.viableRoute(),
+            applicationBundleIdentifier: MeetingAppRegistry.faceTimeBundleIdentifier
+        )
+        guard case .screenCaptureKit = inRoom else { return XCTFail("an in-room recording never uses voice processing") }
+    }
+
+    func testOnlyFaceTimeReadsItsCallAudioFromTheSystemHelper() {
+        XCTAssertTrue(MeetingAppRegistry.callAudioComesFromSystemHelper(bundleIdentifier: "com.apple.FaceTime"))
+        XCTAssertFalse(MeetingAppRegistry.callAudioComesFromSystemHelper(bundleIdentifier: "us.zoom.xos"))
+        XCTAssertFalse(MeetingAppRegistry.callAudioComesFromSystemHelper(bundleIdentifier: nil))
+    }
+
     func testDirectAEC3GateDefaultsOnAndHasExactDisableEscapeHatch() {
         XCTAssertTrue(MeetingDirectAEC3Gate.enabled(environment: [:]))
         XCTAssertTrue(MeetingDirectAEC3Gate.enabled(environment: [

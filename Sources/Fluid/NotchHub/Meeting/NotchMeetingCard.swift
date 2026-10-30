@@ -717,6 +717,12 @@ final class NotchMeetingCardController {
         let host = joinURL?.host?.lowercased() ?? ""
         if host.hasSuffix("zoom.us") { return "us.zoom.xos" }
         if host.contains("teams.microsoft.com") || host.contains("teams.live.com") { return "com.microsoft.teams2" }
+        // No link (a recording started by hand): the call is in the call app you are looking at, FaceTime and Zoom included.
+        if joinURL == nil, let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+           MeetingAppRegistry.nativeBundleIdentifiers.contains(front)
+        {
+            return front
+        }
         if let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier, MeetingAppRegistry.isBrowserApp(bundleIdentifier: front) {
             return front
         }
