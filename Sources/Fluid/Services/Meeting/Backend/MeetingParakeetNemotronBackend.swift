@@ -280,6 +280,15 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             return result
         }
         try Task.checkCancellation()
+        let epochIntervals = Dictionary(
+            epochWork.map { ($0.epoch.id, $0.epoch.analysisInterval.start ... $0.epoch.analysisInterval.end) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let padding = Self.activityPadding()
+        var paddedPhaseA = phaseA
+        paddedPhaseA.activity = Self.paddedActivity(
+            phaseA.activity, epochIntervals: epochIntervals, lead: padding.lead, trail: padding.trail
+        )
 
         // Phase B: Parakeet ASR inside the attempt's single prepared-meeting scope. Epochs that
         // failed phase A are excluded from ASR as well: an epoch is one unit of work.
@@ -334,7 +343,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             request: request,
             manifest: manifest,
             epochWork: epochWork,
-            phaseA: phaseA,
+            phaseA: paddedPhaseA,
             phaseB: phaseB
         )
     }
@@ -614,6 +623,59 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             0
         ), 1)
         return span.analysisInterval.start + fraction * span.analysisInterval.duration
+    }
+
+    /// The speech-activity edges are tight and the recognizer stamps a word at or just after its end, so the last word before a pause (and now
+    /// and then the first after one) landed just outside the activity and was thrown away: 10 of 146 recognized words in a real 69-second
+    /// call, nearly all of them the last word of a sentence ("this.", "your day?", "back."). Each interval therefore grows by a short lead and
+    /// trail. Words further from speech than that, in real silence, are still dropped.
+    nonisolated static let activityLeadPadSeconds: TimeInterval = 0.3
+    nonisolated static let activityTrailPadSeconds: TimeInterval = 0.6
+
+    /// A replay test can switch the padding off to measure what it adds, on the same audio and binary. Never read outside such a run.
+    nonisolated static func activityPadding() -> (lead: TimeInterval, trail: TimeInterval) {
+        let environment = ProcessInfo.processInfo.environment
+        if environment["LAVOIX_MEETING_REPROCESS_AUTOTEST"] != nil, environment["LAVOIX_MEETING_REPROCESS_NOPAD"] == "1" {
+            return (0, 0)
+        }
+        return (self.activityLeadPadSeconds, self.activityTrailPadSeconds)
+    }
+
+    /// Grows each speaker-activity interval into SILENCE only: never into a time another speaker is active (a pad must not turn a clean word into
+    /// an ambiguous one), splitting a gap between two different speakers at its middle, and never past the epoch. Same-speaker intervals may
+    /// overlap freely (coverage is a union).
+    nonisolated static func paddedActivity(
+        _ activity: [MeetingBackendSpeakerActivity],
+        epochIntervals: [MeetingAnalysisEpochID: ClosedRange<TimeInterval>],
+        lead: TimeInterval,
+        trail: TimeInterval
+    ) -> [MeetingBackendSpeakerActivity] {
+        guard lead > 0 || trail > 0 else { return activity }
+        return activity.map { entry in
+            let epoch = entry.token.analysisEpochID
+            let others = activity.filter { $0.token.analysisEpochID == epoch && $0.token != entry.token }
+            let bounds = epochIntervals[epoch]
+
+            var end = entry.end + trail
+            if others.contains(where: { $0.start <= entry.end && $0.end > entry.end }) {
+                end = entry.end
+            } else if let next = others.filter({ $0.start > entry.end }).map(\.start).min() {
+                end = min(end, entry.end + (next - entry.end) / 2)
+            }
+
+            var start = entry.start - lead
+            if others.contains(where: { $0.end >= entry.start && $0.start < entry.start }) {
+                start = entry.start
+            } else if let previous = others.filter({ $0.end < entry.start }).map(\.end).max() {
+                start = max(start, entry.start - (entry.start - previous) / 2)
+            }
+
+            if let bounds {
+                end = min(end, bounds.upperBound)
+                start = max(start, bounds.lowerBound)
+            }
+            return MeetingBackendSpeakerActivity(token: entry.token, start: min(start, entry.start), end: max(end, entry.end))
+        }
     }
 
     /// Nemotron emits diarization decisions on this cadence (plan §4); a boundary sliver shorter

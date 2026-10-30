@@ -935,7 +935,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             .init(text: "a b c", words: [
                 ASRWordTiming(text: "a", start: 0.2, end: 0.6),
                 ASRWordTiming(text: "b", start: 1.2, end: 1.6),
-                ASRWordTiming(text: "c", start: 3.2, end: 3.6),
+                ASRWordTiming(text: "c", start: 3.7, end: 3.95),
             ]),
         ]
 
@@ -956,7 +956,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(tokenB.label, "slot-0")
 
         guard case .unassigned = try XCTUnwrap(unitsByText["c"]).speaker else {
-            return XCTFail("word c overlaps no activity")
+            return XCTFail("word c is in silence, beyond even the padded activity")
         }
 
         // Assembly keeps the resolved handoff on the existing product speaker.
@@ -972,6 +972,96 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(resolved.disposition, .emitted)
         let outside = try XCTUnwrap(assembly.sidecar.dispositions.first { $0.unitID == unitsByText["c"]?.id })
         XCTAssertEqual(outside.disposition, .outsideActivity)
+    }
+
+    // MARK: - Activity padding (the last word before a pause used to be dropped as "outside speech")
+
+    func testActivityPaddingGrowsIntoSilenceBothWays() {
+        let (slot0, _) = self.attributionTokens()
+        let padded = MeetingParakeetNemotronBackend.paddedActivity(
+            [MeetingBackendSpeakerActivity(token: slot0, start: 10, end: 12)],
+            epochIntervals: [slot0.analysisEpochID: 0 ... 30],
+            lead: 0.3,
+            trail: 0.6
+        )
+        XCTAssertEqual(padded.count, 1)
+        XCTAssertEqual(padded[0].start, 9.7, accuracy: 1e-9)
+        XCTAssertEqual(padded[0].end, 12.6, accuracy: 1e-9)
+    }
+
+    func testActivityPaddingNeverLeavesTheEpoch() {
+        let (slot0, _) = self.attributionTokens()
+        let padded = MeetingParakeetNemotronBackend.paddedActivity(
+            [
+                MeetingBackendSpeakerActivity(token: slot0, start: 0.1, end: 0.2),
+                MeetingBackendSpeakerActivity(token: slot0, start: 0.9, end: 0.95),
+            ],
+            epochIntervals: [slot0.analysisEpochID: 0 ... 1],
+            lead: 0.3,
+            trail: 0.6
+        )
+        XCTAssertEqual(padded[0].start, 0, accuracy: 1e-9)
+        XCTAssertEqual(padded[1].end, 1, accuracy: 1e-9)
+    }
+
+    func testActivityPaddingSplitsAGapBetweenTwoSpeakersAtItsMiddle() {
+        let (slot0, slot1) = self.attributionTokens()
+        let padded = MeetingParakeetNemotronBackend.paddedActivity(
+            [
+                MeetingBackendSpeakerActivity(token: slot0, start: 0, end: 2),
+                MeetingBackendSpeakerActivity(token: slot1, start: 2.4, end: 4),
+            ],
+            epochIntervals: [slot0.analysisEpochID: 0 ... 10],
+            lead: 0.3,
+            trail: 0.6
+        )
+        XCTAssertEqual(padded[0].end, 2.2, accuracy: 1e-9, "the gap of 0.4 s is shared, not claimed by whoever spoke first")
+        XCTAssertEqual(padded[1].start, 2.2, accuracy: 1e-9)
+        XCTAssertEqual(padded[1].end, 4.6, accuracy: 1e-9, "a speaker with silence after it still gets the full trail")
+    }
+
+    func testActivityPaddingNeverGrowsIntoAnotherSpeakersActivity() {
+        let (slot0, slot1) = self.attributionTokens()
+        let padded = MeetingParakeetNemotronBackend.paddedActivity(
+            [
+                MeetingBackendSpeakerActivity(token: slot0, start: 0, end: 2),
+                MeetingBackendSpeakerActivity(token: slot1, start: 1, end: 3),
+            ],
+            epochIntervals: [slot0.analysisEpochID: 0 ... 10],
+            lead: 0.3,
+            trail: 0.6
+        )
+        XCTAssertEqual(padded[0].end, 2, accuracy: 1e-9, "slot 1 is still talking at 2.0: slot 0 gets no pad there")
+        XCTAssertEqual(padded[1].start, 1, accuracy: 1e-9, "slot 0 is already talking at 1.0: slot 1 gets no lead there")
+        XCTAssertEqual(padded[1].end, 3.6, accuracy: 1e-9)
+    }
+
+    func testActivityPaddingOfZeroChangesNothing() {
+        let (slot0, _) = self.attributionTokens()
+        let activity = [MeetingBackendSpeakerActivity(token: slot0, start: 1, end: 2)]
+        XCTAssertEqual(
+            MeetingParakeetNemotronBackend.paddedActivity(activity, epochIntervals: [slot0.analysisEpochID: 0 ... 10], lead: 0, trail: 0),
+            activity
+        )
+    }
+
+    func testAWordJustAfterSpeechIsAssignedOnceTheActivityIsPadded() {
+        let (slot0, _) = self.attributionTokens()
+        let activity = [MeetingBackendSpeakerActivity(token: slot0, start: 1, end: 3)]
+        // The recognizer stamps "this." at 3.05 s, just after the detector's last frame of speech.
+        guard case .unassigned = MeetingParakeetNemotronBackend.assignment(start: 3.05, end: 3.4, activity: activity, allowDominance: true) else {
+            return XCTFail("without padding the word overlaps no activity")
+        }
+        let padded = MeetingParakeetNemotronBackend.paddedActivity(
+            activity, epochIntervals: [slot0.analysisEpochID: 0 ... 10], lead: 0.3, trail: 0.6
+        )
+        guard case let .assigned(token) = MeetingParakeetNemotronBackend.assignment(start: 3.05, end: 3.4, activity: padded, allowDominance: true) else {
+            return XCTFail("with padding the word belongs to the speaker who just finished")
+        }
+        XCTAssertEqual(token, slot0)
+        guard case .unassigned = MeetingParakeetNemotronBackend.assignment(start: 4.0, end: 4.3, activity: padded, allowDominance: true) else {
+            return XCTFail("a word in real silence stays outside")
+        }
     }
 
     func testCoverageUnionDoesNotDoubleCountDuplicateSpeakerIntervals() {
