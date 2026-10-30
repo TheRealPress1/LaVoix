@@ -3225,12 +3225,11 @@ nonisolated enum MeetingCapturePathDecider {
         guard let coreAudioUID = microphone.coreAudioUID, !coreAudioUID.isEmpty else {
             return .screenCaptureKit(reason: "The selected microphone has no CoreAudio device UID.")
         }
-        // While FaceTime's helper runs voice processing on the built-in microphone, any other reader of it gets a starved 3-channel stream
+        // While FaceTime's helper runs voice processing on the call's microphone, any other reader of it gets a starved 3-channel stream
         // (real call 2026-10-29 and a stand-in: about -70 dB, speech inaudible), and the echo-protection gate would exclude it anyway.
-        // Joining voice processing is the one way to receive the voice, whatever the output route.
-        if MeetingAppRegistry.callAudioComesFromSystemHelper(bundleIdentifier: applicationBundleIdentifier),
-           coreAudioUID.hasPrefix("BuiltIn")
-        {
+        // Joining voice processing is the one way to receive the voice, whatever the output route and whichever microphone the call uses
+        // (the call holds that device in voice-processing mode, built-in or not).
+        if MeetingAppRegistry.callAudioComesFromSystemHelper(bundleIdentifier: applicationBundleIdentifier) {
             return .voiceProcessing
         }
         if let reason = Self.outputRouteDeclineReason(outputRoute) {
@@ -4569,7 +4568,10 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     private func handleRouteChange() {
         enum Action { case evaluateVPIO, evaluateAVCapture, none }
         let outputRoute = MeetingCaptureEngine.currentOutputRouteSnapshot()
-        let vpioDeclineReason = MeetingCapturePathDecider.outputRouteDeclineReason(outputRoute)
+        // A FaceTime call holds its microphone in voice-processing mode whatever the output is, so no output route makes joining it unviable.
+        let vpioDeclineReason = MeetingAppRegistry.callAudioComesFromSystemHelper(bundleIdentifier: self.application.bundleIdentifier)
+            ? nil
+            : MeetingCapturePathDecider.outputRouteDeclineReason(outputRoute)
         let action = self.stateLock.withLock { () -> Action in
             guard !self.stopRequested else { return .none }
             switch self.phase {
@@ -5457,7 +5459,8 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         let decision = MeetingCapturePathDecider.decide(
             mode: .onlineCall,
             microphone: self.originalMicrophone,
-            outputRoute: MeetingCaptureEngine.currentOutputRouteSnapshot()
+            outputRoute: MeetingCaptureEngine.currentOutputRouteSnapshot(),
+            applicationBundleIdentifier: self.application.bundleIdentifier
         )
         guard case .voiceProcessing = decision else {
             self.stateLock.withLock { self.dwellArming = false }
@@ -5475,7 +5478,8 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
             let stillViable = MeetingCapturePathDecider.decide(
                 mode: .onlineCall,
                 microphone: self.originalMicrophone,
-                outputRoute: MeetingCaptureEngine.currentOutputRouteSnapshot()
+                outputRoute: MeetingCaptureEngine.currentOutputRouteSnapshot(),
+                applicationBundleIdentifier: self.application.bundleIdentifier
             )
             guard case .voiceProcessing = stillViable else { return }
             await self.attemptUpgrade()
@@ -5508,7 +5512,8 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         guard case .voiceProcessing = MeetingCapturePathDecider.decide(
             mode: .onlineCall,
             microphone: self.originalMicrophone,
-            outputRoute: MeetingCaptureEngine.currentOutputRouteSnapshot()
+            outputRoute: MeetingCaptureEngine.currentOutputRouteSnapshot(),
+            applicationBundleIdentifier: self.application.bundleIdentifier
         ) else {
             self.stateLock.withLock { self.phase = .avCapture }
             self.finishTransition()
@@ -5552,7 +5557,8 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         guard case .voiceProcessing = MeetingCapturePathDecider.decide(
             mode: .onlineCall,
             microphone: self.originalMicrophone,
-            outputRoute: MeetingCaptureEngine.currentOutputRouteSnapshot()
+            outputRoute: MeetingCaptureEngine.currentOutputRouteSnapshot(),
+            applicationBundleIdentifier: self.application.bundleIdentifier
         ) else {
             self.abortUpgrade(candidateMicCapture: candidateMicCapture, reason: "Route changed back before the upgrade committed.")
             return
@@ -5807,7 +5813,8 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
               MeetingCapturePathDecider.decide(
                   mode: .onlineCall,
                   microphone: elected.identity,
-                  outputRoute: MeetingCaptureEngine.currentOutputRouteSnapshot()
+                  outputRoute: MeetingCaptureEngine.currentOutputRouteSnapshot(),
+                  applicationBundleIdentifier: self.application.bundleIdentifier
               ) == .voiceProcessing
         else {
             await self.restoreAVCaptureAfterRecoveryFailure(
@@ -5899,7 +5906,8 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
               MeetingCapturePathDecider.decide(
                   mode: .onlineCall,
                   microphone: elected.identity,
-                  outputRoute: MeetingCaptureEngine.currentOutputRouteSnapshot()
+                  outputRoute: MeetingCaptureEngine.currentOutputRouteSnapshot(),
+                  applicationBundleIdentifier: self.application.bundleIdentifier
               ) == .voiceProcessing
         else {
             await self.retirePendingVoiceProcessingCapture(generation: generation)

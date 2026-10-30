@@ -6,6 +6,7 @@ import Foundation
 /// reported. FaceTime itself quits when it has no call to show, so `LAVOIX_FACETIME_STANDIN_BUNDLE` (default TextEdit, needs a window, and it must
 /// be set for the stand-in to be treated like FaceTime) takes its place. A stand-in has no helper audio to tap: `LAVOIX_FACETIME_TAP_WHOLE_MAC=1` taps
 /// the whole Mac instead, so spoken test audio flows through the rest of the path.
+/// `LAVOIX_FACETIME_CAPTURE_MIC_UID` picks another input (the Studio Display's, AirPods) instead of the default one.
 /// `LAVOIX_FACETIME_CAPTURE_OUT` is the folder the session is written to; read it with audio_levels.py. `LAVOIX_FACETIME_CAPTURE_QUIT_APP=1`
 /// quits the stand-in half way, to check that the end of a call ends the recording.
 enum MeetingFaceTimeCaptureAutotest {
@@ -39,7 +40,7 @@ enum MeetingFaceTimeCaptureAutotest {
         let application = try MeetingCaptureSourceCatalog.resolveApplication(
             from: applications, preferredBundleIdentifier: bundle, requirePreferredApplication: true
         )
-        let microphone = try await MeetingCaptureSourceCatalog.defaultMicrophone(preferredCoreAudioUID: nil)
+        let microphone = try await MeetingCaptureSourceCatalog.defaultMicrophone(preferredCoreAudioUID: environment["LAVOIX_FACETIME_CAPTURE_MIC_UID"])
         let configuration = MeetingCaptureConfiguration(mode: .onlineCall, title: "FaceTime stand-in", application: application, microphone: microphone)
         var info = mach_timebase_info_data_t()
         mach_timebase_info(&info)

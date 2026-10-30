@@ -45,7 +45,7 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         )
     }
 
-    func testFaceTimeOnTheBuiltInMicrophoneJoinsVoiceProcessingOnAnyOutputRoute() {
+    func testFaceTimeJoinsVoiceProcessingOnAnyOutputRoute() {
         let builtIn = self.mic(uid: "BuiltInMicrophoneDevice")
         let bluetooth = MeetingOutputRouteSnapshot(deviceExists: true, isBluetooth: true, isBuiltIn: false, isHeadphonesDataSource: false)
         let headphones = MeetingOutputRouteSnapshot(deviceExists: true, isBluetooth: false, isBuiltIn: true, isHeadphonesDataSource: true)
@@ -60,18 +60,31 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         }
     }
 
-    func testOtherAppsAndOtherMicrophonesKeepTheirCaptureDecision() {
+    func testFaceTimeJoinsVoiceProcessingOnAnyMicrophone() {
+        for uid in ["BuiltInMicrophoneDevice", "AA-BB-CC-airpods", "AppleUSBAudioEngine:Studio Display"] {
+            XCTAssertEqual(
+                MeetingCapturePathDecider.decide(
+                    mode: .onlineCall, microphone: self.mic(uid: uid), outputRoute: self.viableRoute(), preferDirectAEC3: true,
+                    applicationBundleIdentifier: MeetingAppRegistry.faceTimeBundleIdentifier
+                ),
+                .voiceProcessing,
+                "the call holds \(uid) in voice-processing mode"
+            )
+        }
+    }
+
+    func testOtherAppsKeepTheirCaptureDecision() {
         let builtIn = self.mic(uid: "BuiltInMicrophoneDevice")
         let zoom = MeetingCapturePathDecider.decide(
             mode: .onlineCall, microphone: builtIn, outputRoute: self.viableRoute(), preferDirectAEC3: true,
             applicationBundleIdentifier: "us.zoom.xos"
         )
         XCTAssertEqual(zoom, .screenCaptureKit(reason: MeetingCapturePathDecider.directAEC3DefaultReason))
-        let faceTimeOnAirPods = MeetingCapturePathDecider.decide(
+        let zoomOnAirPods = MeetingCapturePathDecider.decide(
             mode: .onlineCall, microphone: self.mic(uid: "AA-BB-CC-airpods"), outputRoute: self.viableRoute(), preferDirectAEC3: true,
-            applicationBundleIdentifier: MeetingAppRegistry.faceTimeBundleIdentifier
+            applicationBundleIdentifier: "us.zoom.xos"
         )
-        XCTAssertEqual(faceTimeOnAirPods, .screenCaptureKit(reason: MeetingCapturePathDecider.directAEC3DefaultReason))
+        XCTAssertEqual(zoomOnAirPods, .screenCaptureKit(reason: MeetingCapturePathDecider.directAEC3DefaultReason))
         let inRoom = MeetingCapturePathDecider.decide(
             mode: .inRoom, microphone: builtIn, outputRoute: self.viableRoute(),
             applicationBundleIdentifier: MeetingAppRegistry.faceTimeBundleIdentifier
