@@ -127,7 +127,7 @@ final class SystemFixAgent: ObservableObject {
         case .cpu:
             lines.append("Look at `ps -Ao pid,pcpu,rss,comm -r | head -30` for what is using CPU and propose quitting apps that are running away or idle-but-busy. Name the app as it appears in the Dock.")
         case .storage:
-            lines.append("Measure with `du -sk` and `ls` the usual regenerable space: \(home)/Library/Caches/*, \(home)/Library/Logs, \(home)/Library/Developer/Xcode/DerivedData/*, \(home)/.npm/_cacache, \(home)/.cache, \(home)/Library/pnpm, package-manager and build caches, build folders named DerivedData, and big old files in \(home)/Downloads. Propose trashing items with absolute paths, biggest first.")
+            lines.append("Measure with `du -sk` and `ls` the usual regenerable space: \(home)/Library/Caches/*, \(home)/Library/Logs, \(home)/Library/Developer/Xcode/DerivedData/*, \(home)/.npm/_cacache, \(home)/.cache (but never \(home)/.cache/huggingface: it holds the on-device AI model that meeting notes need), \(home)/Library/pnpm, package-manager and build caches, build folders named DerivedData, and big old files in \(home)/Downloads. Propose trashing items with absolute paths, biggest first.")
         }
         return lines.joined(separator: "\n")
     }
@@ -138,8 +138,8 @@ final class SystemFixAgent: ObservableObject {
     anything: you return a proposal and the user approves each item. Propose at most 8 actions, best first, only things \
     that are safe: caches and logs that regenerate, build leftovers, files in Downloads that look like old installers or \
     archives, and apps that are heavy or idle. Never propose system apps, the Finder, anything in Documents, Desktop, \
-    Pictures, Music, Movies, source code folders, app data (Application Support), Messages, Mail, Keychains or dotfiles \
-    holding keys. For memory or CPU use only quit_app (clearing files does not free memory); for storage use only trash_path. Use kind quit_app (target = app name) or trash_path (target = absolute path, no ~). label is a short \
+    Pictures, Music, Movies, source code folders, app data (Application Support), Messages, Mail, Keychains, dotfiles \
+    holding keys, or the on-device AI model in .cache/huggingface (a 2 GB download that meeting notes need). For memory or CPU use only quit_app (clearing files does not free memory); for storage use only trash_path. Use kind quit_app (target = app name) or trash_path (target = absolute path, no ~). label is a short \
     human name (under 40 characters); reason is one short sentence on why it is safe and what the user loses (for \
     example 'rebuilds on next build' or 'may have unsaved work'). summary is one sentence on what you found. If nothing \
     safe is worth doing, return an empty actions list and say so in the summary.

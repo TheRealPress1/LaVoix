@@ -32,6 +32,10 @@ nonisolated enum SystemFixSafety {
         let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         let resolved = url.path
+        // The on-device model's folder is never offered, even though it sits inside an allowed cache folder (and `~/.cache` whole is refused
+        // too, because it contains it). Checked on the path as proposed as well as on where it resolves to.
+        let proposed = URL(fileURLWithPath: path).standardizedFileURL.path
+        guard !SystemFixProtection.blocks(resolved, home: home), !SystemFixProtection.blocks(proposed, home: home) else { return nil }
         let parents = self.allowedParents(home: home).map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
         // DerivedData folders inside projects are fine too: they are build output by definition.
         let isDerivedData = url.lastPathComponent == "DerivedData" && resolved.hasPrefix(home + "/") && !resolved.contains("/Library/")
