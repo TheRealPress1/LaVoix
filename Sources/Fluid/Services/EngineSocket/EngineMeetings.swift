@@ -22,15 +22,32 @@ nonisolated protocol EngineMeetingsProviding: Sendable {
     func delete(id: UUID) async throws
     /// Your verdict on a set of notes: "good", "bad", or "edited" with your corrected `text` (which also replaces the notes).
     func rateNotes(id: UUID, kind: String, rating: String, text: String?) async throws
+    /// Keeps notes that were written somewhere else for one style (a stronger model, after the user previewed and sent the transcript),
+    /// marked with the model that wrote them. They replace the notes of that style, are exported to the Brain like any others, and
+    /// cannot be rated (the engine never saw what produced them).
+    func setNotes(id: UUID, kind: String, text: String, model: String) async throws
+}
+
+/// What `meetings.notes_set` accepts.
+nonisolated enum EngineNotesInput {
+    static let maxCharacters = 200_000
+    static func clean(kind: String, text: String, model: String) throws -> (kind: MeetingSummaryKind, text: String, model: String) {
+        guard let style = MeetingSummaryKind(rawValue: kind) else { throw EngineMeetingsError.unavailable("There is no notes style called \(kind).") }
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty, body.count <= maxCharacters, !name.isEmpty, name.count <= 80 else { throw EngineMeetingsError.badNotes }
+        return (style, body, name)
+    }
 }
 
 nonisolated enum EngineMeetingsError: LocalizedError {
-    case notFound, noTranscript, modelMissing, busy, recordingBusy, notRecording, badName, unavailable(String)
+    case notFound, noTranscript, modelMissing, busy, recordingBusy, notRecording, badName, badNotes, unavailable(String)
     var errorDescription: String? {
         switch self {
         case .recordingBusy: "A recording or its processing is already in progress."
         case .notRecording: "Nothing is being recorded."
         case .badName: "Give it a name of one to eighty characters."
+        case .badNotes: "Give notes of up to 200,000 characters and the name (up to eighty characters) of the model that wrote them."
         case let .unavailable(m): m
         case .notFound: "That meeting no longer exists."
         case .noTranscript: "This meeting has no transcript text to write notes from."
@@ -181,7 +198,9 @@ nonisolated struct LiveEngineMeetings: EngineMeetingsProviding {
             for kind in MeetingSummaryKind.allCases {
                 let file = directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")
                 guard let data = try? Data(contentsOf: file), let saved = try? JSONDecoder().decode(MeetingNotesViewModel.Saved.self, from: data) else { continue }
+                let written = (try? FileManager.default.attributesOfItem(atPath: file.path))?[.modificationDate] as? Date
                 summaries[kind.rawValue] = ["text": saved.text, "model": saved.modelID, "stale": saved.transcriptHash != current,
+                                            "written_at": written.map(Self.iso) ?? NSNull(),
                                             "rating": TrainingData.rating(meeting: id, kind: kind.rawValue) ?? NSNull(),
                                             "can_rate": TrainingData.canRate(meeting: id, kind: kind.rawValue, notes: saved.text)] as [String: Any]
             }
@@ -250,6 +269,27 @@ nonisolated struct LiveEngineMeetings: EngineMeetingsProviding {
     func saveNotes(id: UUID, text: String) async throws {
         guard let directory = try await self.store.existingSessionDirectory(for: id) else { throw EngineMeetingsError.notFound }
         try text.write(to: directory.appendingPathComponent("notes.md"), atomically: true, encoding: .utf8)
+    }
+
+    func setNotes(id: UUID, kind rawKind: String, text rawText: String, model rawModel: String) async throws {
+        let (kind, text, model) = try EngineNotesInput.clean(kind: rawKind, text: rawText, model: rawModel)
+        guard let session = try await self.store.load(id: id), let directory = try await self.store.existingSessionDirectory(for: id) else {
+            throw EngineMeetingsError.notFound
+        }
+        guard session.state == .completed else { throw EngineMeetingsError.unavailable("Notes can be set once the meeting has finished.") }
+        // The same writer lock the on-device notes take, so this cannot race a rewrite of the same file.
+        guard let lock = await MainActor.run(body: { MeetingSummaryActivityCoordinator.shared.lockSelection() }) else { throw EngineMeetingsError.busy }
+        defer { Task { @MainActor in MeetingSummaryActivityCoordinator.shared.unlockSelection(lock) } }
+        let notes = (try? String(contentsOf: directory.appendingPathComponent("notes.md"), encoding: .utf8)) ?? ""
+        let transcript = MeetingSummaryInput.transcript(for: session)
+        let saved = MeetingNotesViewModel.Saved(transcriptHash: MeetingSummaryInput.fingerprint(transcript + "\n[notes]\n" + notes), modelID: model, text: text)
+        try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
+        MeetingReadableFiles.write(
+            MeetingReadableFiles.summaryMarkdown(for: session, text: text, writtenBy: model),
+            named: MeetingReadableFiles.summaryFileName(for: kind), in: directory
+        )
+        if kind == .executive { await MainActor.run { MeetingAutoAnalysis.shared.exportToBrain(session, summary: text) } }
+        // Not recorded as training data: the engine did not write these, and nothing here is the on-device model's to learn from.
     }
 
     func generateNotes(id: UUID, kind rawKind: String, auto: Bool, emit: @escaping @Sendable ([String: Any]) -> Bool) async throws {

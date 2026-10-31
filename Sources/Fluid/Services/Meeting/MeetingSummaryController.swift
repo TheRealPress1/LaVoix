@@ -4,6 +4,8 @@ import Foundation
 
 nonisolated enum MeetingSummaryKind: String, CaseIterable, Identifiable, Codable {
     case executive, detailed, actions, decisions, participants, topics
+    /// Templates: the same notes, shaped for the kind of meeting.
+    case oneOnOne = "one_on_one", standup, call
     var id: String { self.rawValue }
     var title: String {
         switch self {
@@ -13,6 +15,9 @@ nonisolated enum MeetingSummaryKind: String, CaseIterable, Identifiable, Codable
         case .decisions: "Key decisions"
         case .participants: "Participants"
         case .topics: "Topics discussed"
+        case .oneOnOne: "1:1"
+        case .standup: "Standup"
+        case .call: "Call"
         }
     }
 }

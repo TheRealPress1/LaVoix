@@ -23,7 +23,8 @@ import SQLite3
 ///   {"op":"meetings.notes_feedback","id","kind","rating":"good|bad|edited","text"?}  -> {"ok":true}   (your verdict on the notes; "edited" carries your corrected version)
 ///   {"op":"training.status"} -> {"ok":true,"training":{good,bad,edited,usable,unrated_inputs,folder}}  /  {"op":"training.export"} -> {"ok":true,"export":{train,valid,folder}}  /  {"op":"training.clear"}
 ///   {"op":"training.rate_ask","system","user","output","rating":"good|bad|edited","corrected"?}  -> {"ok":true}   (an answer from Ask, with the exact input it was given)
-///   {"op":"meetings.notes_save","id","text"}              -> {"ok":true}
+///   {"op":"meetings.notes_save","id","text"}              -> {"ok":true}   (your own jot pad, notes.md)
+///   {"op":"meetings.notes_set","id","kind","text","model"} -> {"ok":true}   (notes written elsewhere for one style, marked with the model; replaces that style; not your jot pad)
 ///   {"op":"meetings.notes_generate","id","kind","auto"}   -> {"event":"progress","message"} ... {"event":"done","text"}
 ///   {"op":"writing.list","search","limit"}               -> {"ok":true,"entries":[{id,bundle_id,app_name,window_title,first_at,last_at,latest,peak,version_count}]}
 ///   {"op":"writing.versions","entry"}                     -> {"ok":true,"versions":[{id,at,text}]}
@@ -349,7 +350,7 @@ nonisolated enum EngineSocket {
                 }
                 _ = emit(["event": "done", "ms": Int(Date().timeIntervalSince(start) * 1000)])
             } catch { _ = emit(["event": "error", "error": message(error)]) }
-        case "meetings.list", "meetings.get", "meetings.notes_save", "meetings.notes_generate", "meetings.live", "meetings.start", "meetings.stop", "meetings.rename", "meetings.rename_speaker", "meetings.delete", "meetings.notes_feedback":
+        case "meetings.list", "meetings.get", "meetings.notes_save", "meetings.notes_set", "meetings.notes_generate", "meetings.live", "meetings.start", "meetings.stop", "meetings.rename", "meetings.rename_speaker", "meetings.delete", "meetings.notes_feedback":
             guard let meetings = services.meetings else { return fail("meetings are not available") }
             do {
                 switch op {
@@ -385,6 +386,10 @@ nonisolated enum EngineSocket {
                 case "meetings.notes_save":
                     guard let id = uuid(), let text = object["text"] as? String else { return fail("missing id or text") }
                     try await meetings.saveNotes(id: id, text: text)
+                    _ = emit(["ok": true])
+                case "meetings.notes_set":
+                    guard let id = uuid(), let kind = object["kind"] as? String, let text = object["text"] as? String, let model = object["model"] as? String else { return fail("missing id, kind, text or model") }
+                    try await meetings.setNotes(id: id, kind: kind, text: text, model: model)
                     _ = emit(["ok": true])
                 default:
                     guard let id = uuid() else { return _ = emit(["event": "error", "error": "missing or bad id"]) }
@@ -752,6 +757,7 @@ private final class AutotestFlag: @unchecked Sendable {
 /// Meetings with made-up content, so the protocol can be exercised end to end without the real store.
 private struct FakeMeetings: EngineMeetingsProviding {
     let notesSaved: AutotestFlag
+    let notesSet: AutotestFlag
     let knownID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
     func list() async throws -> [[String: Any]] { [["id": self.knownID.uuidString, "title": "Design sync", "words": 120]] }
     func get(id: UUID) async throws -> [String: Any]? {
@@ -763,6 +769,11 @@ private struct FakeMeetings: EngineMeetingsProviding {
     func saveNotes(id: UUID, text: String) async throws {
         guard id == self.knownID else { throw EngineMeetingsError.notFound }
         if text == "my notes" { self.notesSaved.set() }
+    }
+    func setNotes(id: UUID, kind: String, text: String, model: String) async throws {
+        guard id == self.knownID else { throw EngineMeetingsError.notFound }
+        let clean = try EngineNotesInput.clean(kind: kind, text: text, model: model)
+        if clean.kind == .executive, clean.text == "- from elsewhere", clean.model == "claude-haiku-5-5" { self.notesSet.set() }
     }
     func start(title: String, online: Bool) async throws -> [String: Any] {
         if title == "busy" { throw EngineMeetingsError.recordingBusy }
@@ -1270,6 +1281,7 @@ nonisolated enum EngineSocketAutotest {
             let secret = "SECRET-PLANTED-TEXT"
             let warmed = AutotestFlag()
             let notesSaved = AutotestFlag()
+            let notesSet = AutotestFlag()
             let fakeWriting = FakeWriting()
             let fakeHistory = FakeHistory()
             let fakeSpeech = FakeSpeech()
@@ -1296,7 +1308,7 @@ nonisolated enum EngineSocketAutotest {
                 },
                 status: { ("test-model", true, false) },
                 warm: { warmed.set() },
-                meetings: FakeMeetings(notesSaved: notesSaved),
+                meetings: FakeMeetings(notesSaved: notesSaved, notesSet: notesSet),
                 writing: fakeWriting,
                 history: fakeHistory,
                 settings: FakeSettings(),
@@ -1418,6 +1430,19 @@ nonisolated enum EngineSocketAutotest {
             check("meetings.get on an unknown id says so", ask(#"{"op":"meetings.get","id":"\#(UUID().uuidString)"}"#)?["ok"] as? Bool == false)
             check("meetings.get rejects a bad id", ask(#"{"op":"meetings.get","id":"not-a-uuid"}"#)?["ok"] as? Bool == false)
             check("meetings.notes_save saves", ask(#"{"op":"meetings.notes_save","id":"\#(id)","text":"my notes"}"#)?["ok"] as? Bool == true && notesSaved.value)
+            check("meetings.notes_set keeps notes written elsewhere for one style, with the model that wrote them", ask(#"{"op":"meetings.notes_set","id":"\#(id)","kind":"executive","text":"- from elsewhere","model":"claude-haiku-5-5"}"#)?["ok"] as? Bool == true && notesSet.value)
+            let refusedNotes: [Bool?] = [
+                ask(#"{"op":"meetings.notes_set","id":"\#(UUID().uuidString)","kind":"executive","text":"x","model":"m"}"#)?["ok"] as? Bool,
+                ask(#"{"op":"meetings.notes_set","id":"\#(id)","kind":"poem","text":"x","model":"m"}"#)?["ok"] as? Bool,
+                ask(#"{"op":"meetings.notes_set","id":"\#(id)","kind":"executive","text":"   ","model":"m"}"#)?["ok"] as? Bool,
+                ask(#"{"op":"meetings.notes_set","id":"\#(id)","kind":"executive","text":"x","model":""}"#)?["ok"] as? Bool,
+                ask(#"{"op":"meetings.notes_set","id":"\#(id)","kind":"executive","text":"x"}"#)?["ok"] as? Bool,
+            ]
+            check("meetings.notes_set refuses an unknown meeting, an unknown style, empty notes and no model", refusedNotes.allSatisfy { $0 == false })
+            check("the notes styles include the three templates, each with its own instructions", ["one_on_one", "standup", "call"].allSatisfy { raw in
+                guard let kind = MeetingSummaryKind(rawValue: raw) else { return false }
+                return !kind.title.isEmpty && MeetingNotesPrompt.system(kind: kind, hasUserNotes: false).contains("Format: notes for") && MeetingSummaryKind.allCases.contains(kind)
+            })
             let gennotes = lines(#"{"op":"meetings.notes_generate","id":"\#(id)","kind":"executive"}"#)
             check("notes generation reports progress then the result", gennotes.filter { $0["event"] as? String == "progress" }.count == 2 && gennotes.last?["event"] as? String == "done" && gennotes.last?["text"] as? String == "notes for executive")
             check("auto notes can say they were not needed", lines(#"{"op":"meetings.notes_generate","id":"\#(id)","auto":true}"#).last?["event"] as? String == "skipped")

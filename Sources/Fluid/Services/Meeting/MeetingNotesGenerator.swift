@@ -77,6 +77,28 @@ nonisolated enum MeetingNotesPrompt {
             Format: a numbered list of the topics discussed, in the order they came up.
             - Each item: a short title in bold, then one or two sentences on what was said.
             """
+        case .oneOnOne:
+            return """
+            Format: notes for a one-on-one conversation.
+            - Use only "#" (h1) headings, in this order: "# Updates", "# Topics", "# Feedback", "# Decisions and next steps". Leave out a heading when nothing was said about it.
+            - Under each heading, bullets with the concrete detail: who said what, numbers, and the reasons given.
+            - Under "# Decisions and next steps", write commitments as "- [ ] **Owner** — task (deadline)". Omit the deadline if none was stated.
+            """
+        case .standup:
+            return """
+            Format: notes for a standup.
+            - One "#" (h1) heading per person who gave an update, in the order they spoke, with their name as it appears in the transcript.
+            - Under it, bullets starting "Done:", "Doing:" or "Blocked:". Leave out a label nobody mentioned for that person.
+            - End with a "# Follow-ups" section for anything someone agreed to do or look into, as "- [ ] **Owner** — task (deadline)". Omit the section if there are none.
+            """
+        case .call:
+            return """
+            Format: notes for a call with someone outside your team, such as a customer, a candidate, a partner or a vendor.
+            - Use only "#" (h1) headings, in this order: "# Who and why", "# What was discussed", "# Commitments".
+            - "# Who and why": one or two bullets on who was on the call and what it was for, only as far as the transcript says.
+            - "# What was discussed": bullets with the concrete points, numbers, and the other side's questions and objections.
+            - "# Commitments": what each side agreed to do, as "- [ ] **Owner** — task (deadline)", using "Unassigned" when no owner is clear. If there are none, write exactly: No commitments.
+            """
         }
     }
 
@@ -194,7 +216,7 @@ nonisolated enum MeetingNotesGenerator {
             system: finalSystem,
             user: finalUser,
             modelID: modelID,
-            maxTokens: kind == .detailed ? 2000 : 1000,
+            maxTokens: [.detailed, .oneOnOne, .standup, .call].contains(kind) ? 2000 : 1000,
             temperature: 0.2,
             cachesPrefix: false
         )
