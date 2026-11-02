@@ -50,6 +50,7 @@ import SQLite3
 ///   {"op":"permissions.request","name"}                   -> {"ok":true}   (shows macOS's own question where there is one; Full Disk Access is refused, the user switches it on in System Settings)
 ///   {"op":"shortcuts.get"}                                -> {"ok":true,"shortcuts":{dictation:[...],edit,command,cancel,paste_last}}   (labels such as "Fn"; read-only)
 ///   {"op":"audio.inputs"}                                 -> {"ok":true,"audio":{inputs:[{uid,name,preferred,default}]}}   (read-only)
+///   {"op":"look.capture","region"?:{x,y,w,h},"save"?}     -> {"ok":true,"look":{screen_access,accessibility,app?,bundle?,title?,url?,ocr_text,region_text?,screenshot?,width,height,ms}}   (reads the screen once for myOS's Look; never asks for Screen Recording, refused while a meeting is recording; region is in global points, screenshot is a small JPEG in the private folder, kept 15 minutes)
 ///   {"op":"words.list"} / {"op":"words.add","text","aliases"?} / {"op":"words.delete","text"}  -> {"ok":true,"words":[{text,aliases}]} / {"ok":true,"word":{...}} / {"ok":true}   (boost words)
 ///   {"op":"dictionary.export"}                            -> {"ok":true,"file":"<json>"}   (replacements and boost words, as LaVoix's own export file)
 ///   {"op":"dictionary.import","file","replace"?}          -> {"ok":true,"replacements":n,"words":n}   (merges unless replace is true)
@@ -132,6 +133,7 @@ nonisolated enum EngineSocket {
         var photos: (any EnginePhotosProviding)?
         var reminders: (any EngineRemindersProviding)?
         var messages: (any EngineMessagesProviding)?
+        var look: (any EngineLookProviding)?
     }
 
     private static let lock = NSLock()
@@ -218,7 +220,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel(), providers: LiveEngineProviders(), bookshelf: LiveEngineBookshelf(), bump: LiveEngineBump(openURL: { url in DispatchQueue.main.async { NSWorkspace.shared.open(url) } }), photos: LiveEnginePhotos(), reminders: LiveEngineReminders(), messages: LiveEngineMessages())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel(), providers: LiveEngineProviders(), bookshelf: LiveEngineBookshelf(), bump: LiveEngineBump(openURL: { url in DispatchQueue.main.async { NSWorkspace.shared.open(url) } }), photos: LiveEnginePhotos(), reminders: LiveEngineReminders(), messages: LiveEngineMessages(), look: LiveEngineLook())
     }
 
     enum EngineError: LocalizedError {
@@ -442,6 +444,25 @@ nonisolated enum EngineSocket {
         case "shortcuts.get", "audio.inputs":
             guard let shortcuts = services.shortcuts else { return fail("shortcuts are not available") }
             if op == "shortcuts.get" { _ = emit(["ok": true, "shortcuts": await shortcuts.shortcuts()]) } else { _ = emit(["ok": true, "audio": await shortcuts.inputs()]) }
+        case "look.capture":
+            guard let look = services.look else { return fail("looking at the screen is not available") }
+            // Never while a meeting is recording, and if the engine cannot say in time whether one is, not at all: the recorder is not shared
+            // with anything new until this has been tried alongside a real recording.
+            guard let activity = services.activity, let snapshot = await EngineTimeout.run(seconds: 4, { await activity.snapshot() }) else {
+                return fail("The engine could not say whether a meeting is recording, so it did not look.")
+            }
+            if snapshot["recording"] as? Bool == true { return fail("Look is off while a meeting is recording.") }
+            var region: CGRect?
+            if let r = object["region"] as? [String: Any], let x = (r["x"] as? NSNumber)?.doubleValue, let y = (r["y"] as? NSNumber)?.doubleValue,
+               let w = (r["w"] as? NSNumber)?.doubleValue, let h = (r["h"] as? NSNumber)?.doubleValue, w > 0, h > 0, w < 20_000, h < 20_000 {
+                region = CGRect(x: x, y: y, width: w, height: h)
+            }
+            let save = object["save"] as? Bool ?? false
+            if let result = await EngineTimeout.run(seconds: 20, { await look.capture(region: region, save: save) }) {
+                _ = emit(["ok": true, "look": result])
+            } else {
+                fail("Reading the screen took too long.")
+            }
         case "permissions.status":
             guard let permissions = services.permissions else { return fail("permissions are not available") }
             _ = emit(["ok": true, "permissions": await permissions.status()])
@@ -1253,8 +1274,28 @@ private struct FakePermissions: EnginePermissionsProviding {
     func request(_ name: String) async throws { if name == "full_disk_access" { throw EnginePermissionsError.notPromptable } }
 }
 
-private struct FakeActivity: EngineActivityProviding {
-    func snapshot() async -> [String: Any] { ["recording": false, "meeting_processing": false, "dictating": true, "busy": true] }
+private final class FakeActivity: EngineActivityProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var isRecording = false
+    var recording: Bool {
+        get { self.lock.lock(); defer { self.lock.unlock() }; return self.isRecording }
+        set { self.lock.lock(); defer { self.lock.unlock() }; self.isRecording = newValue }
+    }
+    func snapshot() async -> [String: Any] { ["recording": self.recording, "meeting_processing": false, "dictating": true, "busy": true] }
+}
+
+private final class FakeLook: EngineLookProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var regions: [CGRect?] = []
+    private var saves: [Bool] = []
+    var calls: (regions: [CGRect?], saves: [Bool]) { self.lock.lock(); defer { self.lock.unlock() }; return (self.regions, self.saves) }
+    func capture(region: CGRect?, save: Bool) async -> [String: Any] {
+        self.lock.lock(); self.regions.append(region); self.saves.append(save); self.lock.unlock()
+        var out: [String: Any] = ["screen_access": true, "accessibility": true, "app": "Test Browser", "title": "Jane Roe | Example", "ocr_text": "Jane Roe is the editor at Example.", "width": 100, "height": 50, "ms": 1]
+        if region != nil { out["region_text"] = "Jane Roe" }
+        if save { out["screenshot"] = "/tmp/look-test.jpg" }
+        return out
+    }
 }
 
 private final class FakeSpeech: EngineSpeechProviding, @unchecked Sendable {
@@ -1289,6 +1330,8 @@ nonisolated enum EngineSocketAutotest {
             let fakeModel = FakeModel()
             let bookshelfSession = BookshelfAutotestSession()
             let fakeMessages = FakeMessages()
+            let fakeActivity = FakeActivity()
+            let fakeLook = FakeLook()
             let bumpStub = BumpAutotestServer()
             let bookshelfCapture = await MainActor.run { bookshelfSession.capture }
             await MainActor.run { bookshelfCapture.start(interval: 3600) }
@@ -1316,7 +1359,7 @@ nonisolated enum EngineSocketAutotest {
                 stats: FakeStats(),
                 prompts: FakePrompts(),
                 speech: fakeSpeech,
-                activity: FakeActivity(),
+                activity: fakeActivity,
                 contacts: FakeContacts(),
                 permissions: FakePermissions(),
                 shortcuts: FakeShortcuts(),
@@ -1328,7 +1371,8 @@ nonisolated enum EngineSocketAutotest {
                 bump: bumpStub.client,
                 photos: FakePhotos(),
                 reminders: FakeReminders(),
-                messages: fakeMessages
+                messages: fakeMessages,
+                look: fakeLook
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -1896,6 +1940,21 @@ nonisolated enum EngineSocketAutotest {
                 check("shortcuts.get reports the dictation keys", (sc?["dictation"] as? [String]) == ["Fn"] && sc?["cancel"] as? String == "Esc")
                 let inputs = (ask(#"{"op":"audio.inputs"}"#)?["audio"] as? [String: Any])?["inputs"] as? [[String: Any]]
                 check("audio.inputs lists the microphones and which is preferred", inputs?.first?["name"] as? String == "Test Mic" && inputs?.first?["preferred"] as? Bool == true)
+            }
+            // look: the screen read once, never while a meeting is recording
+            do {
+                let l = ask(#"{"op":"look.capture"}"#)?["look"] as? [String: Any]
+                check("look.capture returns what was read: the app, the title and the text", l?["app"] as? String == "Test Browser" && (l?["ocr_text"] as? String)?.contains("Jane Roe") == true && l?["region_text"] == nil && l?["screenshot"] == nil)
+                let r = ask(#"{"op":"look.capture","region":{"x":10,"y":20,"w":300,"h":120},"save":true}"#)?["look"] as? [String: Any]
+                check("look.capture passes a region and a save request through", r?["region_text"] as? String == "Jane Roe" && r?["screenshot"] as? String == "/tmp/look-test.jpg" && fakeLook.calls.regions.last == CGRect(x: 10, y: 20, width: 300, height: 120) && fakeLook.calls.saves.last == true)
+                _ = ask(#"{"op":"look.capture","region":{"x":0,"y":0,"w":-5,"h":10}}"#)
+                check("look.capture drops a region with no size", fakeLook.calls.regions.last! == nil)
+                fakeActivity.recording = true
+                let before = fakeLook.calls.saves.count
+                let refused = ask(#"{"op":"look.capture"}"#)
+                check("look.capture is refused while a meeting is recording, and never reads the screen", refused?["ok"] as? Bool == false && (refused?["error"] as? String)?.contains("recording") == true && fakeLook.calls.saves.count == before)
+                fakeActivity.recording = false
+                check("look.capture works again when the recording stops", ask(#"{"op":"look.capture"}"#)?["ok"] as? Bool == true)
             }
             // permissions
             do {
