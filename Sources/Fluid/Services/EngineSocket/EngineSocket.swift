@@ -52,6 +52,8 @@ import SQLite3
 ///   {"op":"audio.inputs"}                                 -> {"ok":true,"audio":{inputs:[{uid,name,preferred,default}]}}   (read-only)
 ///   {"op":"look.capture","app"?,"scope"?,"region"?:{x,y,w,h},"save"?} -> {"ok":true,"look":{screen_access,accessibility,scope,app?,bundle?,title?,url?,ocr_text,region_text?,screenshot?,width,height,ms,error?}}   (reads ONE window once for myOS's Look: the biggest window of the app named in "app", else the topmost window under the pointer; "scope":"display" reads the whole display under the pointer instead; never asks for Screen Recording, refused while a meeting is recording; region is in global points, screenshot is a small JPEG in the private folder, kept 15 minutes)
 ///   {"op":"look.configure","enabled"} / {"op":"look.status"}  -> {"ok":true,"look":{enabled,chord,active,pending}}   (the Fn+Control chord for Look is off until switched on here; the choice is kept)
+///   {"op":"look.buddy","state":"thinking"|"done"}          -> {"ok":true}   (the cursor companion: thinking shows the spinner at the pointer, done lets it go; refused while a meeting is recording, except done)
+///   {"op":"look.point","x","y","label"?,"hold"?}          -> {"ok":true}   (the companion flies to a global screen point, origin top-left of the main display, says label (60 characters at most) for hold seconds (0.5 to 30, default 3), then flies back to the pointer; refused while a meeting is recording)
 ///   {"op":"look.wait","timeout"?}                         -> {"ok":true,"event":{kind:"captured",said,region?,path_points,capture:{...as look.capture, plus links?:[{text,href}]}}|null}   (myOS waits here; null when nothing happened in time)
 ///   {"op":"words.list"} / {"op":"words.add","text","aliases"?} / {"op":"words.delete","text"}  -> {"ok":true,"words":[{text,aliases}]} / {"ok":true,"word":{...}} / {"ok":true}   (boost words)
 ///   {"op":"dictionary.export"}                            -> {"ok":true,"file":"<json>"}   (replacements and boost words, as LaVoix's own export file)
@@ -137,6 +139,7 @@ nonisolated enum EngineSocket {
         var messages: (any EngineMessagesProviding)?
         var look: (any EngineLookProviding)?
         var lookControl: (any EngineLookControlProviding)?
+        var buddy: (any EngineBuddyProviding)?
     }
 
     private static let lock = NSLock()
@@ -223,7 +226,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel(), providers: LiveEngineProviders(), bookshelf: LiveEngineBookshelf(), bump: LiveEngineBump(openURL: { url in DispatchQueue.main.async { NSWorkspace.shared.open(url) } }), photos: LiveEnginePhotos(), reminders: LiveEngineReminders(), messages: LiveEngineMessages(), look: LiveEngineLook(), lookControl: LiveEngineLookControl())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel(), providers: LiveEngineProviders(), bookshelf: LiveEngineBookshelf(), bump: LiveEngineBump(openURL: { url in DispatchQueue.main.async { NSWorkspace.shared.open(url) } }), photos: LiveEnginePhotos(), reminders: LiveEngineReminders(), messages: LiveEngineMessages(), look: LiveEngineLook(), lookControl: LiveEngineLookControl(), buddy: LiveEngineBuddy())
     }
 
     enum EngineError: LocalizedError {
@@ -454,6 +457,31 @@ nonisolated enum EngineSocket {
                 await control.setEnabled(enabled)
             }
             _ = emit(["ok": true, "look": await control.status()])
+        case "look.buddy", "look.point":
+            guard let buddy = services.buddy else { return fail("the cursor companion is not available") }
+            let state = op == "look.point" ? "point" : (object["state"] as? String ?? "")
+            guard ["thinking", "done", "point"].contains(state) else { return fail("state must be thinking or done") }
+            var x = 0.0, y = 0.0
+            if state == "point" {
+                guard let px = (object["x"] as? NSNumber)?.doubleValue, let py = (object["y"] as? NSNumber)?.doubleValue, abs(px) < 100_000, abs(py) < 100_000 else {
+                    return fail("x and y must be numbers: a point on the screen")
+                }
+                x = px
+                y = py
+            }
+            if state != "done" {
+                // The same rule as look.capture: nothing is drawn while a meeting is recording, and if that cannot be told in time, nothing is.
+                guard let activity = services.activity, let snapshot = await EngineTimeout.run(seconds: 4, { await activity.snapshot() }) else {
+                    return fail("The engine could not say whether a meeting is recording, so it did not draw.")
+                }
+                if snapshot["recording"] as? Bool == true { return fail("The cursor companion is off while a meeting is recording.") }
+            }
+            switch state {
+            case "thinking": await buddy.think()
+            case "done": await buddy.done()
+            default: await buddy.point(x: x, y: y, label: (object["label"] as? String).map { String($0.prefix(500)) }, hold: (object["hold"] as? NSNumber)?.doubleValue)
+            }
+            _ = emit(["ok": true])
         case "look.wait":
             // myOS waits here for something Look has to say; answers with it, or with null when nothing happened in time.
             let seconds = min(max((object["timeout"] as? NSNumber)?.doubleValue ?? 25, 1), 30)
@@ -1328,6 +1356,16 @@ private final class FakeLook: EngineLookProviding, @unchecked Sendable {
     }
 }
 
+private final class FakeBuddy: EngineBuddyProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var log: [String] = []
+    var calls: [String] { self.lock.lock(); defer { self.lock.unlock() }; return self.log }
+    private func note(_ s: String) { self.lock.lock(); self.log.append(s); self.lock.unlock() }
+    func think() async { self.note("think") }
+    func done() async { self.note("done") }
+    func point(x: Double, y: Double, label: String?, hold: Double?) async { self.note("point:\(x),\(y),\(label ?? "-"),\(hold.map { String($0) } ?? "-")") }
+}
+
 private final class FakeSpeech: EngineSpeechProviding, @unchecked Sendable {
     private let lock = NSLock()
     var calls: [String] = []
@@ -1363,6 +1401,7 @@ nonisolated enum EngineSocketAutotest {
             let fakeActivity = FakeActivity()
             let fakeLook = FakeLook()
             let fakeLookControl = FakeLookControl()
+            let fakeBuddy = FakeBuddy()
             let bumpStub = BumpAutotestServer()
             let bookshelfCapture = await MainActor.run { bookshelfSession.capture }
             await MainActor.run { bookshelfCapture.start(interval: 3600) }
@@ -1404,7 +1443,8 @@ nonisolated enum EngineSocketAutotest {
                 reminders: FakeReminders(),
                 messages: fakeMessages,
                 look: fakeLook,
-                lookControl: fakeLookControl
+                lookControl: fakeLookControl,
+                buddy: fakeBuddy
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -2044,6 +2084,62 @@ nonisolated enum EngineSocketAutotest {
                 let sweep: [CGPoint] = [CGPoint(x: 100, y: 300), CGPoint(x: 200, y: 300), CGPoint(x: 400, y: 300)]
                 let sweepBox = LookPath.region(from: sweep)
                 check("a straight sweep gets a box at least sixty points high", sweepBox != nil && (sweepBox?.height ?? 0) >= 60 && (sweepBox?.width ?? 0) >= 300)
+            }
+            // look: the cursor companion's ops and its pure rules
+            do {
+                _ = ask(#"{"op":"look.buddy","state":"thinking"}"#)
+                _ = ask(#"{"op":"look.buddy","state":"done"}"#)
+                check("look.buddy passes thinking and done through", fakeBuddy.calls == ["think", "done"])
+                check("look.buddy refuses an unknown or missing state", ask(#"{"op":"look.buddy","state":"dance"}"#)?["ok"] as? Bool == false && ask(#"{"op":"look.buddy"}"#)?["ok"] as? Bool == false && fakeBuddy.calls.count == 2)
+                let pointed = ask(#"{"op":"look.point","x":420.5,"y":310,"label":"the email address","hold":4}"#)
+                check("look.point passes the point, the label and the hold through", pointed?["ok"] as? Bool == true && fakeBuddy.calls.last == "point:420.5,310.0,the email address,4.0")
+                _ = ask(#"{"op":"look.point","x":1,"y":2}"#)
+                check("look.point works with no label and no hold", fakeBuddy.calls.last == "point:1.0,2.0,-,-")
+                let longLabel = String(repeating: "x", count: 900)
+                _ = ask("{\"op\":\"look.point\",\"x\":1,\"y\":2,\"label\":\"\(longLabel)\"}")
+                check("look.point cuts an absurdly long label before it reaches the screen", (fakeBuddy.calls.last ?? "").count < 560)
+                let before = fakeBuddy.calls.count
+                check("look.point refuses a missing, non-numeric or absurd point", ask(#"{"op":"look.point","x":1}"#)?["ok"] as? Bool == false && ask(#"{"op":"look.point","x":"a","y":2}"#)?["ok"] as? Bool == false && ask(#"{"op":"look.point","x":1e12,"y":2}"#)?["ok"] as? Bool == false && fakeBuddy.calls.count == before)
+                fakeActivity.recording = true
+                let noDraw = ask(#"{"op":"look.point","x":1,"y":2}"#)
+                let noThink = ask(#"{"op":"look.buddy","state":"thinking"}"#)
+                check("nothing is drawn while a meeting is recording", noDraw?["ok"] as? Bool == false && noThink?["ok"] as? Bool == false && (noDraw?["error"] as? String)?.contains("recording") == true && fakeBuddy.calls.count == before)
+                check("the companion can always be let go, even while a meeting records", ask(#"{"op":"look.buddy","state":"done"}"#)?["ok"] as? Bool == true && fakeBuddy.calls.last == "done")
+                fakeActivity.recording = false
+                // the maths of the companion
+                let from = CGPoint(x: 100, y: 200), to = CGPoint(x: 700, y: 500)
+                let flight = LookBuddyMath.flight(from: from, to: to)
+                let first = flight.frames.first!, last = flight.frames.last!
+                check("a flight starts where it began and ends where it was sent", hypot(first.position.x - from.x, first.position.y - from.y) < 0.01 && hypot(last.position.x - to.x, last.position.y - to.y) < 0.01)
+                check("a flight lasts 0.6 s for a short hop, 1.4 s at most, and grows with distance", LookBuddyMath.flightDuration(distance: 100) == 0.6 && LookBuddyMath.flightDuration(distance: 5000) == 1.4 && LookBuddyMath.flightDuration(distance: 800) == 1.0)
+                check("a flight has a frame for every sixtieth of a second", abs(flight.frames.count - Int((flight.duration * 60).rounded()) - 1) <= 1)
+                var jump: CGFloat = 0
+                for (a, b) in zip(flight.frames, flight.frames.dropFirst()) { jump = max(jump, abs(b.rotation - a.rotation)) }
+                check("the triangle never snaps: no frame turns it by more than a quarter turn", jump < 0.8)
+                let endTurn = LookBuddyMath.nearest(last.rotation, to: LookBuddyMath.restRotation) - LookBuddyMath.restRotation
+                let startTurn = LookBuddyMath.nearest(first.rotation, to: LookBuddyMath.restRotation) - LookBuddyMath.restRotation
+                check("the triangle starts and ends in its resting lean", abs(endTurn) < 0.001 && abs(startTurn) < 0.001)
+                let middle = flight.frames[flight.frames.count / 2]
+                check("it swells to 1.3 times in the middle and is its own size at both ends, with the glow following", abs(first.scale - 1) < 0.001 && abs(last.scale - 1) < 0.001 && middle.scale > 1.28 && middle.glow > 13 && abs(first.glow - 8) < 0.001)
+                // going right and up on a screen (y grows upward) the arc bows above the straight line, and it turns to face the way it goes
+                let straightY = from.y + (to.y - from.y) * ((middle.position.x - from.x) / (to.x - from.x))
+                check("the arc bows upward, away from the straight line", middle.position.y > straightY + 10 && middle.position.y - straightY <= 80.5)
+                let eastward = LookBuddyMath.flight(from: CGPoint(x: 0, y: 0), to: CGPoint(x: 1000, y: 0))
+                let mid = eastward.frames[eastward.frames.count / 2]
+                let facing = LookBuddyMath.nearest(mid.rotation, to: -.pi / 2)
+                check("flying east it faces east: the tip, up at rotation zero, is turned a quarter turn clockwise, a little less as the arc rises", facing < -0.9 && facing > -2.1)
+                let stay = LookBuddyMath.flight(from: CGPoint(x: 5, y: 5), to: CGPoint(x: 5.5, y: 5))
+                check("a flight of no distance keeps the resting lean", stay.frames.allSatisfy { abs($0.rotation - LookBuddyMath.restRotation) < 0.0001 } && stay.duration == 0.6)
+                let screen = CGRect(x: 0, y: 0, width: 1000, height: 600)
+                let inside = LookBuddyMath.landing(for: CGPoint(x: 500, y: 300), in: screen)
+                let cornered = LookBuddyMath.landing(for: CGPoint(x: 995, y: 5), in: screen)
+                check("it lands a little right of and below the target, and always inside the screen", inside == CGPoint(x: 508, y: 288) && cornered == CGPoint(x: 980, y: 20))
+                check("quartz and appkit points convert both ways", LookBuddyMath.flip(LookBuddyMath.flip(CGPoint(x: 12, y: 34), primaryHeight: 900), primaryHeight: 900) == CGPoint(x: 12, y: 34) && LookBuddyMath.flip(CGPoint(x: 0, y: 0), primaryHeight: 900) == CGPoint(x: 0, y: 900))
+                check("the companion trails the pointer to its right and below it", LookBuddyMath.followPosition(pointer: CGPoint(x: 100, y: 100)) == CGPoint(x: 135, y: 75))
+                let quiet = LookBuddyMath.barHeights(level: 0, time: 0), loud = LookBuddyMath.barHeights(level: 1, time: 0.3)
+                check("the bars are 3 to 14.5 points, louder speech is taller, and the middle bar leads", quiet.count == 5 && quiet.allSatisfy { $0 >= 3 && $0 <= 4.6 } && loud.allSatisfy { $0 <= 14.6 } && loud[2] > quiet[2] + 6 && loud[2] > loud[0])
+                check("a label is one line, trimmed and cut at sixty characters; empty means none", LookBuddyMath.cleanLabel("  the\n email   address ") == "the email address" && LookBuddyMath.cleanLabel(String(repeating: "a", count: 200))?.count == 60 && LookBuddyMath.cleanLabel("  \n ") == nil && LookBuddyMath.cleanLabel(nil) == nil)
+                check("how long it stays is between half a second and thirty, three by default", LookBuddyMath.clampHold(nil) == 3 && LookBuddyMath.clampHold(0) == 0.5 && LookBuddyMath.clampHold(999) == 30 && LookBuddyMath.clampHold(7) == 7)
             }
             // permissions
             do {

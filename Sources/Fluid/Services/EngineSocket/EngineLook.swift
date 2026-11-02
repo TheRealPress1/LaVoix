@@ -28,6 +28,22 @@ nonisolated protocol EngineLookProviding: Sendable {
     func capture(region: CGRect?, save: Bool, app: String?, scope: String) async -> [String: Any]
 }
 
+/// The cursor companion, for myOS: show it thinking while it works, fly it to a point on the screen with a few words, or let it go.
+nonisolated protocol EngineBuddyProviding: Sendable {
+    func think() async
+    func done() async
+    /// `x`, `y` are global screen points with the origin at the top left of the main display (as Accessibility and the window list give them).
+    func point(x: Double, y: Double, label: String?, hold: Double?) async
+}
+
+nonisolated struct LiveEngineBuddy: EngineBuddyProviding {
+    func think() async { await MainActor.run { LookBuddy.shared.begin(.thinking) } }
+    func done() async { await MainActor.run { LookBuddy.shared.end() } }
+    func point(x: Double, y: Double, label: String?, hold: Double?) async {
+        await MainActor.run { LookBuddy.shared.point(atQuartz: CGPoint(x: x, y: y), label: label, hold: hold) }
+    }
+}
+
 nonisolated enum EngineLookError: Error { case noDisplay, noWindow }
 
 nonisolated enum EngineLookLimits {

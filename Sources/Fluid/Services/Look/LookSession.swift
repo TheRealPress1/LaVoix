@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 
 /// Look, from the keyboard: hold Fn (dictation starts as it always does), add Control, say what you want while you point or circle, let go.
@@ -23,6 +24,8 @@ final class LookSession {
     var persists = true
 
     private var isDictating: () -> Bool = { false }
+    private var levels: AnyPublisher<CGFloat, Never>?
+    private var levelSubscription: AnyCancellable?
     private var flagsMonitors: [Any] = []
     private var mouseMonitors: [Any] = []
     private var chordWasDown = false
@@ -34,9 +37,11 @@ final class LookSession {
     private var read: Task<EngineLookRead?, Never>?
     private var taken: (path: [CGPoint], read: Task<EngineLookRead?, Never>?)?
 
-    /// Called once by the dictation screen: how to tell that a plain dictation is being recorded right now.
-    func install(isDictating: @escaping () -> Bool) {
+    /// Called once by the dictation screen: how to tell that a plain dictation is being recorded right now, and the microphone level the
+    /// cursor companion's waveform follows while it is.
+    func install(isDictating: @escaping () -> Bool, levels: AnyPublisher<CGFloat, Never>? = nil) {
         self.isDictating = isDictating
+        self.levels = levels
         if self.enabled { self.startObserving() }
     }
 
@@ -107,6 +112,10 @@ final class LookSession {
             }
             self.pending = true
             self.startTrackingPointer()
+            // The cursor companion appears at the pointer as a waveform that moves with the voice; it never draws during a meeting recording
+            // because this point is not reached then.
+            LookBuddy.shared.begin(.listening)
+            self.levelSubscription = self.levels?.receive(on: DispatchQueue.main).sink { level in MainActor.assumeIsolated { LookBuddy.shared.setLevel(level) } }
             DebugLogger.shared.info("Look: started", source: "LookSession")
             return await LiveEngineLook().read(app: nil, scope: "window")
         }
@@ -137,6 +146,14 @@ final class LookSession {
             return false
         }
         self.stopTrackingPointer()
+        // The words are in: the companion turns into a spinner until myOS has answered (it lets it go), or twenty seconds have passed.
+        self.levelSubscription = nil
+        LookBuddy.shared.setMode(.thinking)
+        let finishedSession = self.sessionID
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            if let self, self.sessionID == finishedSession, !self.sessionActive { LookBuddy.shared.end() }
+        }
         self.taken = (self.path, self.read)
         self.sessionActive = false
         self.pending = false
@@ -148,20 +165,22 @@ final class LookSession {
 
     /// The spoken words have arrived: read the circled part of the picture taken when Control went down and hand everything to myOS.
     func finish(said: String) async {
-        guard let taken = self.taken else { return }
+        guard let taken = self.taken else { LookBuddy.shared.end(); return }
         self.taken = nil
         let region = LookPath.region(from: taken.path)
-        guard let read = await taken.read?.value else { return }
+        guard let read = await taken.read?.value else { LookBuddy.shared.end(); return }
         let capture = await LiveEngineLook().finish(read, region: region, save: false)
         var event: [String: Any] = ["kind": "captured", "said": String(said.prefix(1000)), "path_points": taken.path.count, "capture": capture]
         if let region { event["region"] = ["x": region.minX, "y": region.minY, "w": region.width, "h": region.height] }
-        guard let data = try? JSONSerialization.data(withJSONObject: event), let json = String(data: data, encoding: .utf8) else { return }
+        guard let data = try? JSONSerialization.data(withJSONObject: event), let json = String(data: data, encoding: .utf8) else { LookBuddy.shared.end(); return }
         await LookEvents.shared.push(json)
         DebugLogger.shared.info("Look: captured (said \(said.count) chars, \(taken.path.count) pointer points, region \(region != nil), ocr \((capture["ocr_text"] as? String)?.count ?? 0) chars)", source: "LookSession")
     }
 
     private func reset() {
         self.stopTrackingPointer()
+        self.levelSubscription = nil
+        LookBuddy.shared.end()
         self.sessionActive = false
         self.pending = false
         self.pendingDeadline = nil

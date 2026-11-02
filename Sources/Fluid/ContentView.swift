@@ -4869,7 +4869,7 @@ struct ContentView: View {
 
     private func initializeHotkeyManagerIfNeeded() {
         // Look (Fn held, then Control) is watched from the side and stays off until myOS switches it on.
-        LookSession.shared.install(isDictating: { self.activeRecordingMode == .dictate && self.asr.isRunningOrStarting })
+        LookSession.shared.install(isDictating: { self.activeRecordingMode == .dictate && self.asr.isRunningOrStarting }, levels: self.asr.audioLevelPublisher)
         NotchContentState.shared.onPromptModeSwitchRequested = { mode in
             self.handleLivePromptModeSwitch(mode)
         }
