@@ -37,41 +37,65 @@ nonisolated enum EngineLookLimits {
     static let uploadLongEdge: CGFloat = 1568
 }
 
+/// A window (or display) picked and photographed, not yet read: the session takes this when the chord goes down and reads the circled part
+/// when it is released.
+nonisolated struct EngineLookRead: @unchecked Sendable {
+    var info: [String: Any]
+    var shot: EngineLookScreen.Shot?
+    var scope: String
+    var screenAccess: Bool
+    var error: String?
+    var startedAt: Date
+}
+
 nonisolated struct LiveEngineLook: EngineLookProviding {
     func capture(region: CGRect?, save: Bool, app: String?, scope: String) async -> [String: Any] {
+        await self.finish(await self.read(app: app, scope: scope), region: region, save: save)
+    }
+
+    /// Picks the window, asks Accessibility about it and takes the picture. Reads no text yet.
+    func read(app: String?, scope: String) async -> EngineLookRead {
         let started = Date()
         let pointer = CGEvent(source: nil)?.location ?? .zero
-        // Which window: the named app's biggest, else the one under the pointer. A named app with no window is an error, never a quiet
+        // Which window: the named app's frontmost, else the one under the pointer. A named app with no window is an error, never a quiet
         // fallback to something else on the screen. With no window under the pointer (or scope "display") the display is read instead.
         let wanted = app?.trimmingCharacters(in: .whitespacesAndNewlines).prefix(100).description ?? ""
         var pick: EngineLookTarget.Pick?
         if scope != "display" {
             if !wanted.isEmpty {
                 pick = EngineLookTarget.ofApp(wanted)
-                if pick == nil { return ["screen_access": CGPreflightScreenCaptureAccess(), "scope": "window", "ocr_text": "", "error": "No window of that app is open on a screen.", "ms": Int(Date().timeIntervalSince(started) * 1000)] }
+                if pick == nil {
+                    return EngineLookRead(info: [:], shot: nil, scope: "window", screenAccess: CGPreflightScreenCaptureAccess(), error: "No window of that app is open on a screen.", startedAt: started)
+                }
             } else {
                 pick = EngineLookTarget.underPointer(pointer)
             }
         }
-        var out: [String: Any] = await Task.detached(priority: .userInitiated) { EngineLookWindow.info(for: pick) }.value
+        var info: [String: Any] = await Task.detached(priority: .userInitiated) { EngineLookWindow.info(for: pick) }.value
         guard CGPreflightScreenCaptureAccess() else {
-            out["screen_access"] = false
-            out["ocr_text"] = ""
-            out["scope"] = pick == nil ? "display" : "window"
-            out["ms"] = Int(Date().timeIntervalSince(started) * 1000)
-            return out
+            return EngineLookRead(info: info, shot: nil, scope: pick == nil ? "display" : "window", screenAccess: false, error: nil, startedAt: started)
         }
-        out["screen_access"] = true
         do {
-            let shot: EngineLookScreen.Shot
             if let pick {
-                shot = try await EngineLookScreen.captureWindow(pick)
-                out["scope"] = "window"
-                if let title = shot.title, out["title"] == nil, !title.isEmpty { out["title"] = String(title.prefix(300)) }
-            } else {
-                shot = try await EngineLookScreen.captureDisplay(pointer: pointer)
-                out["scope"] = "display"
+                let shot = try await EngineLookScreen.captureWindow(pick)
+                if let title = shot.title, info["title"] == nil, !title.isEmpty { info["title"] = String(title.prefix(300)) }
+                return EngineLookRead(info: info, shot: shot, scope: "window", screenAccess: true, error: nil, startedAt: started)
             }
+            let shot = try await EngineLookScreen.captureDisplay(pointer: pointer)
+            return EngineLookRead(info: info, shot: shot, scope: "display", screenAccess: true, error: nil, startedAt: started)
+        } catch {
+            return EngineLookRead(info: info, shot: nil, scope: pick == nil ? "display" : "window", screenAccess: true, error: "The screen could not be read.", startedAt: started)
+        }
+    }
+
+    /// Reads the text of the picture (and of `region`, in global points, on its own), and keeps a small JPEG when asked.
+    func finish(_ read: EngineLookRead, region: CGRect?, save: Bool) async -> [String: Any] {
+        var out = read.info
+        out["screen_access"] = read.screenAccess
+        out["scope"] = read.scope
+        out["ocr_text"] = ""
+        if let error = read.error { out["error"] = error }
+        if let shot = read.shot {
             out["width"] = shot.image.width
             out["height"] = shot.image.height
             let text = await Task.detached(priority: .userInitiated) { () -> (String, String?) in
@@ -82,13 +106,10 @@ nonisolated struct LiveEngineLook: EngineLookProviding {
             out["ocr_text"] = text.0
             if let r = text.1 { out["region_text"] = r }
             if save, let path = EngineLookFiles.saveForUpload(shot.image) { out["screenshot"] = path }
-        } catch {
-            out["ocr_text"] = ""
-            out["error"] = "The screen could not be read."
         }
-        let ms = Int(Date().timeIntervalSince(started) * 1000)
+        let ms = Int(Date().timeIntervalSince(read.startedAt) * 1000)
         out["ms"] = ms
-        DebugLogger.shared.info("Look capture: scope=\(out["scope"] ?? "?") access=\(out["screen_access"] ?? false) ocrChars=\((out["ocr_text"] as? String)?.count ?? 0) saved=\(out["screenshot"] != nil) \(ms) ms", source: "EngineLook")
+        DebugLogger.shared.info("Look capture: scope=\(read.scope) access=\(read.screenAccess) ocrChars=\((out["ocr_text"] as? String)?.count ?? 0) links=\((out["links"] as? [Any])?.count ?? 0) saved=\(out["screenshot"] != nil) \(ms) ms", source: "EngineLook")
         return out
     }
 }
@@ -157,7 +178,43 @@ nonisolated enum EngineLookWindow {
         guard let window = self.axWindow(of: element, matching: pick?.bounds) else { return result }
         if let title = self.string(window, kAXTitleAttribute), !title.isEmpty { result["title"] = String(title.prefix(300)) }
         if let url = self.pageURL(in: window) { result["url"] = url }
+        let links = self.links(in: window)
+        if !links.isEmpty { result["links"] = links }
         return result
+    }
+
+    /// The page's links as {text, href}: http(s) addresses (query and fragment removed) and mailto: addresses, at most sixty, found by walking
+    /// the window's Accessibility tree, which is bounded in nodes and in time (an icon-only link, such as a LinkedIn button, has its address
+    /// here and nowhere in the picture's text).
+    static func links(in window: AXUIElement) -> [[String: String]] {
+        var found: [[String: String]] = []
+        var seen = Set<String>()
+        let deadline = Date().addingTimeInterval(1.5)
+        var queue: [(AXUIElement, Int)] = [(window, 0)]
+        var next = 0
+        while next < queue.count, next < 2500, found.count < 60, Date() < deadline {
+            let (element, depth) = queue[next]
+            next += 1
+            if self.string(element, kAXRoleAttribute) == "AXLink", let raw = self.string(element, "AXURL"), let href = self.linkTarget(raw), seen.insert(href).inserted {
+                let text = self.string(element, kAXTitleAttribute) ?? self.string(element, kAXDescriptionAttribute) ?? ""
+                found.append(["text": String(text.prefix(120)), "href": href])
+            }
+            guard depth < 30 else { continue }
+            var children: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success, let kids = children as? [AXUIElement] {
+                for child in kids.prefix(60) { queue.append((child, depth + 1)) }
+            }
+        }
+        return found
+    }
+
+    /// "mailto:a@b.com?subject=x" becomes "mailto:a@b.com"; an http(s) address loses its query and fragment; anything else is not a link we keep.
+    static func linkTarget(_ raw: String) -> String? {
+        if raw.lowercased().hasPrefix("mailto:") {
+            let address = raw.dropFirst(7).split(separator: "?").first.map(String.init) ?? ""
+            return address.contains("@") && address.count <= 200 ? "mailto:\(address)" : nil
+        }
+        return self.cleaned(raw)
     }
 
     /// The Accessibility window at the picked window's place (so an app with several windows reports the right one's title and address), or

@@ -245,10 +245,12 @@ struct ContentView: View {
         case normal
         case onboardingSandbox
         case historyOnly
+        /// Spoken while pointing at something on the screen (Fn held, then Control): the words go to Look, not to the cursor and not to the history.
+        case look
 
-        var savesHistory: Bool { self != .onboardingSandbox }
+        var savesHistory: Bool { self != .onboardingSandbox && self != .look }
         var deliversText: Bool { self == .normal }
-        var publishesEditorResult: Bool { self != .historyOnly }
+        var publishesEditorResult: Bool { self != .historyOnly && self != .look }
     }
 
     @EnvironmentObject private var appServices: AppServices
@@ -3015,7 +3017,7 @@ struct ContentView: View {
         let shouldUseAIOnStop = stopSnapshot?.usesAI ?? activeDictationSlot.map {
             DictationAIPostProcessingGate.isConfigured(for: $0, appBundleID: self.recordingAppInfo?.bundleId)
         } ?? DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: self.recordingAppInfo?.bundleId)
-        let shouldHideOverlayOnStop = route == .historyOnly || self.cancelledOutputLifecycleID == expectedOverlayLifecycleID || (route == .normal && !wasRewriteMode && !wasCommandMode
+        let shouldHideOverlayOnStop = route == .historyOnly || route == .look || self.cancelledOutputLifecycleID == expectedOverlayLifecycleID || (route == .normal && !wasRewriteMode && !wasCommandMode
             && !promptTest.isActive && !shouldUseAIOnStop && !self.settings.spokenSendEnabled)
         DebugLogger.shared.info(
             "Routing decision snapshot | activeMode=\(modeAtStop.rawValue) | rewrite=\(wasRewriteMode) | command=\(wasCommandMode) | overlay=\(NotchContentState.shared.mode.rawValue)",
@@ -3073,6 +3075,14 @@ struct ContentView: View {
             if !stopOverlay.didRequestHide {
                 await self.menuBarManager.finishProcessingAndHideOverlay()
             }
+            return
+        }
+
+        // Look: the words were spoken while pointing at something. They go to Look with what was on the screen; nothing is typed or saved.
+        if route == .look {
+            DebugLogger.shared.info("Look: spoken words received (\(transcribedText.count) chars)", source: "ContentView")
+            let said = transcribedText
+            Task { await LookSession.shared.finish(said: said) }
             return
         }
 
@@ -4018,6 +4028,8 @@ struct ContentView: View {
         ) {
             return .onboardingSandbox
         }
+        // A pending Look claims this stop once; anything else is an ordinary dictation.
+        if isDictationMode, LookSession.shared.consumeRouteForStop() { return .look }
         return .normal
     }
 
@@ -4856,6 +4868,8 @@ struct ContentView: View {
     }
 
     private func initializeHotkeyManagerIfNeeded() {
+        // Look (Fn held, then Control) is watched from the side and stays off until myOS switches it on.
+        LookSession.shared.install(isDictating: { self.activeRecordingMode == .dictate && self.asr.isRunningOrStarting })
         NotchContentState.shared.onPromptModeSwitchRequested = { mode in
             self.handleLivePromptModeSwitch(mode)
         }

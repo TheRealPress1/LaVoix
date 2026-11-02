@@ -51,6 +51,8 @@ import SQLite3
 ///   {"op":"shortcuts.get"}                                -> {"ok":true,"shortcuts":{dictation:[...],edit,command,cancel,paste_last}}   (labels such as "Fn"; read-only)
 ///   {"op":"audio.inputs"}                                 -> {"ok":true,"audio":{inputs:[{uid,name,preferred,default}]}}   (read-only)
 ///   {"op":"look.capture","app"?,"scope"?,"region"?:{x,y,w,h},"save"?} -> {"ok":true,"look":{screen_access,accessibility,scope,app?,bundle?,title?,url?,ocr_text,region_text?,screenshot?,width,height,ms,error?}}   (reads ONE window once for myOS's Look: the biggest window of the app named in "app", else the topmost window under the pointer; "scope":"display" reads the whole display under the pointer instead; never asks for Screen Recording, refused while a meeting is recording; region is in global points, screenshot is a small JPEG in the private folder, kept 15 minutes)
+///   {"op":"look.configure","enabled"} / {"op":"look.status"}  -> {"ok":true,"look":{enabled,chord,active,pending}}   (the Fn+Control chord for Look is off until switched on here; the choice is kept)
+///   {"op":"look.wait","timeout"?}                         -> {"ok":true,"event":{kind:"captured",said,region?,path_points,capture:{...as look.capture, plus links?:[{text,href}]}}|null}   (myOS waits here; null when nothing happened in time)
 ///   {"op":"words.list"} / {"op":"words.add","text","aliases"?} / {"op":"words.delete","text"}  -> {"ok":true,"words":[{text,aliases}]} / {"ok":true,"word":{...}} / {"ok":true}   (boost words)
 ///   {"op":"dictionary.export"}                            -> {"ok":true,"file":"<json>"}   (replacements and boost words, as LaVoix's own export file)
 ///   {"op":"dictionary.import","file","replace"?}          -> {"ok":true,"replacements":n,"words":n}   (merges unless replace is true)
@@ -134,6 +136,7 @@ nonisolated enum EngineSocket {
         var reminders: (any EngineRemindersProviding)?
         var messages: (any EngineMessagesProviding)?
         var look: (any EngineLookProviding)?
+        var lookControl: (any EngineLookControlProviding)?
     }
 
     private static let lock = NSLock()
@@ -220,7 +223,7 @@ nonisolated enum EngineSocket {
     }
 
     static var liveServices: Services {
-        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel(), providers: LiveEngineProviders(), bookshelf: LiveEngineBookshelf(), bump: LiveEngineBump(openURL: { url in DispatchQueue.main.async { NSWorkspace.shared.open(url) } }), photos: LiveEnginePhotos(), reminders: LiveEngineReminders(), messages: LiveEngineMessages(), look: LiveEngineLook())
+        Services(generator: self.liveGenerator, streamGenerator: self.liveStreamGenerator, status: self.liveStatus, warm: self.liveWarmer, meetings: LiveEngineMeetings(), writing: LiveEngineWriting(), history: LiveEngineHistory(), settings: LiveEngineSettings(), dictionary: LiveEngineDictionary(), stats: LiveEngineStats(), prompts: LiveEnginePrompts(), speech: LiveEngineSpeech(), activity: LiveEngineActivity(), contacts: LiveEngineContacts(), permissions: LiveEnginePermissions(), shortcuts: LiveEngineShortcuts(), words: LiveEngineWords(), meetingEdits: LiveEngineMeetingEdits(), model: LiveEngineModel(), providers: LiveEngineProviders(), bookshelf: LiveEngineBookshelf(), bump: LiveEngineBump(openURL: { url in DispatchQueue.main.async { NSWorkspace.shared.open(url) } }), photos: LiveEnginePhotos(), reminders: LiveEngineReminders(), messages: LiveEngineMessages(), look: LiveEngineLook(), lookControl: LiveEngineLookControl())
     }
 
     enum EngineError: LocalizedError {
@@ -444,6 +447,19 @@ nonisolated enum EngineSocket {
         case "shortcuts.get", "audio.inputs":
             guard let shortcuts = services.shortcuts else { return fail("shortcuts are not available") }
             if op == "shortcuts.get" { _ = emit(["ok": true, "shortcuts": await shortcuts.shortcuts()]) } else { _ = emit(["ok": true, "audio": await shortcuts.inputs()]) }
+        case "look.configure", "look.status":
+            guard let control = services.lookControl else { return fail("Look is not available") }
+            if op == "look.configure" {
+                guard let enabled = object["enabled"] as? Bool else { return fail("enabled must be true or false") }
+                await control.setEnabled(enabled)
+            }
+            _ = emit(["ok": true, "look": await control.status()])
+        case "look.wait":
+            // myOS waits here for something Look has to say; answers with it, or with null when nothing happened in time.
+            let seconds = min(max((object["timeout"] as? NSNumber)?.doubleValue ?? 25, 1), 30)
+            var reply: [String: Any] = ["ok": true, "event": NSNull()]
+            if let json = await LookEvents.shared.next(timeout: seconds), let event = try? JSONSerialization.jsonObject(with: Data(json.utf8)) { reply["event"] = event }
+            _ = emit(reply)
         case "look.capture":
             guard let look = services.look else { return fail("looking at the screen is not available") }
             // Never while a meeting is recording, and if the engine cannot say in time whether one is, not at all: the recorder is not shared
@@ -1286,6 +1302,13 @@ private final class FakeActivity: EngineActivityProviding, @unchecked Sendable {
     func snapshot() async -> [String: Any] { ["recording": self.recording, "meeting_processing": false, "dictating": true, "busy": true] }
 }
 
+private final class FakeLookControl: EngineLookControlProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var on = false
+    func setEnabled(_ on: Bool) async { self.lock.lock(); self.on = on; self.lock.unlock() }
+    func status() async -> [String: Any] { self.lock.lock(); defer { self.lock.unlock() }; return ["enabled": self.on, "chord": "fn+control", "active": false, "pending": false] }
+}
+
 private final class FakeLook: EngineLookProviding, @unchecked Sendable {
     private let lock = NSLock()
     private var regions: [CGRect?] = []
@@ -1339,6 +1362,7 @@ nonisolated enum EngineSocketAutotest {
             let fakeMessages = FakeMessages()
             let fakeActivity = FakeActivity()
             let fakeLook = FakeLook()
+            let fakeLookControl = FakeLookControl()
             let bumpStub = BumpAutotestServer()
             let bookshelfCapture = await MainActor.run { bookshelfSession.capture }
             await MainActor.run { bookshelfCapture.start(interval: 3600) }
@@ -1379,7 +1403,8 @@ nonisolated enum EngineSocketAutotest {
                 photos: FakePhotos(),
                 reminders: FakeReminders(),
                 messages: fakeMessages,
-                look: fakeLook
+                look: fakeLook,
+                lookControl: fakeLookControl
             )
             check("server starts", EngineSocket.start(at: url, services: services))
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -1971,6 +1996,54 @@ nonisolated enum EngineSocketAutotest {
                 let longName = String(repeating: "x", count: 150)
                 _ = ask("{\"op\":\"look.capture\",\"app\":\"\(longName)\"}")
                 check("look.capture ignores an app name that is absurdly long", fakeLook.calls.apps.last! == nil)
+            }
+            // look: the chord's switch, the events myOS waits for, and the pure rules behind them
+            do {
+                check("look.status says the chord is off until it is switched on", (ask(#"{"op":"look.status"}"#)?["look"] as? [String: Any])?["enabled"] as? Bool == false)
+                let on = ask(#"{"op":"look.configure","enabled":true}"#)?["look"] as? [String: Any]
+                check("look.configure switches the chord on and reports it", on?["enabled"] as? Bool == true && on?["chord"] as? String == "fn+control" && (ask(#"{"op":"look.status"}"#)?["look"] as? [String: Any])?["enabled"] as? Bool == true)
+                check("look.configure refuses a missing switch", ask(#"{"op":"look.configure"}"#)?["ok"] as? Bool == false)
+                _ = ask(#"{"op":"look.configure","enabled":false}"#)
+                let quiet = ask(#"{"op":"look.wait","timeout":1}"#)
+                check("look.wait answers null when nothing happened", quiet?["ok"] as? Bool == true && quiet?["event"] is NSNull)
+                await LookEvents.shared.push(#"{"kind":"captured","said":"add him","path_points":3,"capture":{"app":"Dia","ocr_text":"Jane Roe"}}"#)
+                let got = ask(#"{"op":"look.wait","timeout":2}"#)?["event"] as? [String: Any]
+                check("look.wait hands over a waiting event whole", got?["kind"] as? String == "captured" && got?["said"] as? String == "add him" && (got?["capture"] as? [String: Any])?["app"] as? String == "Dia")
+                check("the event was handed over once", ask(#"{"op":"look.wait","timeout":1}"#)?["event"] is NSNull)
+                for i in 1...7 { await LookEvents.shared.push("{\"n\":\(i)}") }
+                var firstKept = 0
+                if let e = ask(#"{"op":"look.wait","timeout":1}"#)?["event"] as? [String: Any] { firstKept = e["n"] as? Int ?? 0 }
+                check("only the five newest events are kept", firstKept == 3)
+                for _ in 1...4 { _ = ask(#"{"op":"look.wait","timeout":1}"#) }
+                // the chord: Fn and Control, and nothing else held
+                let fnControl: NSEvent.ModifierFlags = [.function, .control]
+                let fnControlCaps: NSEvent.ModifierFlags = [.control, .function, .capsLock]
+                let fnOnly: NSEvent.ModifierFlags = [.function]
+                let controlOnly: NSEvent.ModifierFlags = [.control]
+                let withShift: NSEvent.ModifierFlags = [.function, .control, .shift]
+                let withOption: NSEvent.ModifierFlags = [.function, .control, .option]
+                let withCommand: NSEvent.ModifierFlags = [.function, .control, .command]
+                check("the chord is Fn with Control", LookChord.isChord(fnControl) && LookChord.isChord(fnControlCaps))
+                let notAlone = !LookChord.isChord(fnOnly) && !LookChord.isChord(controlOnly)
+                let notWithMore = !LookChord.isChord(withShift) && !LookChord.isChord(withOption) && !LookChord.isChord(withCommand)
+                check("Fn alone, Control alone and any extra key are not the chord", notAlone && notWithMore)
+                // the path: a box only when the pointer really went somewhere
+                var circle: [CGPoint] = []
+                for i in 0...36 {
+                    let angle = Double(i) * Double.pi / 18
+                    circle.append(CGPoint(x: 500 + 100 * cos(angle), y: 400 + 100 * sin(angle)))
+                }
+                let box = LookPath.region(from: circle)
+                let boxMidX = box?.midX ?? 0, boxMidY = box?.midY ?? 0, boxWidth = box?.width ?? 0
+                check("a circle around a point gives a padded box around it", box != nil && abs(boxMidX - 500) < 2 && abs(boxMidY - 400) < 2 && boxWidth > 200 && boxWidth < 260)
+                let jitter: [CGPoint] = [CGPoint(x: 10, y: 10), CGPoint(x: 14, y: 12), CGPoint(x: 11, y: 9)]
+                let single: [CGPoint] = [CGPoint(x: 10, y: 10)]
+                check("a pointer that barely moved means no box", LookPath.region(from: jitter) == nil && LookPath.region(from: single) == nil && LookPath.region(from: []) == nil)
+                let hop: [CGPoint] = [CGPoint(x: 0, y: 0), CGPoint(x: 120, y: 0)]
+                check("a short hop is not a circle even when far apart in one step", LookPath.region(from: hop) == nil)
+                let sweep: [CGPoint] = [CGPoint(x: 100, y: 300), CGPoint(x: 200, y: 300), CGPoint(x: 400, y: 300)]
+                let sweepBox = LookPath.region(from: sweep)
+                check("a straight sweep gets a box at least sixty points high", sweepBox != nil && (sweepBox?.height ?? 0) >= 60 && (sweepBox?.width ?? 0) >= 300)
             }
             // permissions
             do {
