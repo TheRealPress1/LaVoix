@@ -28,6 +28,8 @@ struct NotchBannerContent: Equatable, Identifiable {
     /// A second, quieter button beside the first ("Allow once" next to "Always for Dia"); it only appears with the first.
     var action2Label: String? = nil
     var action2ID: String? = nil
+    /// Look's own, quieter card (see NotchLookCardView) instead of the connection alert's coloured disc.
+    var lookStyle = false
     /// Set for a WhatsApp message: the number it came from. Replies go out through WhatsApp, and pressing the card opens that chat in the WhatsApp tab.
     var whatsAppPhone: String? = nil
 
@@ -54,6 +56,7 @@ struct NotchBannerContent: Equatable, Identifiable {
 
     /// Everything in the card that sits under the notch band, with the reply row only when expanded.
     func contentHeight(expanded: Bool) -> CGFloat {
+        if self.lookStyle { return NotchLookCardView.contentHeight(text: self.text, hasButtons: self.actionLabel != nil, cardWidth: NotchGeometry.bannerWidth) }
         let header: CGFloat = 8 + 19 + (self.subtitle == nil ? 0 : 16) + 2
         return header + self.textHeight + 18 + (expanded && self.alertSymbol == nil ? 12 + 34 : 0) + (self.actionLabel != nil ? 12 + 30 : 0)
     }
@@ -74,6 +77,31 @@ struct NotchBannerView: View {
     private var serviceName: String { self.content.whatsAppPhone == nil ? "iMessage" : "WhatsApp" }
 
     var body: some View {
+        if self.content.lookStyle { self.lookBody } else { self.standardBody }
+    }
+
+    private var lookBody: some View {
+        NotchLookCardView(
+            title: self.content.title,
+            text: self.content.text,
+            symbol: self.content.alertSymbol ?? "sparkles",
+            width: NotchGeometry.bannerWidth,
+            primaryLabel: self.content.actionID == nil ? nil : self.content.actionLabel,
+            secondaryLabel: self.content.action2Label,
+            onPrimary: {
+                guard let id = self.content.actionID else { return }
+                NotchHubController.shared.dismissBanner()
+                ConnectionsWidgetView.press(id)
+            },
+            onSecondary: {
+                guard let id = self.content.action2ID else { return }
+                NotchHubController.shared.dismissBanner()
+                ConnectionsWidgetView.press(id)
+            }
+        )
+    }
+
+    private var standardBody: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 if let icon = self.content.alertIcon {

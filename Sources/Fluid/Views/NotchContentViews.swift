@@ -1364,8 +1364,6 @@ struct NotchCompactTrailingView: View {
 struct NotchCompactBottomView: View {
     @ObservedObject private var contentState = NotchContentState.shared
 
-    private let previewWidth: CGFloat = 250
-    private let previewHeight: CGFloat = 20
     private static let transientOverlayStatusTexts: Set<String> = [
         "Transcribing",
         "Refining",
@@ -1391,20 +1389,18 @@ struct NotchCompactBottomView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            Text(self.compactPreviewText)
-                .font(.fluidSystem(size: 9, weight: .medium))
-                .foregroundStyle(.white.opacity(0.82))
-                .lineLimit(1)
-                .truncationMode(.head)
-                .offset(y: self.shouldShowPreview ? 0 : -4)
-                .opacity(self.shouldShowPreview ? 1 : 0)
+        // Under the notch, only while there is something to show: the two newest sentences, as many lines as they need (up to three). The notch
+        // follows this view's height, so it grows by just that and goes back when the text does.
+        Group {
+            if self.shouldShowPreview {
+                RecentSentencesView(text: self.compactPreviewText)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 2)
+                    .padding(.bottom, 10)
+                    .transition(.opacity)
+            }
         }
-        .frame(width: self.previewWidth, height: SettingsStore.shared.enableStreamingPreview ? self.previewHeight : 0, alignment: .leading)
-        .padding(.horizontal, SettingsStore.shared.enableStreamingPreview ? 10 : 0)
-        .padding(.bottom, SettingsStore.shared.enableStreamingPreview ? 8 : 0)
-        .clipped()
-        .animation(.easeOut(duration: 0.2), value: self.shouldShowPreview)
+        .animation(.easeOut(duration: 0.18), value: self.shouldShowPreview)
     }
 }
 

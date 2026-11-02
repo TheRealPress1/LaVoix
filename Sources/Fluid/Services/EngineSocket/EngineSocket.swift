@@ -627,7 +627,9 @@ nonisolated enum EngineSocket {
             // An optional second, quieter button; it needs the first.
             let label2 = (object["action2_label"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(30)) }
             let actionID2 = (object["action2_id"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(160)) }
-            await MainActor.run { NotchHubController.shared.showAlert(title: String(title.prefix(80)), text: String(text.prefix(300)), symbol: symbol, icon: icon, actionLabel: label, actionID: actionID, action2Label: label2, action2ID: actionID2) }
+            // "style":"look" is Look's own, quieter card; any other value is the usual alert card.
+            let lookStyle = (object["style"] as? String) == "look"
+            await MainActor.run { NotchHubController.shared.showAlert(title: String(title.prefix(80)), text: String(text.prefix(lookStyle ? 600 : 300)), symbol: symbol, icon: icon, actionLabel: label, actionID: actionID, action2Label: label2, action2ID: actionID2, lookStyle: lookStyle) }
             _ = emit(["ok": true])
         case "notch.connections_set":
             // The state of every connector, for the Connections tab (and its badge).
@@ -2173,6 +2175,18 @@ nonisolated enum EngineSocketAutotest {
                 check("the bars are 3 to 14.5 points, louder speech is taller, and the middle bar leads", quiet.count == 5 && quiet.allSatisfy { $0 >= 3 && $0 <= 4.6 } && loud.allSatisfy { $0 <= 14.6 } && loud[2] > quiet[2] + 6 && loud[2] > loud[0])
                 check("a label is one line, trimmed and cut at sixty characters; empty means none", LookBuddyMath.cleanLabel("  the\n email   address ") == "the email address" && LookBuddyMath.cleanLabel(String(repeating: "a", count: 200))?.count == 60 && LookBuddyMath.cleanLabel("  \n ") == nil && LookBuddyMath.cleanLabel(nil) == nil)
                 check("how long it stays is between half a second and thirty, three by default", LookBuddyMath.clampHold(nil) == 3 && LookBuddyMath.clampHold(0) == 0.5 && LookBuddyMath.clampHold(999) == 30 && LookBuddyMath.clampHold(7) == 7)
+            }
+            // the dictation text under the notch: the two newest sentences
+            do {
+                let two = RecentSentences.parts(of: "Hello there. How are you doing today? I am fine and")
+                check("the two newest sentences are shown, the newer one on its own as the one being said", two == RecentSentences.Parts(older: "How are you doing today?", latest: "I am fine and"))
+                check("a single sentence has nothing before it", RecentSentences.parts(of: "just starting to talk") == RecentSentences.Parts(older: "", latest: "just starting to talk"))
+                check("nothing said shows nothing", RecentSentences.parts(of: "  \n ") == RecentSentences.Parts(older: "", latest: ""))
+                let long = String(repeating: "word ", count: 80).trimmingCharacters(in: .whitespaces)
+                let cut = RecentSentences.parts(of: "Short one. " + long)
+                check("a sentence longer than the room keeps its end with an ellipsis and crowds the older one out", cut.older.isEmpty && cut.latest.hasPrefix("…") && cut.latest.count <= RecentSentences.defaultMaxCharacters && cut.latest.hasSuffix("word"))
+                let both = RecentSentences.parts(of: "This is the sentence before the newest one, and it goes on and on about one thing and another, much longer than the room that is left for it. Now the newest.")
+                check("the older sentence is cut to the room that is left and the whole stays within the budget", both.latest == "Now the newest." && both.older.hasPrefix("…") && both.older.count + both.latest.count + 1 <= RecentSentences.defaultMaxCharacters)
             }
             // the meeting prompt's clock: five seconds, drawn as a line that runs out
             do {
