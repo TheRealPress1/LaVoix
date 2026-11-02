@@ -2,25 +2,6 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// How long the "meeting detected" prompt stays up before it goes away by itself (hovering it holds it).
-nonisolated enum MeetingPromptTiming {
-    static let showSeconds: TimeInterval = 5
-}
-
-/// The time left on the "meeting detected" prompt, drawn as a line that shrinks from the right to the left. `remaining` seconds were left when it
-/// last started or resumed running (`startedAt`); `startedAt` is nil while it is held, and then `remaining` is what is left.
-nonisolated struct DetectedCountdown: Equatable {
-    var total: TimeInterval
-    var remaining: TimeInterval
-    var startedAt: Date?
-
-    /// How much of the line is left at `now`: 1 when the prompt has just appeared, 0 when it is gone.
-    func fraction(at now: Date) -> Double {
-        let elapsed = self.startedAt.map { max(0, now.timeIntervalSince($0)) } ?? 0
-        return min(1, max(0, (self.remaining - elapsed) / max(self.total, 0.001)))
-    }
-}
-
 /// What the meeting card is showing.
 @MainActor
 final class NotchMeetingModel: ObservableObject {
@@ -55,6 +36,9 @@ final class NotchMeetingModel: ObservableObject {
     @Published var detectedError: String?
     /// The line that runs out while the detected prompt waits.
     @Published var detectedCountdown: DetectedCountdown?
+    /// How far in from the left of its 26 point frame the call app's icon really starts (app icons have a transparent margin), so the line
+    /// under the row can start exactly where the icon does.
+    @Published var detectedIconInset: CGFloat = 0
     /// Progress of the automatic notes once the meeting is over.
     @Published var notes: MeetingAutoAnalysis.Status = .idle
 
@@ -155,8 +139,9 @@ struct NotchMeetingCardView: View {
                     // The detected prompt's clock: a thin line that runs from the right to the left while it waits, and holds still while hovered.
                     if self.model.phase == .detected, !self.model.detectedStarting, let countdown = self.model.detectedCountdown {
                         DetectedCountdownLine(countdown: countdown)
-                            .padding(.horizontal, 26)
-                            .padding(.bottom, 14)
+                            .padding(.leading, 26 + self.model.detectedIconInset)
+                            .padding(.trailing, 26)
+                            .padding(.bottom, 6)
                             .frame(width: size.width)
                     }
                 }
@@ -696,6 +681,7 @@ final class NotchMeetingCardController {
         }
         self.dismissTask?.cancel()
         self.model.detectedIcon = icon
+        self.model.detectedIconInset = icon.map { AppIconInset.leftFraction($0) * 26 } ?? 0
         self.model.detectedName = name
         self.model.detectedStarting = false
         self.model.detectedError = nil
@@ -920,24 +906,5 @@ final class NotchMeetingCardController {
         guard let panel else { return "[\(label)] meeting card: no panel" }
         let f = panel.frame
         return "[\(label)] meeting card: visible=\(panel.isVisible) frame=(\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height))) phase=\(self.model.phase)"
-    }
-}
-
-/// A thin line, full width when the prompt appears and gone when it goes, its right end running to the left.
-private struct DetectedCountdownLine: View {
-    let countdown: DetectedCountdown
-
-    var body: some View {
-        // Redrawn every frame while it runs; drawn once while it is held.
-        TimelineView(.animation(paused: self.countdown.startedAt == nil)) { context in
-            GeometryReader { proxy in
-                Capsule()
-                    .fill(Color.white.opacity(0.5))
-                    .frame(width: proxy.size.width * self.countdown.fraction(at: context.date), height: 2.5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(height: 2.5)
-        }
-        .accessibilityHidden(true)
     }
 }

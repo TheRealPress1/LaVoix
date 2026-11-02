@@ -2184,6 +2184,17 @@ nonisolated enum EngineSocketAutotest {
                 check("a held prompt's line stays where it is however long it is held", held.fraction(at: start) == 0.4 && held.fraction(at: start.addingTimeInterval(500)) == 0.4)
                 let resumed = DetectedCountdown(total: 5, remaining: 2, startedAt: start)
                 check("a resumed prompt's line runs on from where it was held", abs(resumed.fraction(at: start.addingTimeInterval(1)) - 0.2) < 0.0001 && resumed.fraction(at: start.addingTimeInterval(-3)) == 0.4)
+                let margined = NSImage(size: NSSize(width: 100, height: 100), flipped: false) { _ in
+                    NSColor.red.setFill()
+                    NSRect(x: 20, y: 10, width: 70, height: 80).fill()
+                    return true
+                }
+                let filled = NSImage(size: NSSize(width: 100, height: 100), flipped: false) { rect in
+                    NSColor.red.setFill()
+                    rect.fill()
+                    return true
+                }
+                check("an icon's transparent left margin is measured so the line can start where the picture does", abs(AppIconInset.leftFraction(margined) - 0.2) < 0.03 && AppIconInset.leftFraction(filled) == 0)
             }
             // the notch's Now Playing times: m:ss under an hour, 1h05 from an hour up
             do {
