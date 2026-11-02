@@ -15,7 +15,7 @@ enum NotchGeometry {
     nonisolated(unsafe) static var extraHeight: CGFloat = 0
     /// The most a short tab may shrink the open notch by.
     static let maxShrink: CGFloat = 130
-    /// Extra transparent room around the open notch for the drop shadow.
+    /// Extra transparent room around the open notch (it held the drop shadow, which is gone; kept so the window and its layout stay as they were).
     static let shadowPadding: CGFloat = 24
 
     /// The built-in display with a notch if there is one, otherwise the main display.

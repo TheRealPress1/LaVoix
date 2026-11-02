@@ -25,12 +25,10 @@ struct NotchHubView: View {
                 ? NotchGeometry.bannerSize(content: banner, expanded: self.model.bannerExpanded, notchHeight: self.model.closedSize.height)
                 : self.model.closedSize)
         let size = open ? CGSize(width: baseSize.width, height: baseSize.height + self.model.extraHeight) : baseSize
-        let raised = open || banner != nil
         ZStack(alignment: .top) {
             NotchHubShape(topCornerRadius: open ? 19 : (banner != nil ? 10 : 6), bottomCornerRadius: open ? 26 : (banner != nil ? 30 : 14))
                 .fill(Color.black)
                 .frame(width: size.width, height: size.height)
-                .shadow(color: .black.opacity(raised ? 0.55 : 0), radius: 16, y: 8)
                 .overlay(alignment: .top) {
                     if open {
                         self.openContent
