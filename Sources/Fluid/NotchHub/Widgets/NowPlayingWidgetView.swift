@@ -200,6 +200,7 @@ struct NowPlayingWidgetView: View {
                 Text(Self.clock(duration)).frame(width: 34, alignment: .trailing)
             }
             .font(.system(size: 10).monospacedDigit())
+            .lineLimit(1)
             .foregroundStyle(.white.opacity(0.7))
         }
     }
@@ -293,10 +294,7 @@ struct NowPlayingWidgetView: View {
         }
     }
 
-    fileprivate static func clock(_ seconds: TimeInterval) -> String {
-        let s = Int(max(seconds, 0))
-        return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
-    }
+    fileprivate static func clock(_ seconds: TimeInterval) -> String { NowPlayingClock.text(seconds) }
 }
 
 private struct HistoryRow: View {
@@ -470,5 +468,14 @@ private struct BookshelfGradePanel: View {
     private static func value(at x: CGFloat, width: CGFloat) -> Double {
         let raw = Double(min(max(x / max(width, 1), 0), 1)) * 10
         return (raw * 10).rounded() / 10
+    }
+}
+
+/// How a time is written on the progress row: 11:03 under an hour, 1h05 from an hour up (hours and minutes, the seconds dropped), so a long
+/// video's length always fits the narrow slot beside the bar instead of wrapping onto a second line.
+nonisolated enum NowPlayingClock {
+    static func text(_ seconds: TimeInterval) -> String {
+        let s = Int(max(seconds, 0))
+        return s >= 3600 ? String(format: "%dh%02d", s / 3600, (s % 3600) / 60) : String(format: "%d:%02d", s / 60, s % 60)
     }
 }

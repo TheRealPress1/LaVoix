@@ -2171,6 +2171,11 @@ nonisolated enum EngineSocketAutotest {
                 check("a label is one line, trimmed and cut at sixty characters; empty means none", LookBuddyMath.cleanLabel("  the\n email   address ") == "the email address" && LookBuddyMath.cleanLabel(String(repeating: "a", count: 200))?.count == 60 && LookBuddyMath.cleanLabel("  \n ") == nil && LookBuddyMath.cleanLabel(nil) == nil)
                 check("how long it stays is between half a second and thirty, three by default", LookBuddyMath.clampHold(nil) == 3 && LookBuddyMath.clampHold(0) == 0.5 && LookBuddyMath.clampHold(999) == 30 && LookBuddyMath.clampHold(7) == 7)
             }
+            // the notch's Now Playing times: m:ss under an hour, 1h05 from an hour up
+            do {
+                check("a time under an hour is minutes and seconds", NowPlayingClock.text(0) == "0:00" && NowPlayingClock.text(663) == "11:03" && NowPlayingClock.text(3599) == "59:59" && NowPlayingClock.text(-5) == "0:00")
+                check("a time of an hour or more is hours and minutes, the seconds dropped", NowPlayingClock.text(3600) == "1h00" && NowPlayingClock.text(3931) == "1h05" && NowPlayingClock.text(6300) == "1h45" && NowPlayingClock.text(7199) == "1h59" && NowPlayingClock.text(36000) == "10h00")
+            }
             // permissions
             do {
                 check("macOS authorization states map to granted, denied or not_asked",
