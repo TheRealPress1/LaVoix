@@ -50,7 +50,7 @@ import SQLite3
 ///   {"op":"permissions.request","name"}                   -> {"ok":true}   (shows macOS's own question where there is one; Full Disk Access is refused, the user switches it on in System Settings)
 ///   {"op":"shortcuts.get"}                                -> {"ok":true,"shortcuts":{dictation:[...],edit,command,cancel,paste_last}}   (labels such as "Fn"; read-only)
 ///   {"op":"audio.inputs"}                                 -> {"ok":true,"audio":{inputs:[{uid,name,preferred,default}]}}   (read-only)
-///   {"op":"look.capture","region"?:{x,y,w,h},"save"?}     -> {"ok":true,"look":{screen_access,accessibility,app?,bundle?,title?,url?,ocr_text,region_text?,screenshot?,width,height,ms}}   (reads the screen once for myOS's Look; never asks for Screen Recording, refused while a meeting is recording; region is in global points, screenshot is a small JPEG in the private folder, kept 15 minutes)
+///   {"op":"look.capture","app"?,"scope"?,"region"?:{x,y,w,h},"save"?} -> {"ok":true,"look":{screen_access,accessibility,scope,app?,bundle?,title?,url?,ocr_text,region_text?,screenshot?,width,height,ms,error?}}   (reads ONE window once for myOS's Look: the biggest window of the app named in "app", else the topmost window under the pointer; "scope":"display" reads the whole display under the pointer instead; never asks for Screen Recording, refused while a meeting is recording; region is in global points, screenshot is a small JPEG in the private folder, kept 15 minutes)
 ///   {"op":"words.list"} / {"op":"words.add","text","aliases"?} / {"op":"words.delete","text"}  -> {"ok":true,"words":[{text,aliases}]} / {"ok":true,"word":{...}} / {"ok":true}   (boost words)
 ///   {"op":"dictionary.export"}                            -> {"ok":true,"file":"<json>"}   (replacements and boost words, as LaVoix's own export file)
 ///   {"op":"dictionary.import","file","replace"?}          -> {"ok":true,"replacements":n,"words":n}   (merges unless replace is true)
@@ -458,7 +458,9 @@ nonisolated enum EngineSocket {
                 region = CGRect(x: x, y: y, width: w, height: h)
             }
             let save = object["save"] as? Bool ?? false
-            if let result = await EngineTimeout.run(seconds: 20, { await look.capture(region: region, save: save) }) {
+            let app = (object["app"] as? String).flatMap { $0.count <= 100 ? $0 : nil }
+            let scope = (object["scope"] as? String) == "display" ? "display" : "window"
+            if let result = await EngineTimeout.run(seconds: 20, { await look.capture(region: region, save: save, app: app, scope: scope) }) {
                 _ = emit(["ok": true, "look": result])
             } else {
                 fail("Reading the screen took too long.")
@@ -1288,10 +1290,15 @@ private final class FakeLook: EngineLookProviding, @unchecked Sendable {
     private let lock = NSLock()
     private var regions: [CGRect?] = []
     private var saves: [Bool] = []
-    var calls: (regions: [CGRect?], saves: [Bool]) { self.lock.lock(); defer { self.lock.unlock() }; return (self.regions, self.saves) }
-    func capture(region: CGRect?, save: Bool) async -> [String: Any] {
-        self.lock.lock(); self.regions.append(region); self.saves.append(save); self.lock.unlock()
-        var out: [String: Any] = ["screen_access": true, "accessibility": true, "app": "Test Browser", "title": "Jane Roe | Example", "ocr_text": "Jane Roe is the editor at Example.", "width": 100, "height": 50, "ms": 1]
+    private var apps: [String?] = []
+    private var scopes: [String] = []
+    var calls: (regions: [CGRect?], saves: [Bool], apps: [String?], scopes: [String]) {
+        self.lock.lock(); defer { self.lock.unlock() }
+        return (self.regions, self.saves, self.apps, self.scopes)
+    }
+    func capture(region: CGRect?, save: Bool, app: String?, scope: String) async -> [String: Any] {
+        self.lock.lock(); self.regions.append(region); self.saves.append(save); self.apps.append(app); self.scopes.append(scope); self.lock.unlock()
+        var out: [String: Any] = ["screen_access": true, "accessibility": true, "scope": scope, "app": app ?? "Test Browser", "title": "Jane Roe | Example", "ocr_text": "Jane Roe is the editor at Example.", "width": 100, "height": 50, "ms": 1]
         if region != nil { out["region_text"] = "Jane Roe" }
         if save { out["screenshot"] = "/tmp/look-test.jpg" }
         return out
@@ -1955,6 +1962,15 @@ nonisolated enum EngineSocketAutotest {
                 check("look.capture is refused while a meeting is recording, and never reads the screen", refused?["ok"] as? Bool == false && (refused?["error"] as? String)?.contains("recording") == true && fakeLook.calls.saves.count == before)
                 fakeActivity.recording = false
                 check("look.capture works again when the recording stops", ask(#"{"op":"look.capture"}"#)?["ok"] as? Bool == true)
+                let w = ask(#"{"op":"look.capture","app":"Dia"}"#)?["look"] as? [String: Any]
+                check("look.capture reads one window by default and a named app's window when asked", fakeLook.calls.scopes.last == "window" && fakeLook.calls.apps.last == "Dia" && w?["app"] as? String == "Dia")
+                _ = ask(#"{"op":"look.capture","scope":"display"}"#)
+                check("look.capture can read the whole display when asked, and no app name goes with it", fakeLook.calls.scopes.last == "display" && fakeLook.calls.apps.last! == nil)
+                _ = ask(#"{"op":"look.capture","scope":"anything else"}"#)
+                check("look.capture treats an unknown scope as one window", fakeLook.calls.scopes.last == "window")
+                let longName = String(repeating: "x", count: 150)
+                _ = ask("{\"op\":\"look.capture\",\"app\":\"\(longName)\"}")
+                check("look.capture ignores an app name that is absurdly long", fakeLook.calls.apps.last! == nil)
             }
             // permissions
             do {
