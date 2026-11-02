@@ -18,7 +18,7 @@ final class MeetingDetectionPromptController: ObservableObject {
 
     static let panelSize = NSSize(width: 392, height: 120)
     private static let defaultTopInset: CGFloat = 12
-    static let autoDismissSeconds: TimeInterval = 20
+    static let autoDismissSeconds: TimeInterval = MeetingPromptTiming.showSeconds
     static let suppressionRetryInterval: TimeInterval = 0.5
 
     enum ReminderPresentationDecision: Equatable {
@@ -184,6 +184,7 @@ final class MeetingDetectionPromptController: ObservableObject {
         self.autoDismissTask = nil
         self.autoDismissLegStartedAt = nil
         self.isAutoDismissPaused = true
+        self.publishCountdown()
     }
 
     func resumeAutoDismiss() {
@@ -416,6 +417,16 @@ final class MeetingDetectionPromptController: ObservableObject {
         self.autoDismissLegStartedAt = nil
         self.remainingAutoDismissSeconds = 0
         self.isAutoDismissPaused = false
+        self.publishCountdown()
+    }
+
+    /// Tells the notch card how much of the prompt's time is left, so its line runs out with it: running from now, held, or nothing.
+    private func publishCountdown() {
+        guard self.usesNotch else { return }
+        let countdown = self.remainingAutoDismissSeconds > 0
+            ? DetectedCountdown(total: Self.autoDismissSeconds, remaining: self.remainingAutoDismissSeconds, startedAt: self.autoDismissLegStartedAt)
+            : nil
+        NotchMeetingCardController.shared.setDetectedCountdown(countdown)
     }
 
     private func scheduleAutoDismiss(for episodeID: UUID) {
@@ -427,6 +438,7 @@ final class MeetingDetectionPromptController: ObservableObject {
         }
         let delayNanoseconds = UInt64(self.remainingAutoDismissSeconds * 1_000_000_000)
         self.autoDismissLegStartedAt = Date()
+        self.publishCountdown()
         self.autoDismissTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: delayNanoseconds)
             guard !Task.isCancelled, let self, self.request?.episodeID == episodeID else { return }

@@ -2174,6 +2174,17 @@ nonisolated enum EngineSocketAutotest {
                 check("a label is one line, trimmed and cut at sixty characters; empty means none", LookBuddyMath.cleanLabel("  the\n email   address ") == "the email address" && LookBuddyMath.cleanLabel(String(repeating: "a", count: 200))?.count == 60 && LookBuddyMath.cleanLabel("  \n ") == nil && LookBuddyMath.cleanLabel(nil) == nil)
                 check("how long it stays is between half a second and thirty, three by default", LookBuddyMath.clampHold(nil) == 3 && LookBuddyMath.clampHold(0) == 0.5 && LookBuddyMath.clampHold(999) == 30 && LookBuddyMath.clampHold(7) == 7)
             }
+            // the meeting prompt's clock: five seconds, drawn as a line that runs out
+            do {
+                check("the meeting prompt stays five seconds", MeetingPromptTiming.showSeconds == 5)
+                let start = Date(timeIntervalSinceReferenceDate: 1_000)
+                let running = DetectedCountdown(total: 5, remaining: 5, startedAt: start)
+                check("the prompt's line is full when it appears, half at two and a half seconds and gone at five", running.fraction(at: start) == 1 && abs(running.fraction(at: start.addingTimeInterval(2.5)) - 0.5) < 0.0001 && running.fraction(at: start.addingTimeInterval(5)) == 0 && running.fraction(at: start.addingTimeInterval(60)) == 0)
+                let held = DetectedCountdown(total: 5, remaining: 2, startedAt: nil)
+                check("a held prompt's line stays where it is however long it is held", held.fraction(at: start) == 0.4 && held.fraction(at: start.addingTimeInterval(500)) == 0.4)
+                let resumed = DetectedCountdown(total: 5, remaining: 2, startedAt: start)
+                check("a resumed prompt's line runs on from where it was held", abs(resumed.fraction(at: start.addingTimeInterval(1)) - 0.2) < 0.0001 && resumed.fraction(at: start.addingTimeInterval(-3)) == 0.4)
+            }
             // the notch's Now Playing times: m:ss under an hour, 1h05 from an hour up
             do {
                 check("a time under an hour is minutes and seconds", NowPlayingClock.text(0) == "0:00" && NowPlayingClock.text(663) == "11:03" && NowPlayingClock.text(3599) == "59:59" && NowPlayingClock.text(-5) == "0:00")
