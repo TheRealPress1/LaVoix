@@ -23,6 +23,8 @@ nonisolated enum LookBuddyMath {
     static let framesPerSecond: Double = 60
     static let barProfile: [CGFloat] = [0.4, 0.7, 1.0, 0.7, 0.4]
     static let maxLabelLength = 60
+    /// The most points of a drawn path that are kept.
+    static let maxTrailPoints = 3000
 
     /// Quartz (top-left origin) to AppKit (bottom-left origin) and back; the formula is its own inverse.
     static func flip(_ p: CGPoint, primaryHeight: CGFloat) -> CGPoint { CGPoint(x: p.x, y: primaryHeight - p.y) }
@@ -143,6 +145,9 @@ final class LookBuddy {
         let spinner = CALayer()
         let bubble = CALayer()
         let text = CATextLayer()
+        /// What you drew with the pointer while the chord was held, and the box around it that was read.
+        let trail = CAShapeLayer()
+        let box = CAShapeLayer()
 
         init(screen: NSScreen) {
             self.frame = screen.frame
@@ -160,6 +165,26 @@ final class LookBuddy {
             self.window.contentView = view
             guard let root = view.layer else { return }
             let scale = screen.backingScaleFactor
+
+            // Under the companion: the box that was read, and the path the pointer took.
+            self.box.fillColor = CGColor(srgbRed: 0x33 / 255, green: 0x80 / 255, blue: 0xFF / 255, alpha: 0.08)
+            self.box.strokeColor = Self.blue
+            self.box.lineWidth = 2
+            self.box.lineDashPattern = [6, 4]
+            self.box.opacity = 0
+            root.addSublayer(self.box)
+            self.trail.fillColor = nil
+            self.trail.strokeColor = CGColor(srgbRed: 0x33 / 255, green: 0x80 / 255, blue: 0xFF / 255, alpha: 0.85)
+            self.trail.lineWidth = 3.5
+            self.trail.lineCap = .round
+            self.trail.lineJoin = .round
+            self.trail.shadowColor = Self.blue
+            self.trail.shadowOpacity = 0.7
+            self.trail.shadowRadius = 5
+            self.trail.shadowOffset = .zero
+            self.trail.opacity = 0
+            root.addSublayer(self.trail)
+            for layer in [self.box, self.trail] { layer.contentsScale = scale }
 
             // The anchor is the companion's centre; everything it draws is centred on (20, 20) inside it.
             self.anchor.bounds = CGRect(x: 0, y: 0, width: 40, height: 40)
@@ -260,6 +285,53 @@ final class LookBuddy {
         }
 
         func local(_ global: CGPoint) -> CGPoint { CGPoint(x: global.x - self.frame.origin.x, y: global.y - self.frame.origin.y) }
+
+        /// Draws the pointer's path (AppKit global points) as it is so far.
+        func setTrail(_ points: [CGPoint]) {
+            let path = CGMutablePath()
+            if let first = points.first {
+                path.move(to: self.local(first))
+                if points.count == 1 { path.addLine(to: self.local(CGPoint(x: first.x + 0.1, y: first.y))) }
+                for p in points.dropFirst() { path.addLine(to: self.local(p)) }
+            }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            self.trail.path = path
+            self.trail.removeAnimation(forKey: "fade")
+            self.trail.opacity = 1
+            CATransaction.commit()
+        }
+
+        /// Shows the box that was read (AppKit global points) and starts both fading: they stay for 1.5 s and are gone at 2 s.
+        func fadeTrail(box region: CGRect?) {
+            let fade = CAKeyframeAnimation(keyPath: "opacity")
+            fade.values = [1, 1, 0]
+            fade.keyTimes = [0, 0.75, 1]
+            fade.duration = 2
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            if let region {
+                let local = CGRect(origin: self.local(region.origin), size: region.size)
+                self.box.path = CGPath(roundedRect: local, cornerWidth: 8, cornerHeight: 8, transform: nil)
+                self.box.opacity = 0
+                self.box.add(fade, forKey: "fade")
+            }
+            self.trail.opacity = 0
+            self.trail.add(fade, forKey: "fade")
+            CATransaction.commit()
+        }
+
+        func clearTrail() {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            self.trail.removeAllAnimations()
+            self.box.removeAllAnimations()
+            self.trail.path = nil
+            self.box.path = nil
+            self.trail.opacity = 0
+            self.box.opacity = 0
+            CATransaction.commit()
+        }
 
         func place(_ global: CGPoint) {
             CATransaction.begin()
@@ -421,6 +493,9 @@ final class LookBuddy {
     private var flightToken = 0
     private var guardTask: Task<Void, Never>?
     private var bubbleTask: Task<Void, Never>?
+    private var trailPoints: [CGPoint] = []
+    private var lastTrailDraw: TimeInterval = 0
+    private var trailToken = 0
 
     /// The longest the companion stays when nobody asks for anything: a stuck state can never leave it on the screen.
     private static let guardSeconds: Double = 45
@@ -461,6 +536,42 @@ final class LookBuddy {
     func park(at point: CGPoint) {
         self.followsPointer = false
         self.moveTo(point)
+    }
+
+    // MARK: What you drew
+
+    /// A point of the path the pointer takes while the chord is held (Quartz points). The path is drawn as it grows, at most 30 times a second.
+    func addTrail(quartz point: CGPoint) {
+        guard !self.screens.isEmpty else { return }
+        let height = NSScreen.screens.first?.frame.height ?? 0
+        if self.trailPoints.count < LookBuddyMath.maxTrailPoints { self.trailPoints.append(LookBuddyMath.flip(point, primaryHeight: height)) }
+        let now = CACurrentMediaTime()
+        guard now - self.lastTrailDraw > 1.0 / 30 else { return }
+        self.lastTrailDraw = now
+        self.trailToken += 1
+        for s in self.screens { s.setTrail(self.trailPoints) }
+    }
+
+    /// The chord was let go: the path and the box that was read (Quartz points, nil when the whole window is meant) stay two seconds, then fade.
+    func finishTrail(region: CGRect?) {
+        guard !self.screens.isEmpty, !self.trailPoints.isEmpty else { self.trailPoints = []; return }
+        let height = NSScreen.screens.first?.frame.height ?? 0
+        let box = region.map { r -> CGRect in
+            let corner = LookBuddyMath.flip(CGPoint(x: r.minX, y: r.maxY), primaryHeight: height)
+            return CGRect(x: corner.x, y: corner.y, width: r.width, height: r.height)
+        }
+        for s in self.screens {
+            s.setTrail(self.trailPoints)
+            s.fadeTrail(box: box)
+        }
+        self.trailPoints = []
+        self.trailToken += 1
+        let mine = self.trailToken
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_100_000_000)
+            guard let self, self.trailToken == mine else { return }
+            for s in self.screens { s.clearTrail() }
+        }
     }
 
     // MARK: Pointing
@@ -619,6 +730,8 @@ final class LookBuddy {
         self.pointing = false
         self.returning = false
         self.stopBarTimer()
+        self.trailPoints = []
+        self.trailToken += 1
         for monitor in self.mouseMonitors { NSEvent.removeMonitor(monitor) }
         self.mouseMonitors = []
         if let observer = self.screenObserver { NotificationCenter.default.removeObserver(observer) }

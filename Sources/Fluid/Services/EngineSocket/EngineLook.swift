@@ -24,8 +24,10 @@ import Vision
 nonisolated protocol EngineLookProviding: Sendable {
     /// {screen_access, accessibility, scope, app?, bundle?, title?, url?, ocr_text, region_text?, screenshot?, width, height, ms, error?}
     /// `app` names an app (its name or bundle id) whose biggest window is read; without it the window under the pointer is. `scope` "display"
-    /// reads the whole display under the pointer instead. `region` is in global points.
-    func capture(region: CGRect?, save: Bool, app: String?, scope: String) async -> [String: Any]
+    /// reads the whole display under the pointer instead. `region` is in global points. `find` is phrases to locate on the screen: the answer
+    /// then has `found`, one entry per phrase in the same order, {phrase, x, y, w, h, line, count} in global points (null when the phrase is
+    /// not there), and `frame`, where the picture sits, {x, y, w, h}.
+    func capture(region: CGRect?, save: Bool, app: String?, scope: String, find: [String]) async -> [String: Any]
 }
 
 /// The cursor companion, for myOS: show it thinking while it works, fly it to a point on the screen with a few words, or let it go.
@@ -65,8 +67,8 @@ nonisolated struct EngineLookRead: @unchecked Sendable {
 }
 
 nonisolated struct LiveEngineLook: EngineLookProviding {
-    func capture(region: CGRect?, save: Bool, app: String?, scope: String) async -> [String: Any] {
-        await self.finish(await self.read(app: app, scope: scope), region: region, save: save)
+    func capture(region: CGRect?, save: Bool, app: String?, scope: String, find: [String]) async -> [String: Any] {
+        await self.finish(await self.read(app: app, scope: scope), region: region, save: save, find: find)
     }
 
     /// Picks the window, asks Accessibility about it and takes the picture. Reads no text yet.
@@ -105,7 +107,7 @@ nonisolated struct LiveEngineLook: EngineLookProviding {
     }
 
     /// Reads the text of the picture (and of `region`, in global points, on its own), and keeps a small JPEG when asked.
-    func finish(_ read: EngineLookRead, region: CGRect?, save: Bool) async -> [String: Any] {
+    func finish(_ read: EngineLookRead, region: CGRect?, save: Bool, find: [String] = []) async -> [String: Any] {
         var out = read.info
         out["screen_access"] = read.screenAccess
         out["scope"] = read.scope
@@ -114,13 +116,15 @@ nonisolated struct LiveEngineLook: EngineLookProviding {
         if let shot = read.shot {
             out["width"] = shot.image.width
             out["height"] = shot.image.height
-            let text = await Task.detached(priority: .userInitiated) { () -> (String, String?) in
-                let whole = EngineLookText.read(shot.image)
-                guard let region, let crop = EngineLookScreen.crop(shot, to: region) else { return (whole, nil) }
-                return (whole, EngineLookText.read(crop))
+            let text = await Task.detached(priority: .userInitiated) { () -> (String, String?, [EngineLookText.Located?]) in
+                let whole = EngineLookText.readLocating(shot.image, find: find, in: shot.frame)
+                guard let region, let crop = EngineLookScreen.crop(shot, to: region) else { return (whole.text, nil, whole.found) }
+                return (whole.text, EngineLookText.read(crop), whole.found)
             }.value
             out["ocr_text"] = text.0
             if let r = text.1 { out["region_text"] = r }
+            out["frame"] = ["x": shot.frame.minX, "y": shot.frame.minY, "w": shot.frame.width, "h": shot.frame.height]
+            if !find.isEmpty { out["found"] = text.2.map { (located: EngineLookText.Located?) -> Any in located?.json ?? NSNull() } }
             if save, let path = EngineLookFiles.saveForUpload(shot.image) { out["screenshot"] = path }
         }
         let ms = Int(Date().timeIntervalSince(read.startedAt) * 1000)
@@ -356,18 +360,76 @@ nonisolated enum EngineLookScreen {
 // MARK: - The words
 
 nonisolated enum EngineLookText {
+    /// A phrase found on the screen: where its text is (global points, top-left origin, the same coordinates as the pointer), and the line
+    /// it is in. `count` is how many lines hold it; the one reported is the highest on the screen.
+    struct Located: @unchecked Sendable {
+        let phrase: String
+        let rect: CGRect
+        let line: String
+        let count: Int
+        var json: [String: Any] {
+            ["phrase": self.phrase, "x": self.rect.minX, "y": self.rect.minY, "w": self.rect.width, "h": self.rect.height, "line": String(self.line.prefix(120)), "count": self.count]
+        }
+    }
+
     /// Apple's text recognition, one line per row, top to bottom and left to right. Runs on the Neural Engine or the GPU, on this Mac.
-    static func read(_ image: CGImage) -> String {
+    static func read(_ image: CGImage) -> String { self.readLocating(image, find: [], in: .zero).text }
+
+    /// The same read, and where each phrase in `find` stands inside `frame` (the global points the picture covers). The box is the phrase's own
+    /// letters, not the whole line (Vision measures a stretch of a line), so a pointer can land on the email address inside a sentence.
+    static func readLocating(_ image: CGImage, find phrases: [String], in frame: CGRect) -> (text: String, found: [Located?]) {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
-        do { try VNImageRequestHandler(cgImage: image, options: [:]).perform([request]) } catch { return "" }
-        let rows: [(CGRect, String)] = (request.results ?? []).compactMap { observation in
-            observation.topCandidates(1).first.map { (observation.boundingBox, $0.string) }
+        do { try VNImageRequestHandler(cgImage: image, options: [:]).perform([request]) } catch { return ("", phrases.map { _ in nil }) }
+        let rows: [(box: CGRect, text: VNRecognizedText)] = (request.results ?? []).compactMap { observation in
+            observation.topCandidates(1).first.map { (observation.boundingBox, $0) }
         }
         // Vision's origin is bottom-left, so a higher midY is higher on the screen; rows within a hair of each other read left to right.
-        let sorted = rows.sorted { a, b in abs(a.0.midY - b.0.midY) > 0.008 ? a.0.midY > b.0.midY : a.0.minX < b.0.minX }
-        return String(sorted.map(\.1).joined(separator: "\n").prefix(EngineLookLimits.maxText))
+        let sorted = rows.sorted { a, b in abs(a.box.midY - b.box.midY) > 0.008 ? a.box.midY > b.box.midY : a.box.minX < b.box.minX }
+        let text = String(sorted.map(\.text.string).joined(separator: "\n").prefix(EngineLookLimits.maxText))
+        let found: [Located?] = phrases.map { phrase in
+            var first: Located?
+            var count = 0
+            for row in sorted {
+                guard let range = EngineLookFind.range(of: phrase, in: row.text.string) else { continue }
+                count += 1
+                if first == nil, let box = try? row.text.boundingBox(for: range) {
+                    first = Located(phrase: phrase, rect: EngineLookFind.globalRect(normalized: box.boundingBox, in: frame), line: row.text.string, count: 0)
+                }
+            }
+            return first.map { Located(phrase: $0.phrase, rect: $0.rect, line: $0.line, count: count) }
+        }
+        return (text, found)
+    }
+}
+
+/// Where a phrase is: the rules, apart from the picture.
+nonisolated enum EngineLookFind {
+    static let maxPhrases = 8
+    static let maxPhraseLength = 200
+
+    /// The phrases asked for, cleaned: only strings, trimmed, none empty or over 200 characters, at most eight.
+    static func phrases(from raw: Any?) -> [String] {
+        let all = (raw as? [Any] ?? []).compactMap { ($0 as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return Array(all.filter { !$0.isEmpty && $0.count <= self.maxPhraseLength }.prefix(self.maxPhrases))
+    }
+
+    /// Where `phrase` stands in `line`, ignoring case, accents and how much white space sits between words; nil when it is not there.
+    static func range(of phrase: String, in line: String) -> Range<String.Index>? {
+        let wanted = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !wanted.isEmpty else { return nil }
+        if let found = line.range(of: wanted, options: [.caseInsensitive, .diacriticInsensitive]) { return found }
+        let words = wanted.split(whereSeparator: \.isWhitespace).map { NSRegularExpression.escapedPattern(for: String($0)) }
+        guard words.count > 1, let regex = try? NSRegularExpression(pattern: words.joined(separator: "\\s+"), options: [.caseInsensitive]) else { return nil }
+        let length = (line as NSString).length
+        guard let match = regex.firstMatch(in: line, range: NSRange(location: 0, length: length)) else { return nil }
+        return Range(match.range, in: line)
+    }
+
+    /// A box normalised to the picture (origin bottom-left, as Vision gives it) as global points (origin top-left) inside the picture's frame.
+    static func globalRect(normalized n: CGRect, in frame: CGRect) -> CGRect {
+        CGRect(x: frame.minX + n.minX * frame.width, y: frame.minY + (1 - n.maxY) * frame.height, width: n.width * frame.width, height: n.height * frame.height)
     }
 }
 

@@ -50,7 +50,7 @@ import SQLite3
 ///   {"op":"permissions.request","name"}                   -> {"ok":true}   (shows macOS's own question where there is one; Full Disk Access is refused, the user switches it on in System Settings)
 ///   {"op":"shortcuts.get"}                                -> {"ok":true,"shortcuts":{dictation:[...],edit,command,cancel,paste_last}}   (labels such as "Fn"; read-only)
 ///   {"op":"audio.inputs"}                                 -> {"ok":true,"audio":{inputs:[{uid,name,preferred,default}]}}   (read-only)
-///   {"op":"look.capture","app"?,"scope"?,"region"?:{x,y,w,h},"save"?} -> {"ok":true,"look":{screen_access,accessibility,scope,app?,bundle?,title?,url?,ocr_text,region_text?,screenshot?,width,height,ms,error?}}   (reads ONE window once for myOS's Look: the biggest window of the app named in "app", else the topmost window under the pointer; "scope":"display" reads the whole display under the pointer instead; never asks for Screen Recording, refused while a meeting is recording; region is in global points, screenshot is a small JPEG in the private folder, kept 15 minutes)
+///   {"op":"look.capture","app"?,"scope"?,"region"?:{x,y,w,h},"save"?,"find"?:[phrase]} -> {"ok":true,"look":{screen_access,accessibility,scope,app?,bundle?,title?,url?,ocr_text,region_text?,screenshot?,frame:{x,y,w,h},found?:[{phrase,x,y,w,h,line,count}|null],width,height,ms,error?}}   (reads ONE window once for myOS's Look: the biggest window of the app named in "app", else the topmost window under the pointer; "scope":"display" reads the whole display under the pointer instead; never asks for Screen Recording, refused while a meeting is recording; region is in global points, screenshot is a small JPEG in the private folder, kept 15 minutes)
 ///   {"op":"look.configure","enabled"} / {"op":"look.status"}  -> {"ok":true,"look":{enabled,chord,active,pending}}   (the Fn+Control chord for Look is off until switched on here; the choice is kept)
 ///   {"op":"look.buddy","state":"thinking"|"done"}          -> {"ok":true}   (the cursor companion: thinking shows the spinner at the pointer, done lets it go; refused while a meeting is recording, except done)
 ///   {"op":"look.point","x","y","label"?,"hold"?}          -> {"ok":true}   (the companion flies to a global screen point, origin top-left of the main display, says label (60 characters at most) for hold seconds (0.5 to 30, default 3), then flies back to the pointer; refused while a meeting is recording)
@@ -504,7 +504,8 @@ nonisolated enum EngineSocket {
             let save = object["save"] as? Bool ?? false
             let app = (object["app"] as? String).flatMap { $0.count <= 100 ? $0 : nil }
             let scope = (object["scope"] as? String) == "display" ? "display" : "window"
-            if let result = await EngineTimeout.run(seconds: 20, { await look.capture(region: region, save: save, app: app, scope: scope) }) {
+            let find = EngineLookFind.phrases(from: object["find"])
+            if let result = await EngineTimeout.run(seconds: 20, { await look.capture(region: region, save: save, app: app, scope: scope, find: find) }) {
                 _ = emit(["ok": true, "look": result])
             } else {
                 fail("Reading the screen took too long.")
@@ -1343,15 +1344,24 @@ private final class FakeLook: EngineLookProviding, @unchecked Sendable {
     private var saves: [Bool] = []
     private var apps: [String?] = []
     private var scopes: [String] = []
-    var calls: (regions: [CGRect?], saves: [Bool], apps: [String?], scopes: [String]) {
+    private var finds: [[String]] = []
+    var calls: (regions: [CGRect?], saves: [Bool], apps: [String?], scopes: [String], finds: [[String]]) {
         self.lock.lock(); defer { self.lock.unlock() }
-        return (self.regions, self.saves, self.apps, self.scopes)
+        return (self.regions, self.saves, self.apps, self.scopes, self.finds)
     }
-    func capture(region: CGRect?, save: Bool, app: String?, scope: String) async -> [String: Any] {
-        self.lock.lock(); self.regions.append(region); self.saves.append(save); self.apps.append(app); self.scopes.append(scope); self.lock.unlock()
+    func capture(region: CGRect?, save: Bool, app: String?, scope: String, find: [String]) async -> [String: Any] {
+        self.lock.lock(); self.regions.append(region); self.saves.append(save); self.apps.append(app); self.scopes.append(scope); self.finds.append(find); self.lock.unlock()
         var out: [String: Any] = ["screen_access": true, "accessibility": true, "scope": scope, "app": app ?? "Test Browser", "title": "Jane Roe | Example", "ocr_text": "Jane Roe is the editor at Example.", "width": 100, "height": 50, "ms": 1]
         if region != nil { out["region_text"] = "Jane Roe" }
         if save { out["screenshot"] = "/tmp/look-test.jpg" }
+        if !find.isEmpty {
+            out["frame"] = ["x": 0, "y": 0, "w": 100, "h": 50]
+            out["found"] = find.map { (phrase: String) -> Any in
+                guard phrase == "Jane Roe" else { return NSNull() }
+                let box: [String: Any] = ["phrase": phrase, "x": 10.0, "y": 20.0, "w": 60.0, "h": 12.0, "line": "Jane Roe is the editor at Example.", "count": 1]
+                return box
+            }
+        }
         return out
     }
 }
@@ -2036,6 +2046,26 @@ nonisolated enum EngineSocketAutotest {
                 let longName = String(repeating: "x", count: 150)
                 _ = ask("{\"op\":\"look.capture\",\"app\":\"\(longName)\"}")
                 check("look.capture ignores an app name that is absurdly long", fakeLook.calls.apps.last! == nil)
+                let located = ask(#"{"op":"look.capture","app":"Dia","find":["Jane Roe","  ","nobody here",5,"Jane Roe"]}"#)?["look"] as? [String: Any]
+                let foundList = located?["found"] as? [Any]
+                check("look.capture passes the phrases to find through, cleaned, and answers one entry for each", fakeLook.calls.finds.last == ["Jane Roe", "nobody here", "Jane Roe"] && foundList?.count == 3 && (foundList?.first as? [String: Any])?["x"] as? Double == 10 && foundList?[1] is NSNull && (located?["frame"] as? [String: Any])?["w"] as? Int == 100)
+                _ = ask(#"{"op":"look.capture"}"#)
+                check("look.capture with nothing to find asks for nothing and answers no found list", fakeLook.calls.finds.last == [] && (ask(#"{"op":"look.capture"}"#)?["look"] as? [String: Any])?["found"] == nil)
+                let many = (1...20).map { "\"phrase \($0)\"" }.joined(separator: ",")
+                _ = ask("{\"op\":\"look.capture\",\"find\":[\(many)]}")
+                check("look.capture looks for at most eight phrases", fakeLook.calls.finds.last?.count == 8)
+                let ownText = "Contact: Anthony   Ha, weekend editor — anthony.ha@techcrunch.com"
+                let emailRange = EngineLookFind.range(of: "ANTHONY.HA@techcrunch.com", in: ownText)
+                let nameRange = EngineLookFind.range(of: "anthony ha", in: ownText)
+                let accentLine = "Un café ici"
+                let accentRange = EngineLookFind.range(of: "cafe", in: accentLine)
+                check("a phrase is found in a line ignoring case, accents and extra spaces, and the stretch it matched is returned", emailRange.map { String(ownText[$0]) } == "anthony.ha@techcrunch.com" && nameRange.map { String(ownText[$0]) } == "Anthony   Ha" && accentRange.map { String(accentLine[$0]) } == "café")
+                check("a phrase that is not in the line, or is empty, is not found", EngineLookFind.range(of: "jane", in: ownText) == nil && EngineLookFind.range(of: "   ", in: ownText) == nil)
+                let pictureBox = CGRect(x: 0.25, y: 0.5, width: 0.5, height: 0.1)
+                let global = EngineLookFind.globalRect(normalized: pictureBox, in: CGRect(x: 100, y: 200, width: 1000, height: 800))
+                check("a box in the picture (origin bottom-left, 0 to 1) becomes global points (origin top-left) inside the frame", abs(global.minX - 350) < 0.001 && abs(global.minY - 520) < 0.001 && abs(global.width - 500) < 0.001 && abs(global.height - 80) < 0.001)
+                let cleaned = EngineLookFind.phrases(from: ["  a  ", "", String(repeating: "x", count: 201), 7, "b"])
+                check("phrases are trimmed and the empty, the over-long and the non-text ones are dropped", cleaned == ["a", "b"] && EngineLookFind.phrases(from: "not a list").isEmpty && EngineLookFind.phrases(from: nil).isEmpty)
             }
             // look: the chord's switch, the events myOS waits for, and the pure rules behind them
             do {

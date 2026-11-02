@@ -70,6 +70,19 @@ enum LookBuddyProbe {
         after(0.8) { shoot("1_listening_a", near) }
         after(1.3) { shoot("1_listening_b", near) }
         after(1.7) { shoot("1_listening_c", near) }
+        // The pointer draws a circle (Quartz points) inside the backdrop, then lets go: the path and the box that was read show for two seconds.
+        after(1.9) {
+            let h = NSScreen.screens.first?.frame.height ?? 0
+            let c = CGPoint(x: backdropFrame.midX + 150, y: h - (backdropFrame.midY + 20))
+            for i in 0...40 {
+                let a = Double(i) * .pi / 20
+                LookBuddy.shared.addTrail(quartz: CGPoint(x: c.x + 70 * cos(a), y: c.y + 45 * sin(a)))
+            }
+            LookBuddy.shared.finishTrail(region: CGRect(x: c.x - 90, y: c.y - 65, width: 180, height: 130))
+        }
+        after(2.05) { shoot("1b_trail", backdropFrame) }
+        after(3.6) { shoot("1c_trail_fading", backdropFrame) }
+        after(4.2) { shoot("1d_trail_gone", backdropFrame) }
         after(2.2) { LookBuddy.shared.setMode(.thinking) }
         after(2.7) { shoot("2_thinking_a", near) }
         after(2.85) { shoot("2_thinking_b", near) }

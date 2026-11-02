@@ -115,6 +115,7 @@ final class LookSession {
             // The cursor companion appears at the pointer as a waveform that moves with the voice; it never draws during a meeting recording
             // because this point is not reached then.
             LookBuddy.shared.begin(.listening)
+            if let start = self.path.first { LookBuddy.shared.addTrail(quartz: start) }
             self.levelSubscription = self.levels?.receive(on: DispatchQueue.main).sink { level in MainActor.assumeIsolated { LookBuddy.shared.setLevel(level) } }
             DebugLogger.shared.info("Look: started", source: "LookSession")
             return await LiveEngineLook().read(app: nil, scope: "window")
@@ -135,7 +136,10 @@ final class LookSession {
     private func samplePointer() {
         guard self.sessionActive, let here = CGEvent(source: nil)?.location else { return }
         if let last = self.path.last, hypot(here.x - last.x, here.y - last.y) < 4 { return }
-        if self.path.count < 3000 { self.path.append(here) }
+        if self.path.count < 3000 {
+            self.path.append(here)
+            LookBuddy.shared.addTrail(quartz: here)
+        }
     }
 
     /// Asked by the hotkey stop: is this stop a Look? Answers yes once for a pending Look, and keeps what was gathered for `finish`.
@@ -148,6 +152,7 @@ final class LookSession {
         self.stopTrackingPointer()
         // The words are in: the companion turns into a spinner until myOS has answered (it lets it go), or twenty seconds have passed.
         self.levelSubscription = nil
+        LookBuddy.shared.finishTrail(region: LookPath.region(from: self.path))
         LookBuddy.shared.setMode(.thinking)
         let finishedSession = self.sessionID
         Task { @MainActor [weak self] in
