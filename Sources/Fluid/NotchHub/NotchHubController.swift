@@ -429,8 +429,8 @@ final class NotchHubController {
     }
 
     /// A card about a connection that broke (from the engine socket's `notch.alert`, sent by myOS). Clicking it opens myOS.
-    func showAlert(title: String, text: String, symbol: String, icon: String? = nil, actionLabel: String? = nil, actionID: String? = nil) {
-        self.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: title, subtitle: nil, text: text, date: Date(), alertSymbol: symbol, alertIcon: icon, alertAction: .openMyOS, actionLabel: actionLabel, actionID: actionID))
+    func showAlert(title: String, text: String, symbol: String, icon: String? = nil, actionLabel: String? = nil, actionID: String? = nil, action2Label: String? = nil, action2ID: String? = nil) {
+        self.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: title, subtitle: nil, text: text, date: Date(), alertSymbol: symbol, alertIcon: icon, alertAction: .openMyOS, actionLabel: actionLabel, actionID: actionID, action2Label: action2Label, action2ID: action2ID))
     }
 
     func dismissBanner() {

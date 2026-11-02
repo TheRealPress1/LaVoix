@@ -25,6 +25,9 @@ struct NotchBannerContent: Equatable, Identifiable {
     /// A button on an alert card (and what pressing the card does): myOS runs the action, e.g. signing a mailbox in again.
     var actionLabel: String? = nil
     var actionID: String? = nil
+    /// A second, quieter button beside the first ("Allow once" next to "Always for Dia"); it only appears with the first.
+    var action2Label: String? = nil
+    var action2ID: String? = nil
     /// Set for a WhatsApp message: the number it came from. Replies go out through WhatsApp, and pressing the card opens that chat in the WhatsApp tab.
     var whatsAppPhone: String? = nil
 
@@ -118,18 +121,34 @@ struct NotchBannerView: View {
             .onTapGesture { NotchHubController.shared.openConversationFromBanner() }
 
             if let label = self.content.actionLabel, let id = self.content.actionID {
-                Button {
-                    NotchHubController.shared.dismissBanner()
-                    ConnectionsWidgetView.press(id)
-                } label: {
-                    Text(label)
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 30)
-                        .background(Capsule().fill(Color.orange.opacity(0.95)))
-                        .foregroundStyle(.black)
+                HStack(spacing: 8) {
+                    if let label2 = self.content.action2Label, let id2 = self.content.action2ID {
+                        Button {
+                            NotchHubController.shared.dismissBanner()
+                            ConnectionsWidgetView.press(id2)
+                        } label: {
+                            Text(label2)
+                                .font(.system(size: 13, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 30)
+                                .background(Capsule().fill(Color.white.opacity(0.16)))
+                                .foregroundStyle(.white)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Button {
+                        NotchHubController.shared.dismissBanner()
+                        ConnectionsWidgetView.press(id)
+                    } label: {
+                        Text(label)
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 30)
+                            .background(Capsule().fill(Color.orange.opacity(0.95)))
+                            .foregroundStyle(.black)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
 
             if self.expanded, self.content.alertSymbol == nil { self.replyRow.transition(.opacity.combined(with: .move(edge: .top))) }

@@ -624,7 +624,10 @@ nonisolated enum EngineSocket {
             let icon = (object["icon"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(160)) }
             let label = (object["action_label"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(30)) }
             let actionID = (object["action_id"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(160)) }
-            await MainActor.run { NotchHubController.shared.showAlert(title: String(title.prefix(80)), text: String(text.prefix(300)), symbol: symbol, icon: icon, actionLabel: label, actionID: actionID) }
+            // An optional second, quieter button; it needs the first.
+            let label2 = (object["action2_label"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(30)) }
+            let actionID2 = (object["action2_id"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(160)) }
+            await MainActor.run { NotchHubController.shared.showAlert(title: String(title.prefix(80)), text: String(text.prefix(300)), symbol: symbol, icon: icon, actionLabel: label, actionID: actionID, action2Label: label2, action2ID: actionID2) }
             _ = emit(["ok": true])
         case "notch.connections_set":
             // The state of every connector, for the Connections tab (and its badge).
