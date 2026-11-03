@@ -354,7 +354,8 @@ final class NotchHubController {
                 chatGUID: message.chatGUID,
                 title: title,
                 avatarHandle: message.isGroup ? nil : message.senderHandle,
-                groupHandles: message.isGroup ? store.participantHandles(chatID: message.chatID) : [],
+                groupHandles: message.isGroup ? store.groupFacts(chatID: message.chatID).handles : [],
+                groupPhoto: message.isGroup ? store.groupFacts(chatID: message.chatID).photo : nil,
                 subtitle: message.isGroup ? name : nil,
                 text: NotchMessagesSettings.showsPreviews ? message.text : "New message",
                 date: message.date

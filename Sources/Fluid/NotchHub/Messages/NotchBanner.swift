@@ -11,6 +11,8 @@ struct NotchBannerContent: Equatable, Identifiable {
     var avatarHandle: String? = nil
     /// Everyone in the group, so a group card can show overlapping avatars. Empty for one-to-one chats.
     var groupHandles: [String] = []
+    /// The group's own picture, when it has one.
+    var groupPhoto: NSImage? = nil
     /// Who spoke, in a group chat.
     let subtitle: String?
     let text: String
@@ -116,7 +118,7 @@ struct NotchBannerView: View {
                 } else if self.content.groupHandles.isEmpty {
                     NotchAvatar(name: self.content.title, handle: self.content.avatarHandle)
                 } else {
-                    NotchGroupAvatar(handles: self.content.groupHandles)
+                    NotchGroupAvatar(handles: self.content.groupHandles, photo: self.content.groupPhoto)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .firstTextBaseline) {
@@ -290,18 +292,32 @@ struct NotchAvatar: View {
 /// A group chat's picture: two overlapping avatars (the first two people in it), so it reads as a group at a glance.
 struct NotchGroupAvatar: View {
     let handles: [String]
+    /// The group's own picture: shown whole when there is one.
+    var photo: NSImage? = nil
     var size: CGFloat = 40
     @ObservedObject private var contacts = ContactResolver.shared
 
     var body: some View {
         let inner = self.size * 0.68
         ZStack {
-            if self.handles.count >= 2 {
+            if let photo = self.photo {
+                Image(nsImage: photo).resizable().scaledToFill().frame(width: self.size, height: self.size).clipShape(Circle())
+            } else if self.handles.count >= 2 {
+                // No picture of its own: two of the people's faces, and a plus when there are more.
                 self.avatar(self.handles[0], size: inner)
                     .position(x: inner / 2, y: inner / 2)
                 self.avatar(self.handles[1], size: inner)
                     .overlay(Circle().strokeBorder(Color.black, lineWidth: max(1.5, self.size * 0.05)))
                     .position(x: self.size - inner / 2, y: self.size - inner / 2)
+                if self.handles.count > 2 {
+                    ZStack {
+                        Circle().fill(Color(white: 0.28))
+                        Image(systemName: "plus").font(.system(size: self.size * 0.2, weight: .bold)).foregroundStyle(.white)
+                    }
+                    .frame(width: self.size * 0.36, height: self.size * 0.36)
+                    .overlay(Circle().strokeBorder(Color.black, lineWidth: max(1.5, self.size * 0.05)))
+                    .position(x: self.size - self.size * 0.18, y: self.size * 0.18)
+                }
             } else {
                 // Not enough people known to draw two: a plain group mark.
                 Circle().fill(Color.white.opacity(0.18))

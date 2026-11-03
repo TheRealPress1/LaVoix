@@ -400,13 +400,31 @@ final class MessagesStore: ObservableObject {
     /// For a notification card: the group's name, or its members when it has none.
     func groupTitle(chatID: Int64, groupName: String) -> String {
         if !groupName.isEmpty { return groupName }
-        guard let chat = self.conversations.first(where: { $0.id == chatID }) else { return "Group" }
+        guard let chat = self.conversations.first(where: { $0.id == chatID }) else {
+            // Not in the loaded list (a new group): its people, when they can be read, rather than just "Group".
+            let people = self.groupFacts(chatID: chatID).handles.map(self.firstName(forHandle:))
+            return people.isEmpty ? "Group" : Self.participantsSummary(people)
+        }
         return self.title(for: chat)
     }
 
     func participantHandles(chatID: Int64) -> [String] {
         self.conversations.first { $0.id == chatID }?.handles ?? []
     }
+
+    /// The group's people and its own picture for a card, read from the database when the loaded list does not know the chat (a new group).
+    /// Cached for the life of the app; a group picture that cannot be found is simply not shown.
+    func groupFacts(chatID: Int64) -> (handles: [String], photo: NSImage?) {
+        if let cached = self.groupFactsCache[chatID] { return cached }
+        let facts = self.database.groupFacts(chatID: chatID)
+        let known = self.participantHandles(chatID: chatID)
+        let photo = facts.photoPath.flatMap { NSImage(contentsOfFile: $0) }
+        DebugLogger.shared.info("Group card: \(facts.handles.count) people, picture \(facts.photoPath == nil ? "none" : (photo == nil ? "listed but not readable" : "found"))", source: "MessagesStore")
+        let result = (known.isEmpty ? facts.handles : known, photo)
+        self.groupFactsCache[chatID] = result
+        return result
+    }
+    private var groupFactsCache: [Int64: (handles: [String], photo: NSImage?)] = [:]
 
     func isGroup(chatID: Int64?) -> Bool {
         guard let chatID else { return false }

@@ -302,6 +302,26 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
         ORDER BY c.ROWID, m.date
         """
 
+    /// What a group card needs that the loaded conversation list may not have (a brand-new group, or an old one): who is in the chat, and where the
+    /// group's own picture is when it has one. Metadata only: the people's addresses and a file path, never a message.
+    func groupFacts(chatID: Int64) -> (handles: [String], photoPath: String?) {
+        let handles = self.query("SELECT h.id FROM chat_handle_join chj JOIN handle h ON h.ROWID = chj.handle_id WHERE chj.chat_id = ?1 ORDER BY h.ROWID", bind: { sqlite3_bind_int64($0, 1, chatID) }) { Self.string($0, 0) } ?? []
+        let properties = self.query("SELECT properties FROM chat WHERE ROWID = ?1", bind: { sqlite3_bind_int64($0, 1, chatID) }) { statement -> Data? in
+            let bytes = Int(sqlite3_column_bytes(statement, 0))
+            guard bytes > 0, let blob = sqlite3_column_blob(statement, 0) else { return nil }
+            return Data(bytes: blob, count: bytes)
+        }?.first ?? nil
+        guard let guid = properties.flatMap(Self.groupPhotoGUID(in:)) else { return (handles, nil) }
+        let path = self.query("SELECT filename FROM attachment WHERE guid = ?1 LIMIT 1", bind: { sqlite3_bind_text($0, 1, guid, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) { Self.optionalString($0, 0) }?.first ?? nil
+        return (handles, path.map { ($0 as NSString).expandingTildeInPath })
+    }
+
+    /// The attachment guid of a group's own picture, from a chat's `properties` (a property list).
+    static func groupPhotoGUID(in properties: Data) -> String? {
+        guard let plist = try? PropertyListSerialization.propertyList(from: properties, options: [], format: nil) as? [String: Any] else { return nil }
+        return (plist["groupPhotoGuid"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
     func maxRowID() -> Int64 {
         self.query("SELECT COALESCE(MAX(ROWID), 0) FROM message", bind: { _ in }) { sqlite3_column_int64($0, 0) }?.first ?? 0
     }

@@ -2176,6 +2176,13 @@ nonisolated enum EngineSocketAutotest {
                 check("a label is one line, trimmed and cut at sixty characters; empty means none", LookBuddyMath.cleanLabel("  the\n email   address ") == "the email address" && LookBuddyMath.cleanLabel(String(repeating: "a", count: 200))?.count == 60 && LookBuddyMath.cleanLabel("  \n ") == nil && LookBuddyMath.cleanLabel(nil) == nil)
                 check("how long it stays is between half a second and thirty, three by default", LookBuddyMath.clampHold(nil) == 3 && LookBuddyMath.clampHold(0) == 0.5 && LookBuddyMath.clampHold(999) == 30 && LookBuddyMath.clampHold(7) == 7)
             }
+            // a group card's picture: the guid of the group's own photo comes out of a chat's properties
+            do {
+                let withPhoto = try? PropertyListSerialization.data(fromPropertyList: ["groupPhotoGuid": "ABC-123", "other": 1] as [String: Any], format: .binary, options: 0)
+                let without = try? PropertyListSerialization.data(fromPropertyList: ["shouldForceToSMS": true] as [String: Any], format: .binary, options: 0)
+                check("a group's own picture is found from the chat's properties", withPhoto.flatMap(MessagesDatabase.groupPhotoGUID(in:)) == "ABC-123")
+                check("a group without a picture, or with unreadable properties, has none", without.flatMap(MessagesDatabase.groupPhotoGUID(in:)) == nil && MessagesDatabase.groupPhotoGUID(in: Data([1, 2, 3])) == nil)
+            }
             // the dictation text under the notch: the two newest sentences
             do {
                 let two = RecentSentences.parts(of: "Hello there. How are you doing today? I am fine and")
