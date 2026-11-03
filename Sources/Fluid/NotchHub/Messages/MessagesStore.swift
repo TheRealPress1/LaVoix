@@ -65,6 +65,8 @@ final class MessagesStore: ObservableObject {
         let chatID: Int64
         let text: String
         let date: Date
+        /// The file being sent, so the thread shows it at once instead of a bare "Attachment".
+        var files: [MessageAttachment] = []
     }
     private var pending: [PendingMessage] = []
     private var nextTempID: Int64 = -1
@@ -537,11 +539,11 @@ final class MessagesStore: ObservableObject {
     private func deliverFiles(_ files: [URL], chatID: Int64, chatGUID: String, thenText text: String) {
         self.sendError = nil
         // The first file shows at once, on this very tick, like a typed message; the rest show as their turn comes.
-        let firstTempID = self.addPending("Attachment", chatID: chatID)
+        let firstTempID = self.addPending("Attachment", chatID: chatID, file: files.first)
         Task {
             for (index, url) in files.enumerated() {
                 let started = Date()
-                let tempID = index == 0 ? firstTempID : self.addPending("Attachment", chatID: chatID)
+                let tempID = index == 0 ? firstTempID : self.addPending("Attachment", chatID: chatID, file: url)
                 do {
                     try await self.sendFileHandler(url, chatGUID)
                 } catch {
@@ -682,10 +684,11 @@ final class MessagesStore: ObservableObject {
 
     // MARK: - Pending (just sent) messages
 
-    private func addPending(_ text: String, chatID: Int64) -> Int64 {
+    private func addPending(_ text: String, chatID: Int64, file: URL? = nil) -> Int64 {
         let tempID = self.nextTempID
         self.nextTempID -= 1
-        self.pending.append(PendingMessage(tempID: tempID, chatID: chatID, text: text, date: Date()))
+        let files = file.map { [MessageAttachment(id: tempID, path: $0.path, name: $0.lastPathComponent, kind: MessageAttachment.kind(mime: nil, uti: nil, name: $0.lastPathComponent))] } ?? []
+        self.pending.append(PendingMessage(tempID: tempID, chatID: chatID, text: text, date: Date(), files: files))
         self.showPending(chatID: chatID)
         return tempID
     }
@@ -705,7 +708,7 @@ final class MessagesStore: ObservableObject {
 
     private func mergedThread(for chatID: Int64) -> [ThreadMessage] {
         let sent = self.pending.filter { $0.chatID == chatID }.map {
-            ThreadMessage(id: $0.tempID, text: $0.text, date: $0.date, isFromMe: true, senderHandle: "")
+            ThreadMessage(id: $0.tempID, text: $0.text, date: $0.date, isFromMe: true, senderHandle: "", attachments: $0.files, textIsPlaceholder: !$0.files.isEmpty)
         }
         return (self.threadCache[chatID] ?? []) + sent
     }
@@ -730,7 +733,7 @@ final class MessagesStore: ObservableObject {
             guard old.lastDate <= item.date else { result.insert(old, at: index); continue }
             result.insert(MessageConversation(
                 id: old.id, guid: old.guid, title: old.title, handles: old.handles, isGroup: old.isGroup,
-                lastText: item.text, lastDate: item.date, lastIsFromMe: true, unreadCount: 0,
+                lastText: item.files.isEmpty ? item.text : MessageAttachment.summary(item.files), lastDate: item.date, lastIsFromMe: true, unreadCount: 0,
                 hasGroupName: old.hasGroupName
             ), at: 0)
         }

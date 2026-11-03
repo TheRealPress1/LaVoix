@@ -121,6 +121,12 @@ enum NotchHubDebug {
             } else if widgetName.hasPrefix("messages") {
                 let store = MessagesStore.sample(access: widgetName == "messages-denied" ? .needsFullDiskAccess : .granted)
                 if widgetName == "messages-group" { store.select(5) }
+                // Files in the thread: invented pictures, a video, a PDF (messages-files), their labels (messages-files-chips), or one enlarged (messages-files-enlarged).
+                var enlargedFileID: Int64?
+                if widgetName.hasPrefix("messages-files") {
+                    let first = MessagesSampleFiles.fill(store, chips: widgetName == "messages-files-chips")
+                    if widgetName == "messages-files-enlarged" { enlargedFileID = first }
+                }
                 if let stand_in = NSImage(systemSymbolName: "person.crop.circle.fill", accessibilityDescription: nil) {
                     ContactResolver.shared.debugSetPhoto(stand_in, for: "+15551230001")
                     ContactResolver.shared.debugSetName("Krish Bhatia", for: "+15551230004")
@@ -128,7 +134,7 @@ enum NotchHubDebug {
                 }
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
-                    NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") { AnyView(MessagesWidgetView(store: store, staticLayout: true)) },
+                    NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") { AnyView(MessagesWidgetView(store: store, staticLayout: true, previewEnlargedFileID: enlargedFileID)) },
                 ])
                 model.selectedWidgetID = "messages"
                 model.setBadge("messages", 3)
@@ -812,6 +818,133 @@ enum NotchHubDebug {
         }
     }
 
+    /// Files in Messages, on a fake database with Apple's table layout and invented files: how each file is told apart, that the thread and the
+    /// list name them instead of "Attachment", that a layout without the attachment tables still loads the messages, and that the pictures come out
+    /// the right size and the right way up (HEIC, a phone-style turned JPEG, a PDF page, a video frame).
+    @MainActor static func messageFilesAutotest() async {
+        func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)") }
+        typealias Kind = MessageAttachment.Kind
+        check("a mime type tells a photo, a video, a voice message and a PDF apart", MessageAttachment.kind(mime: "image/heic", uti: nil, name: "a") == .image && MessageAttachment.kind(mime: "video/quicktime", uti: nil, name: "a") == .video && MessageAttachment.kind(mime: "audio/x-caf", uti: nil, name: "a") == .audio && MessageAttachment.kind(mime: "application/pdf", uti: nil, name: "a") == .pdf)
+        check("without a mime type the type identifier, then the extension, decide", MessageAttachment.kind(mime: nil, uti: "public.jpeg", name: "x") == .image && MessageAttachment.kind(mime: nil, uti: nil, name: "IMG_1.MOV") == .video && MessageAttachment.kind(mime: nil, uti: nil, name: "notes.zip") == .file && MessageAttachment.kind(mime: "", uti: "", name: "noextension") == .file)
+        func file(_ id: Int64, _ kind: Kind, sticker: Bool = false) -> MessageAttachment { MessageAttachment(id: id, path: "/x/\(id)", name: "n", kind: kind, isSticker: sticker) }
+        check("a message that is only files is named by what they are", MessageAttachment.summary([file(1, .image)]) == "Photo" && MessageAttachment.summary([file(1, .video)]) == "Video" && MessageAttachment.summary([file(1, .audio)]) == "Audio message" && MessageAttachment.summary([file(1, .image, sticker: true)]) == "Sticker" && MessageAttachment.summary([file(1, .image), file(2, .image)]) == "2 photos" && MessageAttachment.summary([file(1, .image), file(2, .pdf)]) == "2 attachments" && MessageAttachment.summary([]) == "Attachment")
+
+        let dir = MessagesSampleFiles.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let png = dir.appendingPathComponent("wide.png"), heic = dir.appendingPathComponent("IMG_0001.HEIC"), turned = dir.appendingPathComponent("portrait.jpg")
+        let pdf = dir.appendingPathComponent("doc.pdf"), clip = dir.appendingPathComponent("clip.mp4"), text = dir.appendingPathComponent("notes.txt")
+        let wide = MessagesSampleFiles.scene(width: 1600, height: 900, warm: true)
+        MessagesSampleFiles.writeImage(wide, to: png, type: .png)
+        let heicWritten = MessagesSampleFiles.writeImage(wide, to: heic, type: .heic)
+        // A phone stores a portrait photo as landscape pixels with an orientation mark: 800 wide by 400 tall, turned a quarter, is upright 400 by 800.
+        MessagesSampleFiles.writeImage(MessagesSampleFiles.scene(width: 800, height: 400, warm: false), to: turned, type: .jpeg, orientation: 6)
+        MessagesSampleFiles.writePDF(to: pdf)
+        try? Data("hello".utf8).write(to: text)
+        let videoWritten = await MessagesSampleFiles.writeVideo(to: clip)
+
+        // A fake Messages database: one chat, messages with words, only a file, words and a file, a hidden file, link-preview data, a missing file.
+        let schema = """
+        CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, display_name TEXT, chat_identifier TEXT, style INTEGER);
+        CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, attributedBody BLOB, date INTEGER, is_from_me INTEGER, cache_has_attachments INTEGER, is_read INTEGER, item_type INTEGER, associated_message_type INTEGER, handle_id INTEGER, error INTEGER);
+        CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER, message_date INTEGER);
+        CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+        CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+        CREATE TABLE attachment (ROWID INTEGER PRIMARY KEY, guid TEXT, filename TEXT, mime_type TEXT, uti TEXT, transfer_name TEXT, is_sticker INTEGER, hide_attachment INTEGER);
+        CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
+        INSERT INTO handle VALUES (1, '+15551230001');
+        INSERT INTO chat VALUES (1, 'g1', '', '+15551230001', 45);
+        INSERT INTO chat_handle_join VALUES (1, 1);
+        INSERT INTO message VALUES (1, 'hello there', NULL, 100, 0, 0, 1, 0, 0, 1, 0);
+        INSERT INTO message VALUES (2, NULL, NULL, 200, 0, 1, 1, 0, 0, 1, 0);
+        INSERT INTO message VALUES (3, 'and the lease', NULL, 300, 1, 1, 1, 0, 0, 0, 0);
+        INSERT INTO message VALUES (4, 'https://example.com/a', NULL, 400, 0, 1, 1, 0, 0, 1, 0);
+        INSERT INTO message VALUES (5, NULL, NULL, 500, 0, 1, 1, 0, 0, 1, 0);
+        INSERT INTO message VALUES (6, NULL, NULL, 600, 0, 1, 1, 0, 0, 1, 0);
+        INSERT INTO message VALUES (7, NULL, NULL, 700, 0, 1, 1, 0, 0, 1, 0);
+        INSERT INTO message VALUES (8, NULL, NULL, 800, 0, 1, 1, 0, 0, 1, 0);
+        INSERT INTO chat_message_join VALUES (1, 1, 100), (1, 2, 200), (1, 3, 300), (1, 4, 400), (1, 5, 500), (1, 6, 600), (1, 7, 700), (1, 8, 800);
+        INSERT INTO attachment VALUES (1, 'a1', '\(png.path)', 'image/png', 'public.png', 'wide.png', 0, 0);
+        INSERT INTO attachment VALUES (2, 'a2', '\(pdf.path)', 'application/pdf', 'com.adobe.pdf', 'Lease.pdf', 0, 0);
+        INSERT INTO attachment VALUES (3, 'a3', '/nowhere/payload.pluginPayloadAttachment', NULL, 'com.apple.messages.pluginpayload', 'payload', 0, 0);
+        INSERT INTO attachment VALUES (4, 'a4', '\(png.path)', 'image/png', 'public.png', 'hidden.png', 0, 1);
+        INSERT INTO attachment VALUES (5, 'a5', '/nowhere/gone.heic', 'image/heic', 'public.heic', 'gone.heic', 0, 0);
+        INSERT INTO attachment VALUES (6, 'a6', '\(png.path)', 'image/png', 'public.png', 'second.png', 0, 0);
+        INSERT INTO attachment VALUES (7, 'a7', '/nowhere/IMG_0042.HEIC', 'image/heic', 'public.heic', 'IMG_0042.HEIC', 0, 0);
+        INSERT INTO attachment VALUES (8, 'a8', '/nowhere/IMG_0042.MOV', 'video/quicktime', 'com.apple.quicktime-movie', 'IMG_0042.MOV', 0, 0);
+        INSERT INTO attachment VALUES (9, 'a9', '/nowhere/holiday.mov', 'video/quicktime', 'com.apple.quicktime-movie', 'Holiday.MOV', 0, 0);
+        INSERT INTO message_attachment_join VALUES (2, 1), (2, 6), (3, 2), (4, 3), (5, 4), (6, 5), (7, 7), (7, 8), (8, 9), (8, 7);
+        """
+        let dbURL = dir.appendingPathComponent("chat.db")
+        let create = Process()
+        create.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        create.arguments = [dbURL.path, schema]
+        try? create.run(); create.waitUntilExit()
+        let database = MessagesDatabase(url: dbURL)
+        let thread = database.messages(chatID: 1, limit: 12) ?? []
+        func message(_ id: Int64) -> ThreadMessage? { thread.first { $0.id == id } }
+        check("the thread loads with the files beside their messages", thread.count == 8 && message(2)?.attachments.map(\.id) == [1, 6] && message(2)?.attachments.first?.kind == .image && message(3)?.attachments.first?.kind == .pdf)
+        check("a message that is only files has a stand-in text, one with words keeps its words", message(2)?.textIsPlaceholder == true && message(2)?.text == "Attachment" && message(3)?.textIsPlaceholder == false && message(3)?.text == "and the lease")
+        check("a message without files has none", message(1)?.attachments.isEmpty == true && message(1)?.textIsPlaceholder == false)
+        check("link-preview data and hidden files are not shown as files", message(4)?.attachments.isEmpty == true && message(5)?.attachments.isEmpty == true)
+        check("a message whose files are not on this Mac still lists them (the tile says so)", message(6)?.attachments.first?.exists == false && message(6)?.attachments.count == 1)
+        check("a file-only message whose files were all filtered keeps its plain bubble", message(5)?.textIsPlaceholder == false && message(5)?.text == "Attachment")
+        let list = database.conversations(limit: 12) ?? []
+        // The newest message (6) is a missing .heic, still listed, so it is a photo.
+        check("the list preview names the newest, file-only message (a video and a photo)", list.first?.lastText == "2 attachments")
+        let incoming = database.incomingMessages(after: 1)
+        check("a banner reads Photo, not Attachment", incoming.first { $0.rowID == 2 }?.text == "2 photos" && incoming.first { $0.rowID == 6 }?.text == "Photo")
+        check("a Live Photo (the picture and a same-named video) is one photo, a video with another name stays", message(7)?.attachments.map(\.name) == ["IMG_0042.HEIC"] && message(8)?.attachments.map(\.kind) == [.image, .video])
+        check("attachments(messageIDs: []) asks nothing", database.attachments(messageIDs: []).isEmpty)
+
+        // The layout of an older database, with no attachment tables: the messages must still load, with the plain label.
+        let bareURL = dir.appendingPathComponent("bare.db")
+        let bareSchema = schema.components(separatedBy: "\n").filter { !($0.contains("TABLE attachment") || $0.contains("message_attachment_join") || $0.contains("INTO attachment")) }.joined(separator: "\n")
+        let bare = Process()
+        bare.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        bare.arguments = [bareURL.path, bareSchema]
+        try? bare.run(); bare.waitUntilExit()
+        let bareThread = MessagesDatabase(url: bareURL).messages(chatID: 1, limit: 12)
+        check("without the attachment tables the messages still load, as \"Attachment\"", bareThread?.count == 8 && bareThread?.first { $0.id == 2 }?.text == "Attachment" && bareThread?.first { $0.id == 2 }?.attachments.isEmpty == true && bareThread?.first { $0.id == 2 }?.textIsPlaceholder == false)
+        check("without them the list still loads, as \"Attachment\"", MessagesDatabase(url: bareURL).conversations(limit: 12)?.first?.lastText == "Attachment")
+
+        // Pictures.
+        let pngFile = MessageAttachment(id: 1, path: png.path, name: "wide.png", kind: .image)
+        let small = await MessageAttachmentImages.image(for: pngFile, maxPixel: 200)
+        check("a picture is cut down to the size asked, keeping its shape", small.map { max($0.size.width, $0.size.height) <= 200 && max($0.size.width, $0.size.height) >= 190 && abs($0.size.width / $0.size.height - 1600.0 / 900.0) < 0.03 } == true)
+        check("the same picture asked again comes from the cache", MessageAttachmentImages.cached(pngFile, maxPixel: 200) === small && small != nil)
+        check("a different size is its own picture", MessageAttachmentImages.cached(pngFile, maxPixel: 900) == nil)
+        if heicWritten {
+            let heicImage = await MessageAttachmentImages.image(for: MessageAttachment(id: 2, path: heic.path, name: "IMG_0001.HEIC", kind: .image), maxPixel: 300)
+            check("a HEIC photo (what phones send) is read", heicImage.map { max($0.size.width, $0.size.height) <= 300 && $0.size.width > $0.size.height } == true)
+        } else { print("SKIP HEIC could not be written on this Mac") }
+        let upright = await MessageAttachmentImages.image(for: MessageAttachment(id: 3, path: turned.path, name: "portrait.jpg", kind: .image), maxPixel: 400)
+        check("a photo stored turned on its side comes out upright (taller than wide)", upright.map { $0.size.height > $0.size.width } == true)
+        let page = await MessageAttachmentImages.image(for: MessageAttachment(id: 4, path: pdf.path, name: "doc.pdf", kind: .pdf), maxPixel: 300)
+        check("a PDF shows its first page, upright", page.map { $0.size.height > $0.size.width && max($0.size.width, $0.size.height) <= 301 } == true)
+        if videoWritten {
+            let frame = await MessageAttachmentImages.image(for: MessageAttachment(id: 5, path: clip.path, name: "clip.mp4", kind: .video), maxPixel: 200)
+            check("a video shows a frame of itself", frame.map { max($0.size.width, $0.size.height) <= 200 && $0.size.width > $0.size.height } == true)
+        } else { print("SKIP video could not be written on this Mac") }
+        check("a file that is not there gives no picture, and does not stop anything", await MessageAttachmentImages.image(for: MessageAttachment(id: 6, path: "/nowhere/gone.heic", name: "gone.heic", kind: .image), maxPixel: 200) == nil)
+        let plainFile = await MessageAttachmentImages.image(for: MessageAttachment(id: 7, path: text.path, name: "notes.txt", kind: .file), maxPixel: 200)
+        let voiceMessage = await MessageAttachmentImages.image(for: MessageAttachment(id: 8, path: text.path, name: "a.caf", kind: .audio), maxPixel: 200)
+        check("a text file or a voice message gives no picture (they show as a label)", plainFile == nil && voiceMessage == nil)
+        check("a damaged picture gives no picture", await MessageAttachmentImages.image(for: MessageAttachment(id: 9, path: text.path, name: "broken.png", kind: .image), maxPixel: 200) == nil)
+
+        // A file being sent from the notch shows as itself at once, and the preview names it.
+        let store = MessagesStore.sample()
+        store.sendHandler = { _, _ in }
+        // The fake sender fails at once, so nothing reads the real Messages database afterwards; the checks below run before it does.
+        store.sendFileHandler = { _, _ in throw MessagesSender.SendError.failed("test") }
+        store.stage([png], chatID: 3)
+        store.sendStaged()
+        check("a file being sent shows as its own picture in the thread at once", store.thread.last?.attachments.first?.name == "wide.png" && store.thread.last?.attachments.first?.kind == .image && store.thread.last?.textIsPlaceholder == true)
+        check("and the list says Photo for it", store.conversations.first { $0.id == 3 }?.lastText == "Photo")
+        let sentReal = ThreadMessage(id: 700, text: "Attachment", date: Date(), isFromMe: true, senderHandle: "", attachments: [pngFile], textIsPlaceholder: true)
+        store.apply(conversations: store.conversations, threads: [3: store.thread.filter { $0.id > 0 } + [sentReal]], incoming: [], announce: false)
+        check("when Messages shows it, the real one replaces the temporary one (no double)", store.thread.filter { $0.isFromMe && !$0.attachments.isEmpty }.count == 1 && store.thread.last?.id == 700)
+    }
+
     /// `LAVOIX_MESSAGES_AUTOTEST=1` checks that switching conversations shows the cached thread immediately, and times
     /// the real database reads (read-only; message text is never printed).
     @MainActor static func messagesAutotestIfRequested() {
@@ -862,6 +995,8 @@ enum NotchHubDebug {
             try? lockInput.fileHandleForWriting.close()
             locker.terminate()
             try? FileManager.default.removeItem(at: tmp)
+
+            await Self.messageFilesAutotest()
 
             // Sending: the message must appear instantly, be replaced (not duplicated) when the database catches up,
             // and vanish if sending fails. A fake sender is used, so nothing is ever really sent.

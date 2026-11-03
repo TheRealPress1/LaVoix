@@ -62,7 +62,8 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
                  WHERE j2.chat_id = c.ROWID AND m2.is_read = 0 AND m2.is_from_me = 0
                    AND m2.item_type = 0 AND m2.associated_message_type = 0),
                COALESCE((SELECT GROUP_CONCAT(h.id, ',') FROM chat_handle_join chj
-                          JOIN handle h ON h.ROWID = chj.handle_id WHERE chj.chat_id = c.ROWID), '')
+                          JOIN handle h ON h.ROWID = chj.handle_id WHERE chj.chat_id = c.ROWID), ''),
+               m.ROWID
         FROM chat c
         JOIN message m ON m.ROWID = (
             SELECT j.message_id FROM chat_message_join j JOIN message mm ON mm.ROWID = j.message_id
@@ -72,10 +73,15 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
         ORDER BY m.date DESC
         LIMIT ?
         """
-        return self.query(sql, bind: { sqlite3_bind_int($0, 1, Int32(limit)) }) { row in
+        // The last message's row id, for the ones that are only a file (named "Photo", "Video"... below instead of the bare "Attachment").
+        var onlyFiles: [Int64: Int] = [:]
+        let found = self.query(sql, bind: { sqlite3_bind_int($0, 1, Int32(limit)) }) { row -> MessageConversation in
             let identifier = Self.string(row, 3)
             let handles = Self.string(row, 11).split(separator: ",").map(String.init)
             let groupName = Self.string(row, 2)
+            let hasFile = sqlite3_column_int(row, 9) != 0
+            let wordless = Self.messageText(text: Self.optionalString(row, 5), body: Self.blob(row, 6), hasAttachment: false).isEmpty
+            if hasFile, wordless { onlyFiles[sqlite3_column_int64(row, 12)] = Int(sqlite3_column_int64(row, 0)) }
             return MessageConversation(
                 id: sqlite3_column_int64(row, 0),
                 guid: Self.string(row, 1),
@@ -89,6 +95,13 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
                 hasGroupName: !groupName.isEmpty
             )
         }
+        guard var list = found, !onlyFiles.isEmpty else { return found }
+        let files = self.attachments(messageIDs: Array(onlyFiles.keys))
+        for (messageID, chatID) in onlyFiles {
+            guard let attached = files[messageID], let index = list.firstIndex(where: { $0.id == Int64(chatID) }) else { continue }
+            list[index] = list[index].withLastText(MessageAttachment.summary(attached))
+        }
+        return list
     }
 
     /// The one-to-one chat (never a group) with any of these handles: the one with the newest message when there are several (an iMessage and an
@@ -124,22 +137,82 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
         ORDER BY m.date DESC
         LIMIT ?
         """
-        let queried: [ThreadMessage]? = self.query(sql, bind: {
+        let queried: [(ThreadMessage, Bool)]? = self.query(sql, bind: {
             sqlite3_bind_int64($0, 1, chatID)
             sqlite3_bind_int($0, 2, Int32(limit))
-        }) { row in
-            ThreadMessage(
+        }) { row -> (ThreadMessage, Bool) in
+            let hasFile = sqlite3_column_int(row, 5) != 0
+            let wordless = Self.messageText(text: Self.optionalString(row, 1), body: Self.blob(row, 2), hasAttachment: false).isEmpty
+            var message = ThreadMessage(
                 id: sqlite3_column_int64(row, 0),
-                text: Self.messageText(text: Self.optionalString(row, 1), body: Self.blob(row, 2), hasAttachment: sqlite3_column_int(row, 5) != 0),
+                text: Self.messageText(text: Self.optionalString(row, 1), body: Self.blob(row, 2), hasAttachment: hasFile),
                 date: Self.date(sqlite3_column_int64(row, 3)),
                 isFromMe: sqlite3_column_int(row, 4) != 0,
                 senderHandle: Self.string(row, 6),
                 failed: sqlite3_column_int(row, 4) != 0 && sqlite3_column_int(row, 7) != 0
             )
+            message.textIsPlaceholder = hasFile && wordless
+            return (message, hasFile)
         }
         guard let newestFirst = queried else { return nil }
-        return newestFirst.reversed()
+        // The files come from their own query, so a layout this code does not know can never stop the messages themselves from loading.
+        let withFiles = newestFirst.filter { $0.1 }.map { $0.0.id }
+        let files = withFiles.isEmpty ? [:] : self.attachments(messageIDs: withFiles)
+        return newestFirst.reversed().map { message, _ in
+            var message = message
+            message.attachments = files[message.id] ?? []
+            // A message whose files could not be found keeps the plain "Attachment" bubble.
+            if message.attachments.isEmpty { message.textIsPlaceholder = false }
+            return message
+        }
     }
+
+    /// The files attached to these messages (by message row id), in the order Messages lists them. Hidden ones and the data behind link previews are
+    /// left out. Empty when the attachment table can't be read, so the callers keep the plain "Attachment" label.
+    func attachments(messageIDs: [Int64]) -> [Int64: [MessageAttachment]] {
+        guard !messageIDs.isEmpty else { return [:] }
+        let marks = messageIDs.map { _ in "?" }.joined(separator: ",")
+        let sql = """
+        SELECT j.message_id, a.ROWID, COALESCE(a.filename, ''), a.mime_type, a.uti, COALESCE(a.transfer_name, ''), COALESCE(a.is_sticker, 0)
+        FROM message_attachment_join j
+        JOIN attachment a ON a.ROWID = j.attachment_id
+        WHERE j.message_id IN (\(marks)) AND COALESCE(a.hide_attachment, 0) = 0
+        ORDER BY j.message_id, a.ROWID
+        """
+        let rows = self.query(sql, bind: { stmt in
+            for (i, id) in messageIDs.enumerated() { sqlite3_bind_int64(stmt, Int32(i + 1), id) }
+        }) { row -> (Int64, MessageAttachment)? in
+            let filename = Self.string(row, 2)
+            guard !filename.isEmpty, !filename.hasSuffix(".pluginPayloadAttachment") else { return nil }
+            let path = (filename as NSString).expandingTildeInPath
+            let transfer = Self.string(row, 5)
+            let name = transfer.isEmpty ? (path as NSString).lastPathComponent : transfer
+            return (sqlite3_column_int64(row, 0), MessageAttachment(
+                id: sqlite3_column_int64(row, 1), path: path, name: name,
+                kind: MessageAttachment.kind(mime: Self.optionalString(row, 3), uti: Self.optionalString(row, 4), name: name),
+                isSticker: sqlite3_column_int(row, 6) != 0
+            ))
+        }
+        guard let rows else {
+            if !Self.reportedAttachmentFailure {
+                Self.reportedAttachmentFailure = true
+                DebugLogger.shared.info("Attachments: the attachment table could not be read, previews stay as \"Attachment\"", source: "MessagesDatabase")
+            }
+            return [:]
+        }
+        var byMessage: [Int64: [MessageAttachment]] = [:]
+        for case let (messageID, attachment)? in rows { byMessage[messageID, default: []].append(attachment) }
+        // A Live Photo arrives as the picture plus a short video with the same name; Messages shows it as the one photo, so does this.
+        func baseName(_ attachment: MessageAttachment) -> String { (attachment.name as NSString).deletingPathExtension.lowercased() }
+        for (messageID, list) in byMessage {
+            let pictures = Set(list.filter { $0.kind == .image }.map(baseName))
+            if pictures.isEmpty { continue }
+            byMessage[messageID] = list.filter { !($0.kind == .video && pictures.contains(baseName($0))) }
+        }
+        return byMessage
+    }
+
+    nonisolated(unsafe) private static var reportedAttachmentFailure = false
 
     /// Messages from other people with a row id above `rowID`, oldest first.
     func incomingMessages(after rowID: Int64) -> [IncomingMessage] {
@@ -154,8 +227,12 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
         ORDER BY m.ROWID ASC
         LIMIT 50
         """
-        return self.query(sql, bind: { sqlite3_bind_int64($0, 1, rowID) }) { row in
-            IncomingMessage(
+        var onlyFiles: [Int64] = []
+        let found = self.query(sql, bind: { sqlite3_bind_int64($0, 1, rowID) }) { row -> IncomingMessage in
+            if sqlite3_column_int(row, 9) != 0, Self.messageText(text: Self.optionalString(row, 6), body: Self.blob(row, 7), hasAttachment: false).isEmpty {
+                onlyFiles.append(sqlite3_column_int64(row, 0))
+            }
+            return IncomingMessage(
                 rowID: sqlite3_column_int64(row, 0),
                 chatID: sqlite3_column_int64(row, 1),
                 chatGUID: Self.string(row, 2),
@@ -166,6 +243,14 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
                 date: Self.date(sqlite3_column_int64(row, 8))
             )
         } ?? []
+        guard !onlyFiles.isEmpty else { return found }
+        // A message that is only a file reads "Photo", "Video"... in the banner instead of the bare "Attachment".
+        let files = self.attachments(messageIDs: onlyFiles)
+        return found.map { message in
+            guard let attached = files[message.rowID] else { return message }
+            return IncomingMessage(rowID: message.rowID, chatID: message.chatID, chatGUID: message.chatGUID, groupName: message.groupName, isGroup: message.isGroup,
+                                   senderHandle: message.senderHandle, text: MessageAttachment.summary(attached), date: message.date)
+        }
     }
 
     /// Who sent each one-to-one message and when, ordered by chat then date. No text column is read: this feeds the

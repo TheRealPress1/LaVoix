@@ -7,6 +7,8 @@ struct MessagesWidgetView: View {
     @ObservedObject var store: MessagesStore
     /// Image previews can't draw scroll views or text fields; this swaps in static stand-ins.
     var staticLayout = false
+    /// A still preview can't hover, so it can ask for one file's enlarged view to be drawn.
+    var previewEnlargedFileID: Int64? = nil
     /// The conversation a dragged file is over.
     @State private var dropChatID: Int64?
 
@@ -64,7 +66,7 @@ struct MessagesWidgetView: View {
             }
             .frame(width: 232)
 
-            ThreadView(store: self.store, staticLayout: self.staticLayout)
+            ThreadView(store: self.store, staticLayout: self.staticLayout, previewEnlargedFileID: self.previewEnlargedFileID)
                 .frame(maxWidth: .infinity)
         }
         .foregroundStyle(.white)
@@ -293,10 +295,18 @@ private struct ConversationRow: View {
 private struct ThreadView: View {
     @ObservedObject var store: MessagesStore
     var staticLayout = false
+    var previewEnlargedFileID: Int64? = nil
     @State private var draft = ""
     @FocusState private var focused: Bool
     /// A dragged file is over the thread.
     @State private var dropTargeted = false
+    /// The file the pointer has rested on, shown large over the thread until the pointer leaves it.
+    @State private var enlarged: MessageAttachment?
+    @State private var hoverToken = 0
+
+    private var enlargedFile: MessageAttachment? {
+        self.enlarged ?? self.previewEnlargedFileID.flatMap { id in self.store.thread.lazy.flatMap(\.attachments).first { $0.id == id } }
+    }
 
     private var recipient: String? {
         self.store.conversations.first { $0.id == self.store.selectedChatID }.map { self.store.title(for: $0) }
@@ -314,7 +324,7 @@ private struct ThreadView: View {
             if self.staticLayout {
                 VStack(spacing: 5) {
                     ForEach(Array(self.store.thread.enumerated()), id: \.element.id) { index, message in
-                        Bubble(message: message, label: self.senderLabel(at: index))
+                        Bubble(message: message, label: self.senderLabel(at: index), staticLayout: true)
                     }
                     Spacer(minLength: 0)
                 }
@@ -323,7 +333,7 @@ private struct ThreadView: View {
                     ScrollView(.vertical, showsIndicators: false) {
                         VStack(spacing: 5) {
                             ForEach(Array(self.store.thread.enumerated()), id: \.element.id) { index, message in
-                                Bubble(message: message, label: self.senderLabel(at: index)).id(message.id)
+                                Bubble(message: message, label: self.senderLabel(at: index), onHoverFile: { file, inside in self.hover(file, inside) }).id(message.id)
                             }
                         }
                         .padding(.vertical, 2)
@@ -375,6 +385,13 @@ private struct ThreadView: View {
             }
         }
         .overlay {
+            // A picture, video or PDF the pointer rests on, large over the thread. It never takes the pointer itself, so the tile under it stays hovered.
+            if let file = self.enlargedFile {
+                EnlargedFile(file: file, staticLayout: self.staticLayout).allowsHitTesting(false).transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: self.enlargedFile?.id)
+        .overlay {
             if self.dropTargeted {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.8), style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
@@ -387,13 +404,26 @@ private struct ThreadView: View {
             let store = self.store
             NotchDropLoader.load(providers) { urls in store.stage(urls) }
         })
-        .onChange(of: self.store.selectedChatID) { _, _ in self.draft = "" }
+        .onChange(of: self.store.selectedChatID) { _, _ in self.draft = ""; self.enlarged = nil }
         // However the field got focus (a click on the native field, or the tap handler), make sure the notch has the
         // keyboard and stays open while you type.
         .onChange(of: self.focused) { _, isFocused in
             if isFocused { NotchHubController.shared.beginTextEntry() }
         }
         .onDisappear { NotchHubController.shared.endTextEntry() }
+    }
+
+    /// The pointer came onto or left a file's tile. It is enlarged once the pointer has rested there for a moment (not while passing over),
+    /// and put away the instant it leaves.
+    private func hover(_ file: MessageAttachment, _ inside: Bool) {
+        self.hoverToken += 1
+        let token = self.hoverToken
+        guard inside else { self.enlarged = nil; return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 220_000_000)
+            guard token == self.hoverToken else { return }
+            self.enlarged = file
+        }
     }
 
     private func send() {
@@ -420,7 +450,15 @@ private struct ThreadView: View {
 private struct Bubble: View {
     let message: ThreadMessage
     var label: String? = nil
+    /// Stills (previews, probes) draw the pictures at once instead of waiting for them.
+    var staticLayout = false
+    var onHoverFile: (MessageAttachment, Bool) -> Void = { _, _ in }
     @State private var pressing = false
+
+    /// The files are drawn only when message previews are on, like the words are.
+    private var showsFiles: Bool { NotchMessagesSettings.showsPreviews && !self.message.attachments.isEmpty }
+    /// A message that is only files has no bubble of words once the files themselves are shown.
+    private var showsText: Bool { !(self.showsFiles && self.message.textIsPlaceholder) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -431,7 +469,8 @@ private struct Bubble: View {
                     .padding(.leading, 10)
                     .padding(.top, 3)
             }
-            self.row
+            if self.showsFiles { self.files }
+            if self.showsText { self.row }
             if self.message.failed {
                 Text("Not delivered")
                     .font(.system(size: 10.5, weight: .medium))
@@ -441,6 +480,30 @@ private struct Bubble: View {
             }
         }
     }
+
+    /// The files, as small tiles in a row (four at most, then "+3"), on the same side as the words would be.
+    private var files: some View {
+        let shown = Array(self.message.attachments.prefix(Self.tilesPerRow))
+        let more = self.message.attachments.count - shown.count
+        return HStack {
+            if self.message.isFromMe { Spacer(minLength: 40) }
+            HStack(spacing: 4) {
+                ForEach(shown) { file in
+                    AttachmentTile(file: file, fromMe: self.message.isFromMe, staticLayout: self.staticLayout) { self.onHoverFile(file, $0) }
+                }
+                if more > 0 {
+                    Text("+\(more)")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: AttachmentTile.side, height: AttachmentTile.side)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.12)))
+                }
+            }
+            if !self.message.isFromMe { Spacer(minLength: 40) }
+        }
+    }
+
+    private static let tilesPerRow = 4
 
     private var row: some View {
         HStack {
@@ -465,6 +528,128 @@ private struct Bubble: View {
                     .fill(self.message.isFromMe ? Color.blue : Color.white.opacity(0.16)))
                 .fixedSize(horizontal: false, vertical: true)
             if !self.message.isFromMe { Spacer(minLength: 40) }
+        }
+    }
+}
+
+/// One attached file in the thread. A picture, video or PDF is a small square of the real thing (a play mark on a video); a voice message or any
+/// other file is a small label with its icon. The square is the same size before and after the picture is read, so the thread never jumps.
+private struct AttachmentTile: View {
+    let file: MessageAttachment
+    let fromMe: Bool
+    let staticLayout: Bool
+    let onHover: (Bool) -> Void
+    @State private var image: NSImage?
+
+    static let side: CGFloat = 64
+    static let pixels = MessageAttachmentImages.tilePixels
+
+    init(file: MessageAttachment, fromMe: Bool, staticLayout: Bool, onHover: @escaping (Bool) -> Void) {
+        self.file = file
+        self.fromMe = fromMe
+        self.staticLayout = staticLayout
+        self.onHover = onHover
+        _image = State(initialValue: staticLayout ? MessageAttachmentImages.load(file, maxPixel: Self.pixels) : MessageAttachmentImages.cached(file, maxPixel: Self.pixels))
+    }
+
+    private var hasPicture: Bool { self.file.kind == .image || self.file.kind == .video || self.file.kind == .pdf }
+
+    var body: some View {
+        Group {
+            if self.hasPicture { self.square } else { self.label }
+        }
+        .task(id: self.file.id) {
+            guard self.hasPicture, self.image == nil, !self.staticLayout else { return }
+            self.image = await MessageAttachmentImages.image(for: self.file, maxPixel: Self.pixels)
+        }
+    }
+
+    private var square: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12, style: .continuous).fill(self.file.kind == .pdf ? Color.white : Color.white.opacity(0.12))
+            if let image = self.image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: self.file.kind == .pdf ? .fit : .fill)
+                    .frame(width: Self.side, height: Self.side)
+                    .clipped()
+            } else {
+                // Not on this Mac (Messages keeps old files in iCloud) or still being read.
+                Image(systemName: self.file.kind == .video ? "video" : (self.file.kind == .pdf ? "doc.richtext" : "photo"))
+                    .font(.system(size: 20, weight: .light))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            if self.file.kind == .video {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 26, height: 26)
+                    .background(Circle().fill(Color.black.opacity(0.5)))
+            }
+        }
+        .frame(width: Self.side, height: Self.side)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.white.opacity(0.1), lineWidth: 0.5))
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onHover { self.onHover($0) }
+    }
+
+    private var label: some View {
+        HStack(spacing: 6) {
+            if self.file.kind == .audio {
+                Image(systemName: "waveform").font(.system(size: 13, weight: .medium))
+            } else {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: self.file.path)).resizable().frame(width: 18, height: 18)
+            }
+            Text(self.file.kind == .audio ? "Audio message" : self.file.name)
+                .font(.system(size: 12))
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(maxWidth: 200, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(self.fromMe ? Color.blue : Color.white.opacity(0.16)))
+        .fixedSize(horizontal: true, vertical: false)
+    }
+}
+
+/// A file shown large over the thread while the pointer rests on its tile: the whole picture (not the cropped square), the thread dimmed behind it.
+private struct EnlargedFile: View {
+    let file: MessageAttachment
+    let staticLayout: Bool
+    @State private var image: NSImage?
+
+    private static let pixels = MessageAttachmentImages.enlargedPixels
+
+    init(file: MessageAttachment, staticLayout: Bool) {
+        self.file = file
+        self.staticLayout = staticLayout
+        // The small picture the tile already made shows at once while the large one is read.
+        let start = staticLayout ? MessageAttachmentImages.load(file, maxPixel: Self.pixels) : (MessageAttachmentImages.cached(file, maxPixel: Self.pixels) ?? MessageAttachmentImages.cached(file, maxPixel: AttachmentTile.pixels))
+        _image = State(initialValue: start)
+    }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.black.opacity(0.62))
+            if let image = self.image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.white.opacity(0.15), lineWidth: 0.5))
+                    .padding(8)
+            }
+        }
+        // Never taller than the notch's own content area.
+        .frame(maxHeight: 190)
+        .task(id: self.file.id) {
+            guard !self.staticLayout else { return }
+            if let large = await MessageAttachmentImages.image(for: self.file, maxPixel: Self.pixels) { self.image = large }
         }
     }
 }
