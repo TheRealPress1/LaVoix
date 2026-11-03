@@ -22,7 +22,7 @@ struct NotchHubView: View {
         let baseSize: CGSize = open
             ? (self.model.tabsExpanded ? NotchGeometry.openSize : NotchGeometry.openSizeCollapsed)
             : (banner != nil
-                ? NotchGeometry.bannerSize(content: banner, expanded: self.model.bannerExpanded, notchHeight: self.model.closedSize.height)
+                ? NotchGeometry.bannerSize(content: banner, expanded: self.model.bannerExpanded, enlarged: self.model.bannerEnlarged, notchHeight: self.model.closedSize.height)
                 : self.model.closedSize)
         let size = open ? CGSize(width: baseSize.width, height: baseSize.height + self.model.extraHeight) : baseSize
         ZStack(alignment: .top) {
@@ -49,6 +49,7 @@ struct NotchHubView: View {
         .animation(.spring(response: 0.36, dampingFraction: 0.86), value: self.model.extraHeight)
         .animation(.spring(response: 0.42, dampingFraction: 0.82), value: self.model.banner?.id)
         .animation(.spring(response: 0.38, dampingFraction: 0.85), value: self.model.bannerExpanded)
+        .animation(.spring(response: 0.38, dampingFraction: 0.85), value: self.model.bannerEnlarged)
     }
 
     private var openContent: some View {

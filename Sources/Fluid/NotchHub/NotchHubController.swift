@@ -358,7 +358,9 @@ final class NotchHubController {
                 groupPhoto: message.isGroup ? store.groupFacts(chatID: message.chatID).photo : nil,
                 subtitle: message.isGroup ? name : nil,
                 text: NotchMessagesSettings.showsPreviews ? message.text : "New message",
-                date: message.date
+                date: message.date,
+                files: NotchMessagesSettings.showsPreviews ? message.attachments : [],
+                textIsPlaceholder: message.textIsPlaceholder
             ))
         }
         store.onConnectionAlert = { [weak self] title, text, symbol in
@@ -432,6 +434,11 @@ final class NotchHubController {
     /// A card about a connection that broke (from the engine socket's `notch.alert`, sent by myOS). Clicking it opens myOS.
     func showAlert(title: String, text: String, symbol: String, icon: String? = nil, actionLabel: String? = nil, actionID: String? = nil, action2Label: String? = nil, action2ID: String? = nil, lookStyle: Bool = false) {
         self.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: title, subtitle: nil, text: text, date: Date(), alertSymbol: symbol, alertIcon: icon, alertAction: .openMyOS, actionLabel: actionLabel, actionID: actionID, action2Label: action2Label, action2ID: action2ID, lookStyle: lookStyle))
+    }
+
+    /// A file on the card is being shown large (or no longer): the card grows or shrinks to match.
+    func setBannerEnlarged(_ enlarged: Bool) {
+        self.model.setBannerEnlarged(enlarged)
     }
 
     func dismissBanner() {
@@ -559,7 +566,7 @@ final class NotchHubController {
         if self.isEditingText, !(self.window?.isKeyWindow ?? false) { self.isEditingText = false; self.window?.allowsKey = false }
         let point = NSEvent.mouseLocation
         if self.model.banner != nil, !self.model.isOpen {
-            let inside = NotchGeometry.bannerRect(for: screen, content: self.model.banner, expanded: self.model.bannerExpanded).contains(point)
+            let inside = NotchGeometry.bannerRect(for: screen, content: self.model.banner, expanded: self.model.bannerExpanded, enlarged: self.model.bannerEnlarged).contains(point)
             if inside, !self.bannerHovered {
                 self.bannerHovered = true
                 self.bannerTask?.cancel()

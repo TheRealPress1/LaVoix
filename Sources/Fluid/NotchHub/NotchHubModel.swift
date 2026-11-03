@@ -36,10 +36,18 @@ final class NotchHubModel: ObservableObject {
 
     @Published private(set) var banner: NotchBannerContent?
     @Published private(set) var bannerExpanded = false
+    /// A file on the card is shown large: the card grows to make room.
+    @Published private(set) var bannerEnlarged = false
 
     func showBanner(_ content: NotchBannerContent) {
         self.bannerExpanded = false
+        self.bannerEnlarged = false
         self.banner = content
+    }
+
+    func setBannerEnlarged(_ enlarged: Bool) {
+        guard self.banner != nil, self.bannerEnlarged != enlarged else { return }
+        self.bannerEnlarged = enlarged
     }
 
     func setBannerExpanded(_ expanded: Bool) {
@@ -50,6 +58,7 @@ final class NotchHubModel: ObservableObject {
     func hideBanner() {
         self.banner = nil
         self.bannerExpanded = false
+        self.bannerEnlarged = false
     }
 
     /// Replaces the widgets outright. For self-tests that need a specific widget (e.g. Messages with sample data).

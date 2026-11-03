@@ -1,3 +1,4 @@
+import AVFoundation
 import Contacts
 import CryptoKit
 import SQLite3
@@ -73,12 +74,21 @@ enum NotchHubDebug {
                     : "Are we still on for dinner tonight? I booked the place on 5th for 7:30 🍝"
                 ContactResolver.shared.debugSetName("Krish Bhatia", for: "+15551230004")
                 ContactResolver.shared.debugSetName("Aryan Shah", for: "+15551230005")
+                // banner-files / banner-files-expanded / banner-files-enlarged: a message that is only a photo (invented), as a tile.
+                var files: [MessageAttachment] = []
+                if widgetName.hasPrefix("banner-files") {
+                    let photo = MessagesSampleFiles.makeBannerPhoto()
+                    files = [photo]
+                    if widgetName.hasSuffix("enlarged") { NotchBannerView.previewEnlarged = photo }
+                }
                 model.showBanner(NotchBannerContent(
                     chatID: 1, chatGUID: "g", title: long ? "Krish, Aryan +1" : "Maya Chen", avatarHandle: long ? nil : "+15551230001",
                     groupHandles: long ? ["+15551230004", "+15551230005", "+15551230006"] : [],
-                    subtitle: long ? "Krish Bhatia" : nil, text: text, date: Date()
+                    subtitle: long ? "Krish Bhatia" : nil, text: files.isEmpty ? text : "Photo", date: Date(),
+                    files: files, textIsPlaceholder: !files.isEmpty
                 ))
-                model.setBannerExpanded(widgetName.hasSuffix("expanded"))
+                model.setBannerExpanded(widgetName.hasSuffix("expanded") || widgetName.hasSuffix("enlarged"))
+                if widgetName.hasSuffix("enlarged") { model.setBannerEnlarged(true) }
             } else if widgetName.hasPrefix("nowplaying") {
                 let store = widgetName == "nowplaying-empty"
                     ? NowPlayingStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-np-empty-\(UUID().uuidString)"))
@@ -862,7 +872,8 @@ enum NotchHubDebug {
         INSERT INTO message VALUES (6, NULL, NULL, 600, 0, 1, 1, 0, 0, 1, 0);
         INSERT INTO message VALUES (7, NULL, NULL, 700, 0, 1, 1, 0, 0, 1, 0);
         INSERT INTO message VALUES (8, NULL, NULL, 800, 0, 1, 1, 0, 0, 1, 0);
-        INSERT INTO chat_message_join VALUES (1, 1, 100), (1, 2, 200), (1, 3, 300), (1, 4, 400), (1, 5, 500), (1, 6, 600), (1, 7, 700), (1, 8, 800);
+        INSERT INTO message VALUES (9, 'check this out', NULL, 50, 0, 1, 1, 0, 0, 1, 0);
+        INSERT INTO chat_message_join VALUES (1, 1, 100), (1, 2, 200), (1, 3, 300), (1, 4, 400), (1, 5, 500), (1, 6, 600), (1, 7, 700), (1, 8, 800), (1, 9, 50);
         INSERT INTO attachment VALUES (1, 'a1', '\(png.path)', 'image/png', 'public.png', 'wide.png', 0, 0);
         INSERT INTO attachment VALUES (2, 'a2', '\(pdf.path)', 'application/pdf', 'com.adobe.pdf', 'Lease.pdf', 0, 0);
         INSERT INTO attachment VALUES (3, 'a3', '/nowhere/payload.pluginPayloadAttachment', NULL, 'com.apple.messages.pluginpayload', 'payload', 0, 0);
@@ -872,7 +883,8 @@ enum NotchHubDebug {
         INSERT INTO attachment VALUES (7, 'a7', '/nowhere/IMG_0042.HEIC', 'image/heic', 'public.heic', 'IMG_0042.HEIC', 0, 0);
         INSERT INTO attachment VALUES (8, 'a8', '/nowhere/IMG_0042.MOV', 'video/quicktime', 'com.apple.quicktime-movie', 'IMG_0042.MOV', 0, 0);
         INSERT INTO attachment VALUES (9, 'a9', '/nowhere/holiday.mov', 'video/quicktime', 'com.apple.quicktime-movie', 'Holiday.MOV', 0, 0);
-        INSERT INTO message_attachment_join VALUES (2, 1), (2, 6), (3, 2), (4, 3), (5, 4), (6, 5), (7, 7), (7, 8), (8, 9), (8, 7);
+        INSERT INTO attachment VALUES (10, 'a10', '\(png.path)', 'image/png', 'public.png', 'with-words.png', 0, 0);
+        INSERT INTO message_attachment_join VALUES (2, 1), (2, 6), (3, 2), (4, 3), (5, 4), (6, 5), (7, 7), (7, 8), (8, 9), (8, 7), (9, 10);
         """
         let dbURL = dir.appendingPathComponent("chat.db")
         let create = Process()
@@ -882,7 +894,7 @@ enum NotchHubDebug {
         let database = MessagesDatabase(url: dbURL)
         let thread = database.messages(chatID: 1, limit: 12) ?? []
         func message(_ id: Int64) -> ThreadMessage? { thread.first { $0.id == id } }
-        check("the thread loads with the files beside their messages", thread.count == 8 && message(2)?.attachments.map(\.id) == [1, 6] && message(2)?.attachments.first?.kind == .image && message(3)?.attachments.first?.kind == .pdf)
+        check("the thread loads with the files beside their messages", thread.count == 9 && message(2)?.attachments.map(\.id) == [1, 6] && message(2)?.attachments.first?.kind == .image && message(3)?.attachments.first?.kind == .pdf)
         check("a message that is only files has a stand-in text, one with words keeps its words", message(2)?.textIsPlaceholder == true && message(2)?.text == "Attachment" && message(3)?.textIsPlaceholder == false && message(3)?.text == "and the lease")
         check("a message without files has none", message(1)?.attachments.isEmpty == true && message(1)?.textIsPlaceholder == false)
         check("link-preview data and hidden files are not shown as files", message(4)?.attachments.isEmpty == true && message(5)?.attachments.isEmpty == true)
@@ -891,7 +903,11 @@ enum NotchHubDebug {
         let list = database.conversations(limit: 12) ?? []
         // The newest message (6) is a missing .heic, still listed, so it is a photo.
         check("the list preview names the newest, file-only message (a video and a photo)", list.first?.lastText == "2 attachments")
+        check("the list carries the file, for the tiny picture beside the preview", list.first?.lastFile?.kind == .image && list.first?.lastFile?.name == "IMG_0042.HEIC")
         let incoming = database.incomingMessages(after: 1)
+        check("an incoming message with only a photo carries it, and the word is the stand-in", incoming.first { $0.rowID == 2 }?.attachments.map(\.id) == [1, 6] && incoming.first { $0.rowID == 2 }?.textIsPlaceholder == true)
+        check("an incoming message with words and a file keeps its words and carries the file", incoming.first { $0.rowID == 9 }?.text == "check this out" && incoming.first { $0.rowID == 9 }?.attachments.count == 1 && incoming.first { $0.rowID == 9 }?.textIsPlaceholder == false)
+        check("an incoming message with no files carries none", incoming.first { $0.rowID == 4 }?.attachments.isEmpty == true)
         check("a banner reads Photo, not Attachment", incoming.first { $0.rowID == 2 }?.text == "2 photos" && incoming.first { $0.rowID == 6 }?.text == "Photo")
         check("a Live Photo (the picture and a same-named video) is one photo, a video with another name stays", message(7)?.attachments.map(\.name) == ["IMG_0042.HEIC"] && message(8)?.attachments.map(\.kind) == [.image, .video])
         check("attachments(messageIDs: []) asks nothing", database.attachments(messageIDs: []).isEmpty)
@@ -904,7 +920,7 @@ enum NotchHubDebug {
         bare.arguments = [bareURL.path, bareSchema]
         try? bare.run(); bare.waitUntilExit()
         let bareThread = MessagesDatabase(url: bareURL).messages(chatID: 1, limit: 12)
-        check("without the attachment tables the messages still load, as \"Attachment\"", bareThread?.count == 8 && bareThread?.first { $0.id == 2 }?.text == "Attachment" && bareThread?.first { $0.id == 2 }?.attachments.isEmpty == true && bareThread?.first { $0.id == 2 }?.textIsPlaceholder == false)
+        check("without the attachment tables the messages still load, as \"Attachment\"", bareThread?.count == 9 && bareThread?.first { $0.id == 2 }?.text == "Attachment" && bareThread?.first { $0.id == 2 }?.attachments.isEmpty == true && bareThread?.first { $0.id == 2 }?.textIsPlaceholder == false)
         check("without them the list still loads, as \"Attachment\"", MessagesDatabase(url: bareURL).conversations(limit: 12)?.first?.lastText == "Attachment")
 
         // Pictures.
@@ -930,6 +946,63 @@ enum NotchHubDebug {
         let voiceMessage = await MessageAttachmentImages.image(for: MessageAttachment(id: 8, path: text.path, name: "a.caf", kind: .audio), maxPixel: 200)
         check("a text file or a voice message gives no picture (they show as a label)", plainFile == nil && voiceMessage == nil)
         check("a damaged picture gives no picture", await MessageAttachmentImages.image(for: MessageAttachment(id: 9, path: text.path, name: "broken.png", kind: .image), maxPixel: 200) == nil)
+
+        // The notification card: a message that is only a photo shows the tile instead of the word, and grows to make room for the enlarged picture.
+        let photoTile = MessageAttachment(id: 1, path: png.path, name: "wide.png", kind: .image)
+        let plainCard = NotchBannerContent(chatID: 1, chatGUID: "g", title: "t", subtitle: nil, text: "Photo", date: Date())
+        let tileCard = NotchBannerContent(chatID: 1, chatGUID: "g", title: "t", subtitle: nil, text: "Photo", date: Date(), files: [photoTile], textIsPlaceholder: true)
+        let wordsPlain = NotchBannerContent(chatID: 1, chatGUID: "g", title: "t", subtitle: nil, text: "look at this", date: Date())
+        let wordsTile = NotchBannerContent(chatID: 1, chatGUID: "g", title: "t", subtitle: nil, text: "look at this", date: Date(), files: [photoTile], textIsPlaceholder: false)
+        let rowOfTiles: CGFloat = 12 + AttachmentTile.side
+        check("a card with only a photo draws the tile instead of the stand-in word", tileCard.showsText == false && abs(tileCard.contentHeight(expanded: false) - (8 + 40 + rowOfTiles + 18)) < 0.01)
+        check("a card with words and a photo draws both", wordsTile.showsText && abs(wordsTile.contentHeight(expanded: false) - (wordsPlain.contentHeight(expanded: false) + rowOfTiles)) < 0.01)
+        check("a card grows to fit an enlarged file, and one with no file does not", tileCard.contentHeight(expanded: true, enlarged: true) >= NotchBannerContent.enlargedHeight && plainCard.contentHeight(expanded: true, enlarged: true) == plainCard.contentHeight(expanded: true))
+        check("the card's hover area grows with it", NotchGeometry.bannerSize(content: tileCard, expanded: true, enlarged: true, notchHeight: 32).height > NotchGeometry.bannerSize(content: tileCard, expanded: true, notchHeight: 32).height)
+        let cardModel = NotchHubModel()
+        cardModel.showBanner(tileCard)
+        cardModel.setBannerEnlarged(true)
+        check("the model remembers the card is enlarged, and forgets with a new card", cardModel.bannerEnlarged == true)
+        cardModel.showBanner(tileCard)
+        check("a new card starts at its normal size", cardModel.bannerEnlarged == false)
+
+        // Resting on a tile enlarges it after a moment; passing over does not; leaving puts it away.
+        let hover = AttachmentHoverModel()
+        var hoverChanges: [Bool] = []
+        hover.onChange = { hoverChanges.append($0) }
+        hover.hover(photoTile, true)
+        hover.hover(photoTile, false)
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        check("passing over a tile does not enlarge it", hover.enlarged == nil && hoverChanges.isEmpty)
+        hover.hover(photoTile, true)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        check("not yet, while the pointer has only just arrived", hover.enlarged == nil)
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        check("resting on a tile enlarges it, and says so once", hover.enlarged == photoTile && hoverChanges == [true])
+        hover.hover(photoTile, false)
+        check("leaving puts it away at once", hover.enlarged == nil && hoverChanges == [true, false])
+
+        // Pressing a tile opens the file from a copy (the opening app needs no access to Messages), which is cleared out after a day.
+        let opened = AttachmentOpener.openableCopy(of: photoTile)
+        check("an openable copy has the file's own name and contents", opened?.lastPathComponent == "wide.png" && opened.flatMap { try? Data(contentsOf: $0) } == (try? Data(contentsOf: png)))
+        check("a file that is not on this Mac has no copy", AttachmentOpener.openableCopy(of: MessageAttachment(id: 2, path: "/nowhere/gone.heic", name: "gone.heic", kind: .image)) == nil)
+        if let opened {
+            let copyFolder = opened.deletingLastPathComponent()
+            let fresh = AttachmentOpener.openableCopy(of: photoTile)
+            try? FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-2 * 86_400)], ofItemAtPath: copyFolder.path)
+            AttachmentOpener.prune(olderThan: 86_400)
+            check("copies older than a day are cleared out, newer ones kept", !FileManager.default.fileExists(atPath: copyFolder.path) && fresh.map { FileManager.default.fileExists(atPath: $0.path) } == true)
+            if let fresh { try? FileManager.default.removeItem(at: fresh.deletingLastPathComponent()) }
+        }
+
+        // A video enlarged plays quietly, from the start, over and over, and lets go of the file when stopped.
+        if videoWritten {
+            let looping = LoopingMutedPlayer(url: clip)
+            looping.play()
+            try? await Task.sleep(nanoseconds: 2_800_000_000)
+            check("a video plays muted and starts over when it ends (the clip is one second long)", looping.player.isMuted && looping.loops >= 1 && looping.player.timeControlStatus == .playing)
+            looping.stop()
+            check("stopping it lets go of the file", looping.player.currentItem == nil && looping.player.timeControlStatus == .paused)
+        }
 
         // A file being sent from the notch shows as itself at once, and the preview names it.
         let store = MessagesStore.sample()

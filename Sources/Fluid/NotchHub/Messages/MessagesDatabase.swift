@@ -99,7 +99,7 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
         let files = self.attachments(messageIDs: Array(onlyFiles.keys))
         for (messageID, chatID) in onlyFiles {
             guard let attached = files[messageID], let index = list.firstIndex(where: { $0.id == Int64(chatID) }) else { continue }
-            list[index] = list[index].withLastText(MessageAttachment.summary(attached))
+            list[index] = list[index].withLastText(MessageAttachment.summary(attached), file: attached.first)
         }
         return list
     }
@@ -227,10 +227,11 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
         ORDER BY m.ROWID ASC
         LIMIT 50
         """
-        var onlyFiles: [Int64] = []
+        // Messages with files: their words (if any) stay as they are, a message that is only files reads "Photo", "Video"... instead of the bare "Attachment".
+        var withFiles: [Int64: Bool] = [:]
         let found = self.query(sql, bind: { sqlite3_bind_int64($0, 1, rowID) }) { row -> IncomingMessage in
-            if sqlite3_column_int(row, 9) != 0, Self.messageText(text: Self.optionalString(row, 6), body: Self.blob(row, 7), hasAttachment: false).isEmpty {
-                onlyFiles.append(sqlite3_column_int64(row, 0))
+            if sqlite3_column_int(row, 9) != 0 {
+                withFiles[sqlite3_column_int64(row, 0)] = Self.messageText(text: Self.optionalString(row, 6), body: Self.blob(row, 7), hasAttachment: false).isEmpty
             }
             return IncomingMessage(
                 rowID: sqlite3_column_int64(row, 0),
@@ -243,13 +244,17 @@ nonisolated final class MessagesDatabase: @unchecked Sendable {
                 date: Self.date(sqlite3_column_int64(row, 8))
             )
         } ?? []
-        guard !onlyFiles.isEmpty else { return found }
-        // A message that is only a file reads "Photo", "Video"... in the banner instead of the bare "Attachment".
-        let files = self.attachments(messageIDs: onlyFiles)
+        guard !withFiles.isEmpty else { return found }
+        let files = self.attachments(messageIDs: Array(withFiles.keys))
         return found.map { message in
             guard let attached = files[message.rowID] else { return message }
-            return IncomingMessage(rowID: message.rowID, chatID: message.chatID, chatGUID: message.chatGUID, groupName: message.groupName, isGroup: message.isGroup,
-                                   senderHandle: message.senderHandle, text: MessageAttachment.summary(attached), date: message.date)
+            var message = message
+            message.attachments = attached
+            if withFiles[message.rowID] == true {
+                message.text = MessageAttachment.summary(attached)
+                message.textIsPlaceholder = true
+            }
+            return message
         }
     }
 

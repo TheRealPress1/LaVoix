@@ -95,6 +95,14 @@ nonisolated enum MessagesSampleFiles {
         return writer.status == .completed
     }
 
+    /// One invented landscape photo on disk, for the notification card previews.
+    @MainActor
+    static func makeBannerPhoto() -> MessageAttachment {
+        let url = self.makeDirectory().appendingPathComponent("beach.png")
+        self.writeImage(self.scene(width: 1200, height: 800, warm: true), to: url, type: .png)
+        return MessageAttachment(id: 950, path: url.path, name: url.lastPathComponent, kind: .image)
+    }
+
     /// A small thread of invented files in the sample store's first chat, for the preview stills. Returns the id of the landscape photo (for the
     /// enlarged view). The video is read up front here because a still preview can't wait for it.
     @MainActor
@@ -132,7 +140,8 @@ nonisolated enum MessagesSampleFiles {
             ? [message(910, "", mine: false, [voice]), message(911, "", mine: false, [archive]), message(912, "", mine: true, [lease]), message(913, "", mine: false, [missing])]
             : [message(910, "look at this", mine: false), message(911, "", mine: false, [beach, tall]), message(912, "", mine: true, [clip, lease, tall])]
         let list = store.conversations.map { conversation -> MessageConversation in
-            conversation.id == 1 ? conversation.withLastText(MessageAttachment.summary(chips ? [missing] : [clip, lease, tall])) : conversation
+            guard conversation.id == 1 else { return conversation }
+            return chips ? conversation.withLastText(MessageAttachment.summary([missing]), file: missing) : conversation.withLastText(MessageAttachment.summary([beach]), file: beach)
         }
         store.apply(conversations: list, threads: [1: thread], incoming: [], announce: false)
         store.select(1)

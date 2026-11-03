@@ -8,24 +8,27 @@ struct MessageConversation: Identifiable, Equatable {
     var title: String
     let handles: [String]
     let isGroup: Bool
-    let lastText: String
+    var lastText: String
     let lastDate: Date
     let lastIsFromMe: Bool
-    let unreadCount: Int
+    var unreadCount: Int
     /// True when the group has been given a name; unnamed groups are shown by who is in them.
     var hasGroupName = false
+    /// When the newest message is only a file: that file, so the list can show a tiny picture of it beside "Photo".
+    var lastFile: MessageAttachment? = nil
 
     /// The same conversation with a different preview line (a message that is only a file reads "Photo", not "Attachment").
-    func withLastText(_ text: String) -> MessageConversation {
-        var copy = MessageConversation(id: id, guid: guid, title: title, handles: handles, isGroup: isGroup, lastText: text, lastDate: lastDate, lastIsFromMe: lastIsFromMe, unreadCount: unreadCount)
-        copy.hasGroupName = hasGroupName
+    func withLastText(_ text: String, file: MessageAttachment? = nil) -> MessageConversation {
+        var copy = self
+        copy.lastText = text
+        copy.lastFile = file
         return copy
     }
 
     /// The same conversation with a different unread count (the notch clears its own unread dot once you have looked at a chat).
     func withUnread(_ count: Int) -> MessageConversation {
-        var copy = MessageConversation(id: id, guid: guid, title: title, handles: handles, isGroup: isGroup, lastText: lastText, lastDate: lastDate, lastIsFromMe: lastIsFromMe, unreadCount: count)
-        copy.hasGroupName = hasGroupName
+        var copy = self
+        copy.unreadCount = count
         return copy
     }
 }
@@ -119,6 +122,9 @@ struct IncomingMessage: Equatable {
     let groupName: String
     let isGroup: Bool
     let senderHandle: String
-    let text: String
+    var text: String
     let date: Date
+    /// The files that came with it, and whether `text` is only the stand-in for them ("Photo", "2 videos"...) rather than words.
+    var attachments: [MessageAttachment] = []
+    var textIsPlaceholder = false
 }

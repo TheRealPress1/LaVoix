@@ -34,6 +34,15 @@ struct NotchBannerContent: Equatable, Identifiable {
     var lookStyle = false
     /// Set for a WhatsApp message: the number it came from. Replies go out through WhatsApp, and pressing the card opens that chat in the WhatsApp tab.
     var whatsAppPhone: String? = nil
+    /// The files that came with the message: shown as small tiles under the name (enlarged when the pointer rests on one).
+    var files: [MessageAttachment] = []
+    /// `text` is only the stand-in for the files ("Photo"), so the tiles are shown instead of it.
+    var textIsPlaceholder = false
+
+    /// Whether the words are drawn (not when they are only the stand-in for tiles that are).
+    var showsText: Bool { self.files.isEmpty || !self.textIsPlaceholder }
+    /// The card's height while a file is enlarged: room for the picture, and a video's motion.
+    static let enlargedHeight: CGFloat = 214
 
     /// Width left for the message text inside the card: card width minus side padding, avatar and spacing.
     static let textWidth: CGFloat = NotchGeometry.bannerWidth - 44 - 40 - 12
@@ -56,11 +65,16 @@ struct NotchBannerContent: Equatable, Identifiable {
     /// Height of the message text block.
     var textHeight: CGFloat { CGFloat(self.visibleLines) * Self.lineHeight + 2 }
 
-    /// Everything in the card that sits under the notch band, with the reply row only when expanded.
-    func contentHeight(expanded: Bool) -> CGFloat {
+    /// Everything in the card that sits under the notch band, with the reply row only when expanded, and room for the enlarged file while one is.
+    func contentHeight(expanded: Bool, enlarged: Bool = false) -> CGFloat {
         if self.lookStyle { return NotchLookCardView.contentHeight(text: self.text, hasButtons: self.actionLabel != nil, cardWidth: NotchGeometry.bannerWidth) }
-        let header: CGFloat = 8 + 19 + (self.subtitle == nil ? 0 : 16) + 2
-        return header + self.textHeight + 18 + (expanded && self.alertSymbol == nil ? 12 + 34 : 0) + (self.actionLabel != nil ? 12 + 30 : 0)
+        // With no words under the name, the row is as tall as the avatar (40) rather than the name, so the tile does not sit on the card's edge.
+        let top: CGFloat = self.showsText
+            ? 8 + 19 + (self.subtitle == nil ? 0 : 16) + 2 + self.textHeight
+            : 8 + max(40, 19 + (self.subtitle == nil ? 0 : 18))
+        let tiles: CGFloat = self.files.isEmpty ? 0 : 12 + AttachmentTile.side
+        let base = top + tiles + 18 + (expanded && self.alertSymbol == nil ? 12 + 34 : 0) + (self.actionLabel != nil ? 12 + 30 : 0)
+        return enlarged && !self.files.isEmpty ? max(base, Self.enlargedHeight) : base
     }
 }
 
@@ -70,7 +84,10 @@ struct NotchBannerView: View {
     let expanded: Bool
     /// Image previews can't draw text fields; this swaps in a static stand-in.
     var staticLayout = false
+    /// A still preview can't hover, so it can ask for a file's enlarged view to be drawn.
+    static var previewEnlarged: MessageAttachment?
 
+    @StateObject private var hovering = AttachmentHoverModel()
     @State private var draft = ""
     @State private var sent = false
     @FocusState private var focused: Bool
@@ -78,8 +95,33 @@ struct NotchBannerView: View {
     private var blue: Color { self.content.whatsAppPhone == nil ? Color(red: 0.04, green: 0.52, blue: 1.0) : Color(red: 0.145, green: 0.827, blue: 0.4) }
     private var serviceName: String { self.content.whatsAppPhone == nil ? "iMessage" : "WhatsApp" }
 
+    private var enlargedFile: MessageAttachment? { self.hovering.enlarged ?? Self.previewEnlarged }
+
     var body: some View {
-        if self.content.lookStyle { self.lookBody } else { self.standardBody }
+        if self.content.lookStyle {
+            self.lookBody
+        } else {
+            self.standardBody
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .overlay {
+                    // The file the pointer rests on, large over the card. It never takes the pointer, so its tile stays hovered.
+                    if let file = self.enlargedFile {
+                        EnlargedFile(file: file, staticLayout: self.staticLayout)
+                            .padding(.horizontal, 12)
+                            .padding(.top, 6)
+                            .padding(.bottom, 16)
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.easeOut(duration: 0.12), value: self.enlargedFile?.id)
+                .onAppear {
+                    self.hovering.onChange = { on in NotchHubController.shared.setBannerEnlarged(on) }
+                }
+                .onDisappear {
+                    self.hovering.clear()
+                }
+        }
     }
 
     private var lookBody: some View {
@@ -135,20 +177,34 @@ struct NotchBannerView: View {
                             .font(.system(size: 11.5, weight: .medium))
                             .foregroundStyle(.white.opacity(0.5))
                     }
-                    Text(NotchLinkText.attributed(self.content.text))
-                        .environment(\.openURL, OpenURLAction { url in
-                            NSWorkspace.shared.open(url)
-                            NotchHubController.shared.dismissBanner()
-                            return .handled
-                        })
-                        .font(.system(size: 13.5))
-                        .foregroundStyle(.white.opacity(0.9))
-                        .lineLimit(self.content.visibleLines)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if self.content.showsText {
+                        Text(NotchLinkText.attributed(self.content.text))
+                            .environment(\.openURL, OpenURLAction { url in
+                                NSWorkspace.shared.open(url)
+                                NotchHubController.shared.dismissBanner()
+                                return .handled
+                            })
+                            .font(.system(size: 13.5))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .lineLimit(self.content.visibleLines)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             .contentShape(Rectangle())
             .onTapGesture { NotchHubController.shared.openConversationFromBanner() }
+
+            // The files that came with the message, under the name and words, past the avatar. Pressing one opens it (the card then goes away).
+            if !self.content.files.isEmpty {
+                HStack {
+                    AttachmentTiles(files: self.content.files, fromMe: false, staticLayout: self.staticLayout, onHover: { self.hovering.hover($0, $1) }, onOpen: { file in
+                        AttachmentOpener.open(file)
+                        NotchHubController.shared.dismissBanner()
+                    })
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, 52)
+            }
 
             if let label = self.content.actionLabel, let id = self.content.actionID {
                 HStack(spacing: 8) {

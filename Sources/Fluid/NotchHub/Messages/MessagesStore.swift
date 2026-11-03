@@ -734,7 +734,7 @@ final class MessagesStore: ObservableObject {
             result.insert(MessageConversation(
                 id: old.id, guid: old.guid, title: old.title, handles: old.handles, isGroup: old.isGroup,
                 lastText: item.files.isEmpty ? item.text : MessageAttachment.summary(item.files), lastDate: item.date, lastIsFromMe: true, unreadCount: 0,
-                hasGroupName: old.hasGroupName
+                hasGroupName: old.hasGroupName, lastFile: item.files.first
             ), at: 0)
         }
         return result
