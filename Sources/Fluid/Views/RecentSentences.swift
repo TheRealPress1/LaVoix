@@ -48,6 +48,25 @@ nonisolated enum RecentSentences {
     }
 }
 
+/// How wide the compact notch's two sides are, so the app icon and the waveform sit at the far left and far right of the notch while its text block is
+/// showing, in line with the text, instead of huddled against the hardware notch.
+nonisolated enum NotchCompactLayout {
+    /// The text block under the notch: 300 points of text and 12 points of padding on each side.
+    static let textBlockWidth: CGFloat = 324
+    /// What DynamicNotchKit adds beside each side's content.
+    static let libraryInset: CGFloat = 8
+    /// The side's width when there is no text (just the icon, or the waveform).
+    static let normalSide: CGFloat = 34
+    /// The text starts 12 points in; the library already puts 8 points beside the icon, so it needs 4 more to line up.
+    static let alignmentPadding: CGFloat = 4
+
+    /// The width our side content needs so that the two sides and the hardware notch between them are as wide as the text block.
+    static func sideWidth(notchWidth: CGFloat, hasText: Bool) -> CGFloat {
+        guard hasText else { return self.normalSide }
+        return max(self.normalSide, (self.textBlockWidth - notchWidth) / 2 - self.libraryInset)
+    }
+}
+
 /// The two newest sentences as the notch shows them: 11.5 point text across a fixed 300 points, the older sentence at half brightness.
 struct RecentSentencesView: View {
     let text: String

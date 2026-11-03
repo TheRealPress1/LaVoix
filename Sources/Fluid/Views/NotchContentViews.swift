@@ -130,6 +130,20 @@ class NotchContentState: ObservableObject {
     /// Cached transcription preview text to avoid recomputing on every render
     @Published private(set) var cachedPreviewText: String = ""
 
+    /// The width of the hardware notch the compact overlay is on, so its two sides can be made as wide as the text under it.
+    @Published var compactNotchWidth: CGFloat = 190
+
+    private static let transientStatusTexts: Set<String> = ["Transcribing", "Refining", "Thinking", "Working", "Transcribing...", "Refining...", "Thinking...", "Working..."]
+
+    /// What the compact notch shows under itself while dictating (nothing for a status word like "Transcribing").
+    var compactPreviewText: String {
+        let source = self.isProcessing ? self.transcriptionText : self.cachedPreviewText
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Self.transientStatusTexts.contains(trimmed) ? "" : trimmed
+    }
+
+    var compactPreviewVisible: Bool { SettingsStore.shared.enableStreamingPreview && !self.compactPreviewText.isEmpty }
+
     // MARK: - Expanded Command Output State
 
     @Published var isExpandedForCommandOutput: Bool = false
@@ -1310,7 +1324,9 @@ struct NotchCompactLeadingView: View {
     @ObservedObject private var activeAppMonitor = ActiveAppMonitor.shared
 
     var body: some View {
-        Group {
+        let hasText = self.contentState.compactPreviewVisible
+        let side = NotchCompactLayout.sideWidth(notchWidth: self.contentState.compactNotchWidth, hasText: hasText)
+        return Group {
             if let appIcon = self.contentState.targetAppIcon ?? self.activeAppMonitor.activeAppIcon {
                 Image(nsImage: appIcon)
                     .resizable()
@@ -1323,7 +1339,10 @@ struct NotchCompactLeadingView: View {
                     .frame(width: 8, height: 8)
             }
         }
-        .frame(width: 34, height: 16)
+        // While text shows under the notch the icon sits at the far left, in line with the text; otherwise it stays beside the notch.
+        .padding(.leading, hasText ? NotchCompactLayout.alignmentPadding : 0)
+        .frame(width: side, height: 16, alignment: hasText ? .leading : .center)
+        .animation(.easeOut(duration: 0.18), value: hasText)
     }
 }
 
@@ -1356,44 +1375,24 @@ struct NotchCompactTrailingView: View {
                 .id(self.contentState.spokenSendCountdownID)
             }
         }
-        .frame(width: 34, height: 16)
+        .padding(.trailing, self.contentState.compactPreviewVisible ? NotchCompactLayout.alignmentPadding : 0)
+        .frame(width: NotchCompactLayout.sideWidth(notchWidth: self.contentState.compactNotchWidth, hasText: self.contentState.compactPreviewVisible), height: 16, alignment: self.contentState.compactPreviewVisible ? .trailing : .center)
         .animation(.easeOut(duration: 0.14), value: self.contentState.spokenSendIndicatorState)
+        .animation(.easeOut(duration: 0.18), value: self.contentState.compactPreviewVisible)
     }
 }
 
 struct NotchCompactBottomView: View {
     @ObservedObject private var contentState = NotchContentState.shared
 
-    private static let transientOverlayStatusTexts: Set<String> = [
-        "Transcribing",
-        "Refining",
-        "Thinking",
-        "Working",
-        "Transcribing...",
-        "Refining...",
-        "Thinking...",
-        "Working...",
-    ]
-
-    private var compactPreviewText: String {
-        let source = self.contentState.isProcessing
-            ? self.contentState.transcriptionText
-            : self.contentState.cachedPreviewText
-        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !Self.transientOverlayStatusTexts.contains(trimmed) else { return "" }
-        return trimmed
-    }
-
-    private var shouldShowPreview: Bool {
-        SettingsStore.shared.enableStreamingPreview && !self.compactPreviewText.isEmpty
-    }
+    private var shouldShowPreview: Bool { self.contentState.compactPreviewVisible }
 
     var body: some View {
         // Under the notch, only while there is something to show: the two newest sentences, as many lines as they need (up to three). The notch
         // follows this view's height, so it grows by just that and goes back when the text does.
         Group {
             if self.shouldShowPreview {
-                RecentSentencesView(text: self.compactPreviewText)
+                RecentSentencesView(text: self.contentState.compactPreviewText)
                     .padding(.horizontal, 12)
                     .padding(.top, 2)
                     .padding(.bottom, 10)

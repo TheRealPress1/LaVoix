@@ -215,6 +215,7 @@ final class NotchOverlayManager {
         let startedAt = ProcessInfo.processInfo.systemUptime
         let targetScreen = screen ?? self.preferredPresentationScreen()
         self.presentationPolicyScreen = targetScreen
+        NotchContentState.shared.compactNotchWidth = NotchGeometry.closedSize(for: targetScreen).width
         self.refreshNotchPresentationPolicy(for: targetScreen)
         self.currentAudioPublisher = audioLevelPublisher
         // Hide bottom overlay if it was visible
