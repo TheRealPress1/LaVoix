@@ -323,10 +323,24 @@ final class NowPlayingStore: ObservableObject {
             return
         }
         let key = "\(p.bundleIdentifier ?? "")|\(title)"
-        var art = self.artworkCache?.key == key ? self.artworkCache?.image : nil
-        if art == nil, let fresh = p.artwork {
-            art = fresh
-            self.artworkCache = (key, fresh)
+        // The picture a page reports can lag its title by a video: the title changes first and the old picture is still attached. A picture that
+        // is the last track's, arriving under a new title from a player that does not share pictures across tracks, is not shown (YouTube's own
+        // thumbnail, or the page's real picture when it arrives, takes its place); a different picture is always taken, and a picture that is the
+        // same as the one held (possibly a better copy of it) leaves the one held in place.
+        let cached = self.artworkCache?.key == key ? self.artworkCache?.image : nil
+        var art: NSImage?
+        if let fresh = p.artwork, !NowPlayingArtwork.isGeneric(fresh) {
+            if let cached, NowPlayingArtwork.looksSame(cached, fresh) {
+                art = cached
+            } else if cached == nil, let last = self.artworkCache?.image, !NowPlayingArtwork.sharesPictureAcrossTracks(bundleID: p.bundleIdentifier),
+                      NowPlayingArtwork.looksSame(last, fresh) {
+                art = nil
+            } else {
+                art = fresh
+                self.artworkCache = (key, fresh)
+            }
+        } else {
+            art = cached
         }
         if let current = p.currentElapsedTime { self.elapsed = max(0, current) }
         self.reported = Track(
@@ -433,7 +447,12 @@ final class NowPlayingStore: ObservableObject {
         }
         if var current = self.track, current.key == key {
             if let views = info.viewCount { current.viewCount = views }
-            if current.artwork == nil, let thumbnail = info.thumbnail { current.artwork = thumbnail }
+            if let thumbnail = info.thumbnail, NowPlayingArtwork.thumbnailImproves(current: current.artwork, thumbnail: thumbnail) {
+                current.artwork = thumbnail
+                #if arch(arm64)
+                self.artworkCache = (key, thumbnail)
+                #endif
+            }
             if current != self.track { self.track = current }
         }
         // Fill in the history entry too, if this was already logged.

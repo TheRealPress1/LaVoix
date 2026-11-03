@@ -143,7 +143,7 @@ struct NowPlayingWidgetView: View {
     private func coverArt(_ track: NowPlayingStore.Track, art: NSImage?) -> some View {
         Group {
             if let art {
-                Image(nsImage: art).resizable().aspectRatio(contentMode: .fill)
+                Image(nsImage: art).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
             } else {
                 // No artwork at all: show where it's from, not an empty box.
                 ZStack {

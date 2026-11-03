@@ -24,6 +24,30 @@ enum NowPlayingArtwork {
         return bits
     }
 
+    /// True when two pictures are the same image (allowing for a few bits of difference from scaling or compression).
+    static func looksSame(_ a: NSImage, _ b: NSImage) -> Bool {
+        guard let x = self.fingerprint(a), let y = self.fingerprint(b) else { return false }
+        return (x ^ y).nonzeroBitCount <= 6
+    }
+
+    /// Players whose tracks share a picture (an album's cover): there, the same picture again is normal, not a sign it is out of date.
+    static func sharesPictureAcrossTracks(bundleID: String?) -> Bool {
+        ["com.apple.Music", "com.spotify.client", "com.apple.podcasts", "com.apple.TV"].contains(bundleID ?? "")
+    }
+
+    /// How many pixels wide a picture really is (not its size in points).
+    static func pixelWidth(_ image: NSImage) -> CGFloat {
+        let wide = image.representations.map { CGFloat($0.pixelsWide) }.max() ?? 0
+        return wide > 0 ? wide : image.size.width
+    }
+
+    /// Whether YouTube's thumbnail should replace what the player gave: the player gave none, or one clearly smaller (a page's small preview, which
+    /// looks blurred when it fills the card).
+    static func thumbnailImproves(current: NSImage?, thumbnail: NSImage) -> Bool {
+        guard let current else { return true }
+        return self.pixelWidth(thumbnail) >= 1.5 * self.pixelWidth(current) && self.pixelWidth(current) < 640
+    }
+
     /// True for the browser's own placeholder icon (allowing for a few bits of difference from scaling).
     static func isGeneric(_ image: NSImage) -> Bool {
         guard let print = self.fingerprint(image) else { return false }

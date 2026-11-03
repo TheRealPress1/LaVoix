@@ -2183,6 +2183,14 @@ nonisolated enum EngineSocketAutotest {
                 check("a group's own picture is found from the chat's properties", withPhoto.flatMap(MessagesDatabase.groupPhotoGUID(in:)) == "ABC-123")
                 check("a group without a picture, or with unreadable properties, has none", without.flatMap(MessagesDatabase.groupPhotoGUID(in:)) == nil && MessagesDatabase.groupPhotoGUID(in: Data([1, 2, 3])) == nil)
             }
+            // Now Playing artwork: a stale picture is told from a new one, and a small one from a better one
+            do {
+                func solid(_ color: NSColor, _ side: CGFloat) -> NSImage { NSImage(size: NSSize(width: side, height: side), flipped: false) { r in color.setFill(); r.fill(); return true } }
+                func halves(_ side: CGFloat) -> NSImage { NSImage(size: NSSize(width: side, height: side), flipped: false) { r in NSColor.white.setFill(); r.fill(); NSColor.black.setFill(); NSRect(x: 0, y: 0, width: r.width / 2, height: r.height).fill(); return true } }
+                check("the same picture at another size is the same picture, and a different one is not", NowPlayingArtwork.looksSame(halves(100), halves(400)) && !NowPlayingArtwork.looksSame(halves(100), solid(.white, 100)))
+                check("only players that do not share pictures across tracks have a repeated picture treated as out of date", !NowPlayingArtwork.sharesPictureAcrossTracks(bundleID: "company.thebrowser.dia") && NowPlayingArtwork.sharesPictureAcrossTracks(bundleID: "com.spotify.client") && NowPlayingArtwork.sharesPictureAcrossTracks(bundleID: "com.apple.Music"))
+                check("a YouTube thumbnail replaces a missing or much smaller picture and never a good one", NowPlayingArtwork.thumbnailImproves(current: nil, thumbnail: solid(.red, 640)) && NowPlayingArtwork.thumbnailImproves(current: solid(.red, 120), thumbnail: solid(.red, 1280)) && !NowPlayingArtwork.thumbnailImproves(current: solid(.red, 700), thumbnail: solid(.red, 1280)) && !NowPlayingArtwork.thumbnailImproves(current: solid(.red, 300), thumbnail: solid(.red, 320)))
+            }
             // where the compact notch's icon and waveform sit while text shows under it
             do {
                 check("with text under a 190 point notch each side is 59 points wide, so the row is as wide as the text block", NotchCompactLayout.sideWidth(notchWidth: 190, wide: true) == 59 && 2 * (59 + NotchCompactLayout.libraryInset) + 190 == NotchCompactLayout.textBlockWidth)
