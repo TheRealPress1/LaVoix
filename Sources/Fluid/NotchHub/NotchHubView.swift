@@ -57,6 +57,8 @@ struct NotchHubView: View {
         return VStack(spacing: 0) {
             self.header
                 .frame(height: max(self.model.closedSize.height, 28))
+                // Above the tab content below it, so a list that drops from the title band is drawn over that content.
+                .zIndex(1)
             // Widgets stay mounted once shown (and the rest are warmed up just after opening), so switching tabs is a
             // quick crossfade instead of rebuilding a view and restarting its data source every time.
             // The area is always exactly the room left over (a clear box that content is drawn over), so a tab that wants more height than
@@ -132,9 +134,12 @@ struct NotchHubView: View {
             .buttonStyle(.plain)
             .help(self.model.tabsExpanded ? "Hide the tabs" : "Show the tabs")
             Spacer(minLength: 0)
+            if !self.model.dropSplit, let accessory = self.model.selectedWidget?.headerAccessory {
+                accessory()
+            }
         }
-        .padding(.leading, 38)
-        .padding(.trailing, 38)
+        // The title starts on the same vertical line as the tab content below it (34 pt), not 4 pt inside it, and an accessory ends on the content's right edge.
+        .padding(.horizontal, 34)
     }
 
     private var tabRow: some View {

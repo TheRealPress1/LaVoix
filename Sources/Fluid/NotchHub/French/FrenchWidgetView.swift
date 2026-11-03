@@ -9,6 +9,12 @@ struct FrenchWidgetView: View {
     @FocusState private var focused: Bool
     @State private var copied = false
 
+    /// Where the first line of typed text sits inside the editor: the editor's own padding plus the text view's side gap (5 pt) horizontally,
+    /// and just the padding vertically. The placeholder, the static preview and the hint on the right all use these so they share one first line.
+    private static let editorPadding: CGFloat = 6
+    private static let textInsetX: CGFloat = editorPadding + 5
+    private static let textInsetY: CGFloat = editorPadding
+
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
             self.inputColumn.frame(width: 280)
@@ -25,10 +31,11 @@ struct FrenchWidgetView: View {
             ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.1))
                 if self.staticLayout {
-                    Text(self.store.input.isEmpty ? "Écris ou colle ton texte ici" : self.store.input)
+                    Text(self.store.input.isEmpty ? self.store.language.placeholder : self.store.input)
                         .font(.system(size: 13))
                         .foregroundStyle(.white.opacity(self.store.input.isEmpty ? 0.4 : 1))
-                        .padding(10)
+                        .padding(.horizontal, Self.textInsetX)
+                        .padding(.vertical, Self.textInsetY)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 } else {
                     TextEditor(text: self.$store.input)
@@ -37,16 +44,16 @@ struct FrenchWidgetView: View {
                         .foregroundStyle(.white)
                         .tint(.white)
                         .focused(self.$focused)
-                        .padding(6)
+                        .padding(Self.editorPadding)
                         .onExitCommand { self.focused = false; NotchHubController.shared.endTextEntry() }
                         .onChange(of: self.focused) { _, on in if on { NotchHubController.shared.beginTextEntry() } }
                         .onChange(of: self.store.input) { _, _ in self.copied = false }
                     if self.store.input.isEmpty {
-                        Text("Écris ou colle ton texte ici")
+                        Text(self.store.language.placeholder)
                             .font(.system(size: 13))
                             .foregroundStyle(.white.opacity(0.4))
-                            .padding(.horizontal, 11)
-                            .padding(.vertical, 14)
+                            .padding(.horizontal, Self.textInsetX)
+                            .padding(.vertical, Self.textInsetY)
                             .allowsHitTesting(false)
                     }
                 }
@@ -62,9 +69,11 @@ struct FrenchWidgetView: View {
                     self.pill("Clear", prominent: false, enabled: true) { self.store.clear(); self.startTyping() }
                 }
                 Spacer(minLength: 0)
-                Text("\(self.store.input.count)")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.white.opacity(self.store.input.count > FrenchStore.maxCharacters ? 0.9 : 0.35))
+                if !self.store.input.isEmpty {
+                    Text("\(self.store.input.count)")
+                        .font(.system(size: 10.5).monospacedDigit())
+                        .foregroundStyle(.white.opacity(self.store.input.count > FrenchStore.maxCharacters ? 0.9 : 0.35))
+                }
             }
         }
     }
@@ -99,6 +108,7 @@ struct FrenchWidgetView: View {
                 self.pill("Try again", prominent: false, enabled: true) { self.store.correct() }
                 Spacer(minLength: 0)
             }
+            .padding(.top, Self.textInsetY + 1)
             .frame(maxWidth: .infinity, alignment: .leading)
         case let .done(result):
             self.resultView(result)
@@ -111,7 +121,8 @@ struct FrenchWidgetView: View {
             .foregroundStyle(.white.opacity(0.45))
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.top, 4)
+            // 12 pt text, so one point lower than the editor's inset puts its first baseline level with the placeholder's.
+            .padding(.top, Self.textInsetY + 1)
     }
 
     /// The first time only: what is sent, to whom, and what is not.
@@ -129,12 +140,14 @@ struct FrenchWidgetView: View {
             }
             Spacer(minLength: 0)
         }
+        .padding(.top, Self.textInsetY)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func resultView(_ result: FrenchResult) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            self.scrolling { self.resultBody(result) }
+            // The same top inset as the editor's text, inside the scrolled content so a scrolled result still slides under the top edge.
+            self.scrolling { self.resultBody(result).padding(.top, Self.textInsetY) }
             HStack(spacing: 8) {
                 self.pill(self.copied ? "Copied" : "Copy", prominent: true, enabled: true) { self.copy(result.corrected) }
                 self.pill("Keep editing", prominent: false, enabled: true) { self.store.keepEditing(); self.startTyping() }
@@ -143,11 +156,15 @@ struct FrenchWidgetView: View {
         }
     }
 
-    /// Previews can't draw a scroll view, so they get the same content, cut at the edge.
+    /// Previews can't draw a scroll view, so they get the same content, cut at the edge. It is laid over an empty box so a long result can't
+    /// ask for its full height and push the Copy row (and the editor's Correct row beside it) off the bottom, as a real scroll view never lets it.
     @ViewBuilder
     private func scrolling<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         if self.staticLayout {
-            content().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
+            Color.clear
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .topLeading) { content().frame(maxWidth: .infinity, alignment: .topLeading) }
+                .clipped()
         } else {
             ScrollView(.vertical, showsIndicators: false) { content() }
         }
@@ -211,13 +228,77 @@ struct FrenchWidgetView: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(prominent ? Color.black : Color.white)
+                // A disabled main button turns into a quiet one instead of a dimmed white one, which read as muddy grey with dark text.
+                .foregroundStyle(!enabled ? Color.white.opacity(0.4) : (prominent ? Color.black : Color.white))
                 .padding(.horizontal, 12)
                 .frame(height: 26)
-                .background(Capsule().fill(prominent ? Color.white : Color.white.opacity(0.14)))
-                .opacity(enabled ? 1 : 0.4)
+                .background(Capsule().fill(!enabled ? Color.white.opacity(0.1) : (prominent ? Color.white : Color.white.opacity(0.14))))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+    }
+}
+
+
+/// On the right of the title band while the tab is open: the language being corrected, which opens a short list to change it. The list is drawn
+/// inside the notch (not a system menu, which would take the pointer out of the window and let the notch close under it).
+struct FrenchLanguagePicker: View {
+    @ObservedObject var store: FrenchStore
+    @State private var open: Bool
+
+    init(store: FrenchStore, startOpen: Bool = false) {
+        self.store = store
+        self._open = State(initialValue: startOpen)
+    }
+
+    var body: some View {
+        Button {
+            self.open.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Text(self.store.language.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .rotationEffect(.degrees(self.open ? 180 : 0))
+            }
+            .foregroundStyle(.white.opacity(self.open ? 0.8 : 0.5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Language to correct")
+        .overlay(alignment: .topTrailing) {
+            if self.open { self.list.offset(y: 24) }
+        }
+        .onDisappear { self.open = false }
+    }
+
+    private var list: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(CorrectionLanguage.allCases) { language in
+                Button {
+                    self.store.select(language)
+                    self.open = false
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(language.name).font(.system(size: 12, weight: .medium))
+                        Spacer(minLength: 16)
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 10, weight: .bold))
+                            .opacity(language == self.store.language ? 1 : 0)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .frame(height: 26)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .frame(width: 140)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color(white: 0.15)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
     }
 }

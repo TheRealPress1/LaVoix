@@ -11,6 +11,27 @@ enum NotchFrenchSettings {
     }
 }
 
+/// A language the tab can correct. The language control in the title band lists whatever is here. Only French so far: the request to myOS does not
+/// carry the language yet, so adding a case also means sending it and teaching myOS's prompt (french.rs) about it.
+enum CorrectionLanguage: String, CaseIterable, Identifiable {
+    case french
+
+    var id: String { self.rawValue }
+
+    var name: String {
+        switch self {
+        case .french: return "French"
+        }
+    }
+
+    /// The empty box's prompt, in the language itself.
+    var placeholder: String {
+        switch self {
+        case .french: return "Écris ou colle ton texte ici"
+        }
+    }
+}
+
 /// One correction Claude made, with the rule behind it in a few words.
 struct FrenchChange: Equatable, Identifiable {
     let id: Int
@@ -108,6 +129,7 @@ final class FrenchStore: ObservableObject {
     @Published private(set) var phase: FrenchPhase = .idle
     /// What the shown result was made from (so the words that changed can be marked).
     @Published private(set) var correctedFrom = ""
+    @Published private(set) var language = CorrectionLanguage.french
 
     private var requestID = 0
     private var timeout: Task<Void, Never>?
@@ -184,6 +206,13 @@ final class FrenchStore: ObservableObject {
         guard case let .done(result) = self.phase else { return }
         self.input = result.corrected
         self.phase = .idle
+    }
+
+    /// A result is for the language it was made in, so changing it puts the shown result away.
+    func select(_ language: CorrectionLanguage) {
+        guard language != self.language else { return }
+        self.language = language
+        self.dismissResult()
     }
 
     func clear() {

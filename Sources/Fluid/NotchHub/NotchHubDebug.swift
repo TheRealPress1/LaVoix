@@ -149,7 +149,7 @@ enum NotchHubDebug {
                 model.selectedWidgetID = "messages"
                 model.setBadge("messages", 3)
             } else if widgetName.hasPrefix("french") {
-                // french / french-done / french-clean / french-allow / french-working / french-failed: invented French with the mistakes a quick email has.
+                // french / french-languages (the language list open) / french-done / french-clean / french-allow / french-working / french-failed: invented French with the mistakes a quick email has.
                 let store = FrenchStore()
                 let typed = Self.frenchSampleTyped
                 store.input = widgetName == "french-clean" ? Self.frenchSampleCorrected : typed
@@ -163,7 +163,7 @@ enum NotchHubDebug {
                 }
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
-                    NotchWidget(id: "french", title: "French", systemImage: "text.badge.checkmark") { AnyView(FrenchWidgetView(store: store, staticLayout: true)) },
+                    NotchWidget(id: "french", title: "Proofread", systemImage: "text.badge.checkmark", headerAccessory: { AnyView(FrenchLanguagePicker(store: store, startOpen: widgetName == "french-languages")) }) { AnyView(FrenchWidgetView(store: store, staticLayout: true)) },
                 ])
                 model.selectedWidgetID = "french"
             } else if widgetName.hasPrefix("dropsplit") {

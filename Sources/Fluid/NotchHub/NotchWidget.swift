@@ -8,6 +8,8 @@ struct NotchWidget: Identifiable {
     let systemImage: String
     /// A brand's own icon for the tab (WhatsApp's), drawn instead of the symbol when set.
     var brandImage: NSImage? = nil
+    /// Something the tab puts on the right of the title band while it is the open tab (French's language choice).
+    var headerAccessory: (@MainActor () -> AnyView)? = nil
     let content: @MainActor () -> AnyView
 }
 
@@ -77,7 +79,9 @@ enum NotchWidgetRegistry {
             })
         }
         if NotchFrenchSettings.isEnabled && PeopleDatabase.isAvailable {
-            widgets.append(NotchWidget(id: "french", title: "French", systemImage: "text.badge.checkmark") {
+            widgets.append(NotchWidget(id: "french", title: "Proofread", systemImage: "text.badge.checkmark", headerAccessory: {
+                AnyView(FrenchLanguagePicker(store: FrenchStore.shared))
+            }) {
                 AnyView(FrenchWidgetView(store: FrenchStore.shared))
             })
         }
