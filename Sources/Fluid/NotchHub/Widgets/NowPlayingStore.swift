@@ -329,19 +329,30 @@ final class NowPlayingStore: ObservableObject {
         // same as the one held (possibly a better copy of it) leaves the one held in place.
         let cached = self.artworkCache?.key == key ? self.artworkCache?.image : nil
         var art: NSImage?
+        var outcome = "none"
         if let fresh = p.artwork, !NowPlayingArtwork.isGeneric(fresh) {
             if let cached, NowPlayingArtwork.looksSame(cached, fresh) {
                 art = cached
+                outcome = "same-as-held"
             } else if cached == nil, let last = self.artworkCache?.image, !NowPlayingArtwork.sharesPictureAcrossTracks(bundleID: p.bundleIdentifier),
                       NowPlayingArtwork.looksSame(last, fresh) {
                 art = nil
+                outcome = "dropped-as-last-videos"
             } else {
                 art = fresh
                 self.artworkCache = (key, fresh)
+                outcome = "new"
             }
         } else {
             art = cached
+            outcome = p.artwork == nil ? (cached == nil ? "none-reported" : "held") : "generic-icon"
         }
+        // When nothing is available the picture saved for this very title in the history stands in (a small one, but the right one).
+        if art == nil, let item = self.history.first(where: { $0.key == key }), let saved = self.thumbnail(for: item) {
+            art = saved
+            outcome += "+history"
+        }
+        DebugLogger.shared.info("Now Playing picture: \(outcome), bundle \(p.bundleIdentifier ?? "?"), size \(art.map { Int(NowPlayingArtwork.pixelWidth($0)) } ?? 0) px", source: "NowPlaying")
         if let current = p.currentElapsedTime { self.elapsed = max(0, current) }
         self.reported = Track(
             title: title, artist: p.artist, album: p.album, appName: p.applicationName,
