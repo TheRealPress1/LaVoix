@@ -14,8 +14,8 @@ enum DictationNotchProbe {
     static let notchHeight: CGFloat = 38
 
     static func notch(_ text: String) -> some View {
-        let bottom = text.isEmpty ? 0 : RecentSentencesView(text: text).intrinsicHeight + 12
-        let width = max(notchWidth + 2 * 44, text.isEmpty ? 0 : 300 + 24)
+        let bottom = NotchCompactLayout.textHeight + 12
+        let width = NotchCompactLayout.textBlockWidth
         let height = notchHeight + bottom
         return ZStack(alignment: .top) {
             LinearGradient(colors: [Color(red: 0.2, green: 0.3, blue: 0.2), Color(red: 0.1, green: 0.15, blue: 0.3)], startPoint: .top, endPoint: .bottom)
@@ -25,12 +25,12 @@ enum DictationNotchProbe {
                 .overlay(alignment: .top) {
                     VStack(spacing: 0) {
                         HStack(spacing: 0) {
-                            RoundedRectangle(cornerRadius: 3).fill(Color.blue).frame(width: 16, height: 16).frame(width: 34).padding(.leading, 8)
+                            RoundedRectangle(cornerRadius: 3).fill(Color.blue).frame(width: 16, height: 16).padding(.leading, NotchCompactLayout.alignmentPadding).frame(width: NotchCompactLayout.sideWidth(notchWidth: notchWidth, wide: true), alignment: .leading).padding(.leading, NotchCompactLayout.libraryInset)
                             Spacer().frame(width: notchWidth)
-                            HStack(spacing: 2) { ForEach(0..<8, id: \.self) { i in Capsule().fill(Color.orange).frame(width: 2, height: CGFloat(4 + (i * 5) % 11)) } }.frame(width: 34, height: 16).padding(.trailing, 8)
+                            HStack(spacing: 2) { ForEach(0..<8, id: \.self) { i in Capsule().fill(Color.orange).frame(width: 2, height: CGFloat(4 + (i * 5) % 11)) } }.padding(.trailing, NotchCompactLayout.alignmentPadding).frame(width: NotchCompactLayout.sideWidth(notchWidth: notchWidth, wide: true), alignment: .trailing).padding(.trailing, NotchCompactLayout.libraryInset)
                         }
                         .frame(height: notchHeight)
-                        if !text.isEmpty { RecentSentencesView(text: text).padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 10) }
+                        RecentSentencesView(text: text).frame(height: NotchCompactLayout.textHeight, alignment: .topLeading).padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 10)
                     }
                 }
         }

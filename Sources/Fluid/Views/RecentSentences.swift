@@ -3,7 +3,7 @@ import NaturalLanguage
 import SwiftUI
 
 /// The newest sentences of a transcript that is still being spoken, for the line of text under the notch while you dictate: the two most recent
-/// sentences, the older one quieter than the one being said now, never more than will fit in about three lines.
+/// sentences, the older one quieter than the one being said now, never more than will fit in two lines.
 nonisolated enum RecentSentences {
     struct Parts: Equatable {
         /// The sentence before the newest, possibly cut at its start; "" when there is none or no room for it.
@@ -12,8 +12,8 @@ nonisolated enum RecentSentences {
         var latest: String
     }
 
-    /// About three lines of the notch's text at its width (a little under, so the newest words are never the ones cut off).
-    static let defaultMaxCharacters = 112
+    /// About two lines of the notch's text at its width (a little under, so the newest words are never the ones cut off).
+    static let defaultMaxCharacters = 78
 
     static func parts(of text: String, maxCharacters: Int = defaultMaxCharacters) -> Parts {
         let flat = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
@@ -60,9 +60,14 @@ nonisolated enum NotchCompactLayout {
     /// The text starts 12 points in; the library already puts 8 points beside the icon, so it needs 4 more to line up.
     static let alignmentPadding: CGFloat = 4
 
-    /// The width our side content needs so that the two sides and the hardware notch between them are as wide as the text block.
-    static func sideWidth(notchWidth: CGFloat, hasText: Bool) -> CGFloat {
-        guard hasText else { return self.normalSide }
+    /// The text area is always two lines tall, from the moment dictation starts, so the notch never changes size while you talk.
+    static let textLines = 2
+    static let textHeight: CGFloat = 30
+
+    /// The width our side content needs so that the two sides and the hardware notch between them are as wide as the text block. `wide` is whether
+    /// the text area is there at all (it is whenever the live preview is on).
+    static func sideWidth(notchWidth: CGFloat, wide: Bool) -> CGFloat {
+        guard wide else { return self.normalSide }
         return max(self.normalSide, (self.textBlockWidth - notchWidth) / 2 - self.libraryInset)
     }
 }
@@ -84,9 +89,8 @@ struct RecentSentencesView: View {
     var body: some View {
         Text(self.attributed)
             .font(.system(size: 11.5, weight: .medium))
-            .lineLimit(3)
+            .lineLimit(NotchCompactLayout.textLines)
             .multilineTextAlignment(.leading)
-            .frame(width: self.width, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: self.width, alignment: .topLeading)
     }
 }

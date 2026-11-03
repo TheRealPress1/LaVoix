@@ -2185,8 +2185,8 @@ nonisolated enum EngineSocketAutotest {
             }
             // where the compact notch's icon and waveform sit while text shows under it
             do {
-                check("with text under a 190 point notch each side is 59 points wide, so the row is as wide as the text block", NotchCompactLayout.sideWidth(notchWidth: 190, hasText: true) == 59 && 2 * (59 + NotchCompactLayout.libraryInset) + 190 == NotchCompactLayout.textBlockWidth)
-                check("with no text the sides stay at their usual width, and a notch wider than the text block never shrinks them", NotchCompactLayout.sideWidth(notchWidth: 190, hasText: false) == 34 && NotchCompactLayout.sideWidth(notchWidth: 400, hasText: true) == 34)
+                check("with text under a 190 point notch each side is 59 points wide, so the row is as wide as the text block", NotchCompactLayout.sideWidth(notchWidth: 190, wide: true) == 59 && 2 * (59 + NotchCompactLayout.libraryInset) + 190 == NotchCompactLayout.textBlockWidth)
+                check("with no text the sides stay at their usual width, and a notch wider than the text block never shrinks them", NotchCompactLayout.sideWidth(notchWidth: 190, wide: false) == 34 && NotchCompactLayout.sideWidth(notchWidth: 400, wide: true) == 34)
             }
             // the dictation text under the notch: the two newest sentences
             do {

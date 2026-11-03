@@ -142,7 +142,8 @@ class NotchContentState: ObservableObject {
         return Self.transientStatusTexts.contains(trimmed) ? "" : trimmed
     }
 
-    var compactPreviewVisible: Bool { SettingsStore.shared.enableStreamingPreview && !self.compactPreviewText.isEmpty }
+    /// Whether the compact notch has its text area (a fixed two lines, there from the start of the recording) and so its full-width row.
+    var compactTextAreaShown: Bool { SettingsStore.shared.enableStreamingPreview }
 
     // MARK: - Expanded Command Output State
 
@@ -1324,8 +1325,8 @@ struct NotchCompactLeadingView: View {
     @ObservedObject private var activeAppMonitor = ActiveAppMonitor.shared
 
     var body: some View {
-        let hasText = self.contentState.compactPreviewVisible
-        let side = NotchCompactLayout.sideWidth(notchWidth: self.contentState.compactNotchWidth, hasText: hasText)
+        let wide = self.contentState.compactTextAreaShown
+        let side = NotchCompactLayout.sideWidth(notchWidth: self.contentState.compactNotchWidth, wide: wide)
         return Group {
             if let appIcon = self.contentState.targetAppIcon ?? self.activeAppMonitor.activeAppIcon {
                 Image(nsImage: appIcon)
@@ -1339,10 +1340,9 @@ struct NotchCompactLeadingView: View {
                     .frame(width: 8, height: 8)
             }
         }
-        // While text shows under the notch the icon sits at the far left, in line with the text; otherwise it stays beside the notch.
-        .padding(.leading, hasText ? NotchCompactLayout.alignmentPadding : 0)
-        .frame(width: side, height: 16, alignment: hasText ? .leading : .center)
-        .animation(.easeOut(duration: 0.18), value: hasText)
+        // With the text area there (always, from the start) the icon sits at the far left, in line with the text; otherwise it stays beside the notch.
+        .padding(.leading, wide ? NotchCompactLayout.alignmentPadding : 0)
+        .frame(width: side, height: 16, alignment: wide ? .leading : .center)
     }
 }
 
@@ -1375,31 +1375,27 @@ struct NotchCompactTrailingView: View {
                 .id(self.contentState.spokenSendCountdownID)
             }
         }
-        .padding(.trailing, self.contentState.compactPreviewVisible ? NotchCompactLayout.alignmentPadding : 0)
-        .frame(width: NotchCompactLayout.sideWidth(notchWidth: self.contentState.compactNotchWidth, hasText: self.contentState.compactPreviewVisible), height: 16, alignment: self.contentState.compactPreviewVisible ? .trailing : .center)
+        .padding(.trailing, self.contentState.compactTextAreaShown ? NotchCompactLayout.alignmentPadding : 0)
+        .frame(width: NotchCompactLayout.sideWidth(notchWidth: self.contentState.compactNotchWidth, wide: self.contentState.compactTextAreaShown), height: 16, alignment: self.contentState.compactTextAreaShown ? .trailing : .center)
         .animation(.easeOut(duration: 0.14), value: self.contentState.spokenSendIndicatorState)
-        .animation(.easeOut(duration: 0.18), value: self.contentState.compactPreviewVisible)
     }
 }
 
 struct NotchCompactBottomView: View {
     @ObservedObject private var contentState = NotchContentState.shared
 
-    private var shouldShowPreview: Bool { self.contentState.compactPreviewVisible }
-
     var body: some View {
-        // Under the notch, only while there is something to show: the two newest sentences, as many lines as they need (up to three). The notch
-        // follows this view's height, so it grows by just that and goes back when the text does.
+        // Under the notch: a text area that is two lines tall from the moment dictation starts, with the two newest sentences in it as they are
+        // said, so the notch is the same size before you speak, while you speak and when you stop. Nothing when the live preview is off.
         Group {
-            if self.shouldShowPreview {
+            if self.contentState.compactTextAreaShown {
                 RecentSentencesView(text: self.contentState.compactPreviewText)
+                    .frame(height: NotchCompactLayout.textHeight, alignment: .topLeading)
                     .padding(.horizontal, 12)
                     .padding(.top, 2)
                     .padding(.bottom, 10)
-                    .transition(.opacity)
             }
         }
-        .animation(.easeOut(duration: 0.18), value: self.shouldShowPreview)
     }
 }
 
