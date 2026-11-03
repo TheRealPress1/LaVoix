@@ -148,6 +148,24 @@ enum NotchHubDebug {
                 ])
                 model.selectedWidgetID = "messages"
                 model.setBadge("messages", 3)
+            } else if widgetName.hasPrefix("french") {
+                // french / french-done / french-clean / french-allow / french-working / french-failed: invented French with the mistakes a quick email has.
+                let store = FrenchStore()
+                let typed = Self.frenchSampleTyped
+                store.input = widgetName == "french-clean" ? Self.frenchSampleCorrected : typed
+                switch widgetName {
+                case "french-done": store.debugShow(.done(Self.frenchSampleResult), from: typed)
+                case "french-clean": store.debugShow(.done(FrenchResult(corrected: Self.frenchSampleCorrected, changes: [], note: nil)), from: Self.frenchSampleCorrected)
+                case "french-allow": store.debugShow(.needsAllow, from: typed)
+                case "french-working": store.debugShow(.working, from: typed)
+                case "french-failed": store.debugShow(.failed("Claude Code isn't signed in. Open Claude Code and sign in."), from: typed)
+                default: store.input = ""
+                }
+                model = NotchHubModel(widgets: [
+                    NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
+                    NotchWidget(id: "french", title: "French", systemImage: "text.badge.checkmark") { AnyView(FrenchWidgetView(store: store, staticLayout: true)) },
+                ])
+                model.selectedWidgetID = "french"
             } else if widgetName.hasPrefix("dropsplit") {
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "shelf", title: "Shelf", systemImage: "tray.fill") { AnyView(EmptyView()) },
@@ -824,6 +842,115 @@ enum NotchHubDebug {
 
             try? FileManager.default.removeItem(at: dir)
             print(failures == 0 ? "CLIPBOARD AUTOTEST ALL PASSED" : "CLIPBOARD AUTOTEST \(failures) FAILED")
+            exit(failures == 0 ? 0 : 1)
+        }
+    }
+
+    static let frenchSampleTyped = "Je vous écrit pour vous informer que j'ai bien reçus vos document et que je les ai transmit à mes collègue. Nous reviendrons vers vous dans les meilleur délais, sauf imprévu. Cordialement"
+    static let frenchSampleCorrected = "Je vous écris pour vous informer que j'ai bien reçu vos documents et que je les ai transmis à mes collègues. Nous reviendrons vers vous dans les meilleurs délais, sauf imprévu. Cordialement,"
+    static var frenchSampleResult: FrenchResult {
+        FrenchResult(corrected: self.frenchSampleCorrected, changes: [
+            FrenchChange(id: 0, before: "écrit", after: "écris", why: "Avec « je », le verbe prend un s : j'écris."),
+            FrenchChange(id: 1, before: "reçus", after: "reçu", why: "Participe passé avec avoir : il ne s'accorde pas avec le sujet."),
+            FrenchChange(id: 2, before: "document", after: "documents", why: "Pluriel après « vos »."),
+            FrenchChange(id: 3, before: "transmit", after: "transmis", why: "Participe passé de transmettre, pas le passé simple."),
+            FrenchChange(id: 4, before: "collègue", after: "collègues", why: "Pluriel après « mes »."),
+            FrenchChange(id: 5, before: "meilleur", after: "meilleurs", why: "Pluriel après « les » : les meilleurs délais."),
+            FrenchChange(id: 6, before: "Cordialement", after: "Cordialement,", why: "Virgule avant la signature."),
+        ], note: nil)
+    }
+
+    /// `LAVOIX_FRENCH_AUTOTEST=1` checks the French tab's rules: which words are marked as changed, and the tab's state from what is typed to
+    /// what myOS answers (with a stand-in for myOS, so nothing is sent anywhere).
+    @MainActor static func frenchAutotestIfRequested() {
+        guard ProcessInfo.processInfo.environment["LAVOIX_FRENCH_AUTOTEST"] == "1" else { return }
+        Task { @MainActor in
+            var failures = 0
+            func check(_ name: String, _ ok: Bool) {
+                if !ok { failures += 1 }
+                print("\(ok ? "PASS" : "FAIL") \(name)")
+            }
+            func marked(_ old: String, _ new: String) -> [String] { FrenchDiff.changedRanges(old: old, new: new).map { String(new[$0]) } }
+
+            check("the corrected words are marked, and only those", marked(Self.frenchSampleTyped, Self.frenchSampleCorrected) == ["écris", "reçu", "documents", "transmis", "collègues", "meilleurs", ","])
+            check("a text that did not change has nothing marked", marked("Bonjour tout le monde.", "Bonjour tout le monde.").isEmpty)
+            check("French spacing before a colon or a question mark is not a mistake to mark", marked("Bonjour : ça va ?", "Bonjour\u{00A0}: ça va\u{202F}?").isEmpty)
+            check("neighbouring corrections are marked as one stretch", marked("dans les meilleur délai", "dans les meilleurs délais") == ["meilleurs délais"])
+            check("an apostrophe or hyphen inside a word keeps it one word", marked("l'equipe et peut etre", "l'équipe et peut-être") == ["l'équipe", "peut-être"])
+            check("a word added at the end is marked", marked("Merci", "Merci beaucoup") == ["beaucoup"])
+            check("a word taken out marks nothing in what is left", marked("Merci beaucoup beaucoup", "Merci beaucoup").isEmpty)
+            check("nothing to compare against marks nothing", marked("", "Bonjour").isEmpty && marked("Bonjour", "").isEmpty)
+            let long = (1...(FrenchDiff.maxTokens + 5)).map { "mot\($0)" }.joined(separator: " ")
+            check("a text too long to compare marks nothing instead of stalling", marked(long, long + " fin").isEmpty)
+
+            // The tab's state, with a stand-in for myOS.
+            let store = FrenchStore()
+            var sent: [FrenchRequest] = []
+            store.send = { sent.append($0) }
+            store.isListening = { true }
+            store.correct()
+            check("nothing is sent while the box is empty", sent.isEmpty && store.phase == .idle)
+            store.input = "   \n  "
+            store.correct()
+            check("nothing is sent for spaces alone", sent.isEmpty && !store.canCorrect)
+            store.input = "  Je vous écrit.  "
+            store.correct()
+            check("the typed text is sent trimmed, asking nothing yet, and the tab waits", sent == [FrenchRequest(id: 1, text: "Je vous écrit.", allow: false)] && store.phase == .working)
+            store.correct()
+            check("pressing again while waiting sends nothing more", sent.count == 1)
+            check("an answer for another request is ignored", store.receive(["id": 7, "corrected": "x"]) == false && store.phase == .working)
+            check("myOS asking for a yes puts the tab in the asking state", store.receive(["id": 1, "needs_allow": true]) && store.phase == .needsAllow)
+            store.correct(allow: true)
+            check("Allow and correct sends the same text again with the yes", sent.count == 2 && sent[1] == FrenchRequest(id: 2, text: "Je vous écrit.", allow: true))
+            check("an answer to the first request is now stale", store.receive(["id": 1, "corrected": "x"]) == false && store.phase == .working)
+            let changes: [[String: Any]] = [["before": "écrit", "after": "écris", "why": "accord"], ["before": "même", "after": "même", "why": "rien"], ["before": "a", "after": "b"]]
+            check("an answer is taken, a correction that changes nothing is dropped, and a missing reason is empty", store.receive(["id": 2, "corrected": "Je vous écris.", "changes": changes, "note": "  "]))
+            if case let .done(result) = store.phase {
+                check("the result keeps the corrected text and the real corrections only", result.corrected == "Je vous écris." && result.changes.map(\.before) == ["écrit", "a"] && result.changes[1].why.isEmpty && result.note == nil)
+            } else { check("the result keeps the corrected text and the real corrections only", false) }
+            store.keepEditing()
+            check("Keep editing puts the corrected text in the box and clears the result", store.input == "Je vous écris." && store.phase == .idle)
+            store.correct()
+            check("an error from myOS is shown in words", store.receive(["id": 3, "error": "Claude Code isn't signed in."]) && store.phase == .failed("Claude Code isn't signed in."))
+            store.correct()
+            check("an answer nobody can read is a failure, not a blank result", store.receive(["id": 4]) && { if case .failed = store.phase { return true } else { return false } }())
+            store.correct()
+            store.clear()
+            check("clearing forgets the text and any answer still on its way", store.input.isEmpty && store.phase == .idle && store.receive(["id": 5, "corrected": "x"]) == false)
+            store.input = String(repeating: "a", count: FrenchStore.maxCharacters + 500)
+            store.correct()
+            check("a very long text is cut to the limit before it is sent", sent.last?.text.count == FrenchStore.maxCharacters)
+            store.clear()
+
+            // myOS not running: the tab says so quickly.
+            let alone = FrenchStore()
+            alone.send = { _ in }
+            alone.isListening = { false }
+            alone.input = "Bonjour"
+            alone.correct()
+            // It says so after about four seconds; on a busy Mac that can take longer, so wait for it rather than for a fixed time.
+            let started = Date()
+            while alone.phase == .working, Date().timeIntervalSince(started) < 20 { try? await Task.sleep(nanoseconds: 250_000_000) }
+            if case let .failed(message) = alone.phase { check("with myOS not listening the tab says so after a few seconds", message.contains("myOS") && Date().timeIntervalSince(started) > 3) } else { check("with myOS not listening the tab says so after a few seconds", false) }
+
+            // The queue myOS waits on.
+            let queue = FrenchRequests()
+            let listeningAtFirst = await queue.isListening()
+            check("nobody is listening before myOS has asked", listeningAtFirst == false)
+            let nothing = await queue.next(timeout: 1)
+            check("waiting with nothing sent answers nil", nothing == nil)
+            let listeningNow = await queue.isListening()
+            check("myOS has just asked, so it counts as listening", listeningNow)
+            await queue.push(FrenchRequest(id: 9, text: "é\"quoted\"\nline", allow: true).json)
+            let handed = await queue.next(timeout: 1)
+            let object = handed.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]
+            let again = await queue.next(timeout: 1)
+            check("a request is handed over whole, with quotes and line breaks intact, once", object?["id"] as? Int == 9 && object?["text"] as? String == "é\"quoted\"\nline" && object?["allow"] as? Bool == true && again == nil)
+            for i in 1...7 { await queue.push(FrenchRequest(id: i, text: "t", allow: false).json) }
+            let first = (await queue.next(timeout: 1)).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]
+            check("only the five newest requests are kept", first?["id"] as? Int == 3)
+
+            print(failures == 0 ? "FRENCH AUTOTEST ALL PASSED" : "FRENCH AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)
         }
     }

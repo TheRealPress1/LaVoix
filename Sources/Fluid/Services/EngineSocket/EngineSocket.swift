@@ -54,6 +54,8 @@ import SQLite3
 ///   {"op":"look.configure","enabled"} / {"op":"look.status"}  -> {"ok":true,"look":{enabled,chord,active,pending}}   (the Fn+Control chord for Look is off until switched on here; the choice is kept)
 ///   {"op":"look.buddy","state":"thinking"|"done"}          -> {"ok":true}   (the cursor companion: thinking shows the spinner at the pointer, done lets it go; refused while a meeting is recording, except done)
 ///   {"op":"look.point","x","y","label"?,"hold"?}          -> {"ok":true}   (the companion flies to a global screen point, origin top-left of the main display, says label (60 characters at most) for hold seconds (0.5 to 30, default 3), then flies back to the pointer; refused while a meeting is recording)
+///   {"op":"french.wait","timeout"?}                       -> {"ok":true,"request":{id,text,allow}|null}   (text typed into the French tab; long poll, like look.wait)
+///   {"op":"french.result","id",corrected,changes,note?}    -> {"ok":true,"taken":bool}   (or {"id","needs_allow":true} or {"id","error"}; taken is false for a request that is no longer current)
 ///   {"op":"look.wait","timeout"?}                         -> {"ok":true,"event":{kind:"captured",said,region?,path_points,capture:{...as look.capture, plus links?:[{text,href}]}}|null}   (myOS waits here; null when nothing happened in time)
 ///   {"op":"words.list"} / {"op":"words.add","text","aliases"?} / {"op":"words.delete","text"}  -> {"ok":true,"words":[{text,aliases}]} / {"ok":true,"word":{...}} / {"ok":true}   (boost words)
 ///   {"op":"dictionary.export"}                            -> {"ok":true,"file":"<json>"}   (replacements and boost words, as LaVoix's own export file)
@@ -488,6 +490,17 @@ nonisolated enum EngineSocket {
             var reply: [String: Any] = ["ok": true, "event": NSNull()]
             if let json = await LookEvents.shared.next(timeout: seconds), let event = try? JSONSerialization.jsonObject(with: Data(json.utf8)) { reply["event"] = event }
             _ = emit(reply)
+        case "french.wait":
+            // myOS waits here for text typed into the French tab; answers with the request, or with null when nothing was sent in time.
+            let seconds = min(max((object["timeout"] as? NSNumber)?.doubleValue ?? 25, 1), 30)
+            var reply: [String: Any] = ["ok": true, "request": NSNull()]
+            if let json = await FrenchRequests.shared.next(timeout: seconds), let request = try? JSONSerialization.jsonObject(with: Data(json.utf8)) { reply["request"] = request }
+            _ = emit(reply)
+        case "french.result":
+            // myOS's answer to a request: {id, corrected, changes:[{before,after,why}], note?}, or {id, needs_allow:true}, or {id, error}.
+            guard (object["id"] as? NSNumber) != nil else { return fail("id is required") }
+            let taken = await MainActor.run { FrenchStore.shared.receive(object) }
+            _ = emit(["ok": true, "taken": taken])
         case "look.capture":
             guard let look = services.look else { return fail("looking at the screen is not available") }
             // Never while a meeting is recording, and if the engine cannot say in time whether one is, not at all: the recorder is not shared
@@ -2071,6 +2084,24 @@ nonisolated enum EngineSocketAutotest {
                 check("a box in the picture (origin bottom-left, 0 to 1) becomes global points (origin top-left) inside the frame", abs(global.minX - 350) < 0.001 && abs(global.minY - 520) < 0.001 && abs(global.width - 500) < 0.001 && abs(global.height - 80) < 0.001)
                 let cleaned = EngineLookFind.phrases(from: ["  a  ", "", String(repeating: "x", count: 201), 7, "b"])
                 check("phrases are trimmed and the empty, the over-long and the non-text ones are dropped", cleaned == ["a", "b"] && EngineLookFind.phrases(from: "not a list").isEmpty && EngineLookFind.phrases(from: nil).isEmpty)
+            }
+            // french: the text typed into the French tab that myOS waits for, and its answers
+            do {
+                let quiet = ask(#"{"op":"french.wait","timeout":1}"#)
+                check("french.wait answers null when nothing was typed", quiet?["ok"] as? Bool == true && quiet?["request"] is NSNull)
+                await MainActor.run { FrenchStore.shared.clear(); FrenchStore.shared.input = "Je vous écrit"; FrenchStore.shared.correct() }
+                let got = ask(#"{"op":"french.wait","timeout":2}"#)?["request"] as? [String: Any]
+                let id = (got?["id"] as? NSNumber)?.intValue ?? -1
+                check("french.wait hands over the typed text whole", got?["text"] as? String == "Je vous écrit" && got?["allow"] as? Bool == false && id > 0)
+                check("the request was handed over once", ask(#"{"op":"french.wait","timeout":1}"#)?["request"] is NSNull)
+                check("french.result refuses an answer with no id", ask(#"{"op":"french.result","corrected":"x"}"#)?["ok"] as? Bool == false)
+                let stale = ask("{\"op\":\"french.result\",\"id\":\(id + 99),\"corrected\":\"x\"}")
+                let stillWorking = await MainActor.run { FrenchStore.shared.phase == .working }
+                check("an answer for another request is not taken, and the tab keeps waiting", stale?["ok"] as? Bool == true && stale?["taken"] as? Bool == false && stillWorking)
+                let answer = ask("{\"op\":\"french.result\",\"id\":\(id),\"corrected\":\"Je vous écris\",\"changes\":[{\"before\":\"écrit\",\"after\":\"écris\",\"why\":\"accord avec je\"}]}")
+                let shown = await MainActor.run { FrenchStore.shared.phase }
+                check("the answer is taken and the tab shows it", answer?["taken"] as? Bool == true && shown == .done(FrenchResult(corrected: "Je vous écris", changes: [FrenchChange(id: 0, before: "écrit", after: "écris", why: "accord avec je")], note: nil)))
+                await MainActor.run { FrenchStore.shared.clear() }
             }
             // look: the chord's switch, the events myOS waits for, and the pure rules behind them
             do {

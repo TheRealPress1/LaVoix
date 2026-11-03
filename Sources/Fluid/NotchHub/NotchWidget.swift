@@ -76,6 +76,11 @@ enum NotchWidgetRegistry {
                 AnyView(WhatsAppWidgetView(store: WhatsAppStore.shared))
             })
         }
+        if NotchFrenchSettings.isEnabled && PeopleDatabase.isAvailable {
+            widgets.append(NotchWidget(id: "french", title: "French", systemImage: "text.badge.checkmark") {
+                AnyView(FrenchWidgetView(store: FrenchStore.shared))
+            })
+        }
         widgets.append(NotchWidget(id: "connections", title: "Connections", systemImage: "gearshape.fill") {
             AnyView(ConnectionsWidgetView(store: ConnectionsStore.shared, messages: MessagesStore.shared))
         })
