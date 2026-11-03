@@ -14,6 +14,7 @@ struct FrenchWidgetView: View {
     private static let editorPadding: CGFloat = 6
     private static let textInsetX: CGFloat = editorPadding + 5
     private static let textInsetY: CGFloat = editorPadding
+    private static let placeholder = "Type or paste text, in any language"
 
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
@@ -31,7 +32,7 @@ struct FrenchWidgetView: View {
             ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.1))
                 if self.staticLayout {
-                    Text(self.store.input.isEmpty ? self.store.language.placeholder : self.store.input)
+                    Text(self.store.input.isEmpty ? Self.placeholder : self.store.input)
                         .font(.system(size: 13))
                         .foregroundStyle(.white.opacity(self.store.input.isEmpty ? 0.4 : 1))
                         .padding(.horizontal, Self.textInsetX)
@@ -49,7 +50,7 @@ struct FrenchWidgetView: View {
                         .onChange(of: self.focused) { _, on in if on { NotchHubController.shared.beginTextEntry() } }
                         .onChange(of: self.store.input) { _, _ in self.copied = false }
                     if self.store.input.isEmpty {
-                        Text(self.store.language.placeholder)
+                        Text(Self.placeholder)
                             .font(.system(size: 13))
                             .foregroundStyle(.white.opacity(0.4))
                             .padding(.horizontal, Self.textInsetX)
@@ -63,14 +64,15 @@ struct FrenchWidgetView: View {
             .onTapGesture { self.startTyping() }
 
             HStack(spacing: 8) {
-                self.pill("Correct", prominent: true, enabled: self.store.canCorrect) { self.store.correct() }
+                // What the button will do: translate when the text looks like another language than the destination, correct otherwise.
+                self.pill(self.store.willTranslate ? "Translate" : "Correct", prominent: true, enabled: self.store.canCorrect) { self.store.correct() }
                     .keyboardShortcut(.return, modifiers: .command)
                 if !self.store.input.isEmpty {
                     self.pill("Clear", prominent: false, enabled: true) { self.store.clear(); self.startTyping() }
                 }
                 Spacer(minLength: 0)
                 if !self.store.input.isEmpty {
-                    Text("\(self.store.input.count)")
+                    Text(self.store.detected.map { "\($0.name) · \(self.store.input.count)" } ?? "\(self.store.input.count)")
                         .font(.system(size: 10.5).monospacedDigit())
                         .foregroundStyle(.white.opacity(self.store.input.count > FrenchStore.maxCharacters ? 0.9 : 0.35))
                 }
@@ -93,11 +95,11 @@ struct FrenchWidgetView: View {
     private var resultColumn: some View {
         switch self.store.phase {
         case .idle:
-            self.hint("Claude corrects the spelling, grammar and punctuation, and keeps your wording.")
+            self.hint("Claude translates it into \(self.store.destination.name), or corrects the spelling, grammar and punctuation if it is already in \(self.store.destination.name), and keeps your wording.")
         case .working:
             VStack(spacing: 8) {
                 ProgressView().controlSize(.small).colorScheme(.dark)
-                Text("Claude is checking…").font(.system(size: 12)).foregroundStyle(.white.opacity(0.55))
+                Text(self.store.willTranslate ? "Claude is translating…" : "Claude is checking…").font(.system(size: 12)).foregroundStyle(.white.opacity(0.55))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .needsAllow:
@@ -130,7 +132,7 @@ struct FrenchWidgetView: View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Send what you type to Claude?", systemImage: "lock.shield")
                 .font(.system(size: 13, weight: .semibold))
-            Text("The text goes to Claude through your own login, only when you press Correct. Email addresses, links and long numbers are hidden before it leaves this Mac; names and the rest of the words are not. Nothing is kept: the log holds counts, never text.")
+            Text("The text goes to Claude through your own login, only when you press Correct or Translate. Email addresses, links and long numbers are hidden before it leaves this Mac; names and the rest of the words are not. Nothing is kept: the log holds counts, never text.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.white.opacity(0.6))
                 .fixedSize(horizontal: false, vertical: true)
@@ -180,7 +182,12 @@ struct FrenchWidgetView: View {
             if let note = result.note {
                 Text(note).font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.55)).fixedSize(horizontal: false, vertical: true)
             }
-            if result.changes.isEmpty {
+            if let from = result.translatedFrom {
+                Text("Translated from \(from)")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .textCase(.uppercase)
+            } else if result.changes.isEmpty {
                 Text(result.note == nil ? "Already correct: nothing to change." : "")
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(Color(red: 0.45, green: 0.85, blue: 0.55))
@@ -211,6 +218,8 @@ struct FrenchWidgetView: View {
     /// The corrected text with the words that changed marked.
     private func marked(_ result: FrenchResult) -> AttributedString {
         var text = AttributedString(result.corrected)
+        // A translation is new text all through, so nothing is marked in it.
+        if result.translatedFrom != nil { return text }
         for range in FrenchDiff.changedRanges(old: self.store.correctedFrom, new: result.corrected) {
             guard let start = AttributedString.Index(range.lowerBound, within: text), let end = AttributedString.Index(range.upperBound, within: text) else { continue }
             text[start..<end].backgroundColor = Color(red: 0.2, green: 0.55, blue: 0.3).opacity(0.55)
@@ -240,7 +249,7 @@ struct FrenchWidgetView: View {
 }
 
 
-/// On the right of the title band while the tab is open: the language being corrected, which opens a short list to change it. The list is drawn
+/// On the right of the title band while the tab is open: the language it comes out in, which opens a short list to change it. The list is drawn
 /// inside the notch (not a system menu, which would take the pointer out of the window and let the notch close under it).
 struct FrenchLanguagePicker: View {
     @ObservedObject var store: FrenchStore
@@ -256,7 +265,8 @@ struct FrenchLanguagePicker: View {
             self.open.toggle()
         } label: {
             HStack(spacing: 5) {
-                Text(self.store.language.name)
+                Image(systemName: "arrow.right").font(.system(size: 9, weight: .bold))
+                Text(self.store.destination.name)
                     .font(.system(size: 12, weight: .medium))
                     .lineLimit(1)
                 Image(systemName: "chevron.down")
@@ -267,7 +277,7 @@ struct FrenchLanguagePicker: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Language to correct")
+        .help("The language it comes out in")
         .overlay(alignment: .topTrailing) {
             if self.open { self.list.offset(y: 24) }
         }
@@ -276,6 +286,12 @@ struct FrenchLanguagePicker: View {
 
     private var list: some View {
         VStack(alignment: .leading, spacing: 2) {
+            Text("TRANSLATE INTO")
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.4))
+                .padding(.horizontal, 10)
+                .padding(.top, 5)
+                .padding(.bottom, 2)
             ForEach(CorrectionLanguage.allCases) { language in
                 Button {
                     self.store.select(language)
@@ -286,7 +302,7 @@ struct FrenchLanguagePicker: View {
                         Spacer(minLength: 16)
                         Image(systemName: "checkmark")
                             .font(.system(size: 10, weight: .bold))
-                            .opacity(language == self.store.language ? 1 : 0)
+                            .opacity(language == self.store.destination ? 1 : 0)
                     }
                     .foregroundStyle(.white)
                     .padding(.horizontal, 10)

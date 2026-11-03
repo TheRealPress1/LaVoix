@@ -149,21 +149,24 @@ enum NotchHubDebug {
                 model.selectedWidgetID = "messages"
                 model.setBadge("messages", 3)
             } else if widgetName.hasPrefix("french") {
-                // french / french-languages (the language list open) / french-done / french-clean / french-allow / french-working / french-failed: invented French with the mistakes a quick email has.
-                let store = FrenchStore()
-                let typed = Self.frenchSampleTyped
+                // french / french-languages (the destination list open) / french-translated (English in, French out) / french-english (English, destination Spanish: the button says Translate) / french-done / french-clean / french-allow / french-working / french-failed: invented French with the mistakes a quick email has.
+                let store = FrenchStore(destination: widgetName == "french-english" ? .spanish : .french)
+                store.persist = { _ in }
+                let typed = widgetName == "french-translated" ? Self.frenchSampleEnglish : Self.frenchSampleTyped
                 store.input = widgetName == "french-clean" ? Self.frenchSampleCorrected : typed
                 switch widgetName {
+                case "french-translated": store.debugShow(.done(FrenchResult(corrected: Self.frenchSampleTranslated, changes: [], note: nil, translatedFrom: "English")), from: typed)
                 case "french-done": store.debugShow(.done(Self.frenchSampleResult), from: typed)
                 case "french-clean": store.debugShow(.done(FrenchResult(corrected: Self.frenchSampleCorrected, changes: [], note: nil)), from: Self.frenchSampleCorrected)
                 case "french-allow": store.debugShow(.needsAllow, from: typed)
                 case "french-working": store.debugShow(.working, from: typed)
                 case "french-failed": store.debugShow(.failed("Claude Code isn't signed in. Open Claude Code and sign in."), from: typed)
+                case "french-english": break
                 default: store.input = ""
                 }
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
-                    NotchWidget(id: "french", title: "Proofread", systemImage: "text.badge.checkmark", headerAccessory: { AnyView(FrenchLanguagePicker(store: store, startOpen: widgetName == "french-languages")) }) { AnyView(FrenchWidgetView(store: store, staticLayout: true)) },
+                    NotchWidget(id: "french", title: "Translate", systemImage: "highlighter", headerAccessory: { AnyView(FrenchLanguagePicker(store: store, startOpen: widgetName == "french-languages")) }) { AnyView(FrenchWidgetView(store: store, staticLayout: true)) },
                 ])
                 model.selectedWidgetID = "french"
             } else if widgetName.hasPrefix("dropsplit") {
@@ -847,6 +850,8 @@ enum NotchHubDebug {
     }
 
     static let frenchSampleTyped = "Je vous écrit pour vous informer que j'ai bien reçus vos document et que je les ai transmit à mes collègue. Nous reviendrons vers vous dans les meilleur délais, sauf imprévu. Cordialement"
+    static let frenchSampleEnglish = "Hi Camille, I am writing to let you know that I received your documents and passed them on to my colleagues. We will get back to you as soon as possible, barring any surprise. Best regards,"
+    static let frenchSampleTranslated = "Bonjour Camille, je vous écris pour vous informer que j'ai bien reçu vos documents et que je les ai transmis à mes collègues. Nous reviendrons vers vous dans les meilleurs délais, sauf imprévu. Cordialement,"
     static let frenchSampleCorrected = "Je vous écris pour vous informer que j'ai bien reçu vos documents et que je les ai transmis à mes collègues. Nous reviendrons vers vous dans les meilleurs délais, sauf imprévu. Cordialement,"
     static var frenchSampleResult: FrenchResult {
         FrenchResult(corrected: self.frenchSampleCorrected, changes: [
@@ -883,8 +888,15 @@ enum NotchHubDebug {
             let long = (1...(FrenchDiff.maxTokens + 5)).map { "mot\($0)" }.joined(separator: " ")
             check("a text too long to compare marks nothing instead of stalling", marked(long, long + " fin").isEmpty)
 
+            // Which language a text looks like, worked out on this Mac (Claude names the real one afterwards).
+            check("an English sentence is detected as English", FrenchStore.detect("I wonder how I can transform to become the best version of myself") == .english)
+            check("a French sentence is detected as French", FrenchStore.detect(Self.frenchSampleTyped) == .french)
+            check("a Spanish sentence is detected as Spanish", FrenchStore.detect("Quería avisarte de que he recibido tus documentos y que los he pasado a mis colegas") == .spanish)
+            check("too little text, or none, is not guessed at", FrenchStore.detect("ok") == nil && FrenchStore.detect("   ") == nil && FrenchStore.detect("12345 67890") == nil)
+
             // The tab's state, with a stand-in for myOS.
-            let store = FrenchStore()
+            let store = FrenchStore(destination: .french)
+            store.persist = { _ in }
             var sent: [FrenchRequest] = []
             store.send = { sent.append($0) }
             store.isListening = { true }
@@ -895,21 +907,24 @@ enum NotchHubDebug {
             check("nothing is sent for spaces alone", sent.isEmpty && !store.canCorrect)
             store.input = "  Je vous écrit.  "
             store.correct()
-            check("the typed text is sent trimmed, asking nothing yet, and the tab waits", sent == [FrenchRequest(id: 1, text: "Je vous écrit.", allow: false)] && store.phase == .working)
+            check("the typed text is sent trimmed, with the language it should come out in, asking nothing yet, and the tab waits", sent == [FrenchRequest(id: 1, text: "Je vous écrit.", allow: false, target: "French")] && store.phase == .working)
             store.correct()
             check("pressing again while waiting sends nothing more", sent.count == 1)
             check("an answer for another request is ignored", store.receive(["id": 7, "corrected": "x"]) == false && store.phase == .working)
             check("myOS asking for a yes puts the tab in the asking state", store.receive(["id": 1, "needs_allow": true]) && store.phase == .needsAllow)
             store.correct(allow: true)
-            check("Allow and correct sends the same text again with the yes", sent.count == 2 && sent[1] == FrenchRequest(id: 2, text: "Je vous écrit.", allow: true))
+            check("Allow and correct sends the same text again with the yes", sent.count == 2 && sent[1] == FrenchRequest(id: 2, text: "Je vous écrit.", allow: true, target: "French"))
             check("an answer to the first request is now stale", store.receive(["id": 1, "corrected": "x"]) == false && store.phase == .working)
             let changes: [[String: Any]] = [["before": "écrit", "after": "écris", "why": "accord"], ["before": "même", "after": "même", "why": "rien"], ["before": "a", "after": "b"]]
             check("an answer is taken, a correction that changes nothing is dropped, and a missing reason is empty", store.receive(["id": 2, "corrected": "Je vous écris.", "changes": changes, "note": "  "]))
             if case let .done(result) = store.phase {
                 check("the result keeps the corrected text and the real corrections only", result.corrected == "Je vous écris." && result.changes.map(\.before) == ["écrit", "a"] && result.changes[1].why.isEmpty && result.note == nil)
             } else { check("the result keeps the corrected text and the real corrections only", false) }
+            check("a correction is not marked as a translation", { if case let .done(r) = store.phase { return r.translatedFrom == nil } else { return false } }())
             store.keepEditing()
             check("Keep editing puts the corrected text in the box and clears the result", store.input == "Je vous écris." && store.phase == .idle)
+            check("French typed with French chosen says Correct, not Translate", store.detected == .french && !store.willTranslate)
+
             store.correct()
             check("an error from myOS is shown in words", store.receive(["id": 3, "error": "Claude Code isn't signed in."]) && store.phase == .failed("Claude Code isn't signed in."))
             store.correct()
@@ -920,6 +935,30 @@ enum NotchHubDebug {
             store.input = String(repeating: "a", count: FrenchStore.maxCharacters + 500)
             store.correct()
             check("a very long text is cut to the limit before it is sent", sent.last?.text.count == FrenchStore.maxCharacters)
+            store.clear()
+
+            // Another destination: what is sent, the button, and a translated answer.
+            store.clear()
+            store.input = "Hi Camille, I received your documents and passed them on to my colleagues."
+            check("English typed with French chosen says Translate", store.detected == .english && store.willTranslate)
+            store.select(.spanish)
+            check("choosing another language changes the destination and the button follows", store.destination == .spanish && store.willTranslate)
+            store.select(.english)
+            check("English typed with English chosen says Correct", !store.willTranslate)
+            store.select(.french)
+            store.correct()
+            check("the destination chosen is what is sent", sent.last?.target == "French" && store.phase == .working)
+            let translatedChanges: [[String: Any]] = [["before": "Hi", "after": "Bonjour", "why": "x"]]
+            let tid = sent.last?.id ?? -1
+            check("a translated answer is taken", store.receive(["id": tid, "corrected": "Bonjour Camille, j'ai bien reçu vos documents.", "mode": "translated", "source": "  English  ", "changes": translatedChanges, "note": ""]))
+            if case let .done(r) = store.phase {
+                check("a translation keeps its text and where it came from, and has no corrections", r.corrected.hasPrefix("Bonjour Camille") && r.translatedFrom == "English" && r.changes.isEmpty)
+            } else { check("a translation keeps its text and where it came from, and has no corrections", false) }
+            store.select(.spanish)
+            check("choosing another language puts the shown result away", store.phase == .idle)
+            store.select(.french)
+            store.correct()
+            check("a translated answer that names no language still says it is a translation", store.receive(["id": sent.last?.id ?? -1, "corrected": "Bonjour.", "mode": "translated"]) && { if case let .done(r) = store.phase { return r.translatedFrom == "another language" } else { return false } }())
             store.clear()
 
             // myOS not running: the tab says so quickly.
@@ -941,11 +980,11 @@ enum NotchHubDebug {
             check("waiting with nothing sent answers nil", nothing == nil)
             let listeningNow = await queue.isListening()
             check("myOS has just asked, so it counts as listening", listeningNow)
-            await queue.push(FrenchRequest(id: 9, text: "é\"quoted\"\nline", allow: true).json)
+            await queue.push(FrenchRequest(id: 9, text: "é\"quoted\"\nline", allow: true, target: "Spanish").json)
             let handed = await queue.next(timeout: 1)
             let object = handed.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]
             let again = await queue.next(timeout: 1)
-            check("a request is handed over whole, with quotes and line breaks intact, once", object?["id"] as? Int == 9 && object?["text"] as? String == "é\"quoted\"\nline" && object?["allow"] as? Bool == true && again == nil)
+            check("a request is handed over whole, with quotes and line breaks intact, once", object?["id"] as? Int == 9 && object?["text"] as? String == "é\"quoted\"\nline" && object?["allow"] as? Bool == true && object?["target"] as? String == "Spanish" && again == nil)
             for i in 1...7 { await queue.push(FrenchRequest(id: i, text: "t", allow: false).json) }
             let first = (await queue.next(timeout: 1)).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]
             check("only the five newest requests are kept", first?["id"] as? Int == 3)

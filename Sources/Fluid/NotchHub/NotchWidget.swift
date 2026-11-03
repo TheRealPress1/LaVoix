@@ -79,7 +79,7 @@ enum NotchWidgetRegistry {
             })
         }
         if NotchFrenchSettings.isEnabled && PeopleDatabase.isAvailable {
-            widgets.append(NotchWidget(id: "french", title: "Proofread", systemImage: "text.badge.checkmark", headerAccessory: {
+            widgets.append(NotchWidget(id: "french", title: "Translate", systemImage: "highlighter", headerAccessory: {
                 AnyView(FrenchLanguagePicker(store: FrenchStore.shared))
             }) {
                 AnyView(FrenchWidgetView(store: FrenchStore.shared))

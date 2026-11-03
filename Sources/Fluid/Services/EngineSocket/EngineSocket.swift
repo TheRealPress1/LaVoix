@@ -54,8 +54,8 @@ import SQLite3
 ///   {"op":"look.configure","enabled"} / {"op":"look.status"}  -> {"ok":true,"look":{enabled,chord,active,pending}}   (the Fn+Control chord for Look is off until switched on here; the choice is kept)
 ///   {"op":"look.buddy","state":"thinking"|"done"}          -> {"ok":true}   (the cursor companion: thinking shows the spinner at the pointer, done lets it go; refused while a meeting is recording, except done)
 ///   {"op":"look.point","x","y","label"?,"hold"?}          -> {"ok":true}   (the companion flies to a global screen point, origin top-left of the main display, says label (60 characters at most) for hold seconds (0.5 to 30, default 3), then flies back to the pointer; refused while a meeting is recording)
-///   {"op":"french.wait","timeout"?}                       -> {"ok":true,"request":{id,text,allow}|null}   (text typed into the French tab; long poll, like look.wait)
-///   {"op":"french.result","id",corrected,changes,note?}    -> {"ok":true,"taken":bool}   (or {"id","needs_allow":true} or {"id","error"}; taken is false for a request that is no longer current)
+///   {"op":"french.wait","timeout"?}                       -> {"ok":true,"request":{id,text,allow,target}|null}   (text typed into the tab, with the language it should come out in; long poll, like look.wait)
+///   {"op":"french.result","id",corrected,changes,note?,source?,mode?}    -> {"ok":true,"taken":bool}   (mode "translated" says the text was in another language, named by source; it has no changes)   (or {"id","needs_allow":true} or {"id","error"}; taken is false for a request that is no longer current)
 ///   {"op":"look.wait","timeout"?}                         -> {"ok":true,"event":{kind:"captured",said,region?,path_points,capture:{...as look.capture, plus links?:[{text,href}]}}|null}   (myOS waits here; null when nothing happened in time)
 ///   {"op":"words.list"} / {"op":"words.add","text","aliases"?} / {"op":"words.delete","text"}  -> {"ok":true,"words":[{text,aliases}]} / {"ok":true,"word":{...}} / {"ok":true}   (boost words)
 ///   {"op":"dictionary.export"}                            -> {"ok":true,"file":"<json>"}   (replacements and boost words, as LaVoix's own export file)
@@ -2092,7 +2092,7 @@ nonisolated enum EngineSocketAutotest {
                 await MainActor.run { FrenchStore.shared.clear(); FrenchStore.shared.input = "Je vous écrit"; FrenchStore.shared.correct() }
                 let got = ask(#"{"op":"french.wait","timeout":2}"#)?["request"] as? [String: Any]
                 let id = (got?["id"] as? NSNumber)?.intValue ?? -1
-                check("french.wait hands over the typed text whole", got?["text"] as? String == "Je vous écrit" && got?["allow"] as? Bool == false && id > 0)
+                check("french.wait hands over the typed text whole, with the language it should come out in", got?["text"] as? String == "Je vous écrit" && got?["allow"] as? Bool == false && got?["target"] is String && id > 0)
                 check("the request was handed over once", ask(#"{"op":"french.wait","timeout":1}"#)?["request"] is NSNull)
                 check("french.result refuses an answer with no id", ask(#"{"op":"french.result","corrected":"x"}"#)?["ok"] as? Bool == false)
                 let stale = ask("{\"op\":\"french.result\",\"id\":\(id + 99),\"corrected\":\"x\"}")
