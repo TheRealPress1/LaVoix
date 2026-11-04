@@ -23,6 +23,93 @@ enum NotchNowPlayingSettings {
     }
 }
 
+#if arch(arm64)
+/// Sends play/pause, next and previous to whatever is playing, through the same perl bridge the listener uses, and says in the log what happened.
+///
+/// Why not the bridge's own methods: its script exits 10 ms after it has sent a command. The system's media service checks the sender when it connects,
+/// and on a loaded Mac that takes longer than 10 ms, so the sender was already gone and the command was dropped without a word (the system log showed the
+/// client invalidated before "Received command"), while the button had already flipped its icon as if it had worked. This runs a copy of the script that
+/// waits long enough, and the real state is read back afterwards.
+enum NowPlayingCommands {
+    enum Command: String {
+        case togglePlayPause = "toggle_play_pause"
+        case next = "next_track"
+        case previous = "previous_track"
+    }
+
+    /// How long the script stays alive after sending a command (the bridge's own: 0.01 s).
+    static let lingerSeconds = 0.6
+
+    /// The bridge's script with its short wait before exiting replaced by `linger`. Nil when the script has no such wait (it changed in a newer bridge),
+    /// so a changed script is noticed instead of silently run unpatched.
+    nonisolated static func patchedScript(from source: String, linger: Double = NowPlayingCommands.lingerSeconds) -> String? {
+        guard let range = source.range(of: #"select\(undef,\s*undef,\s*undef,\s*0\.01\)"#, options: .regularExpression) else { return nil }
+        var patched = source
+        patched.replaceSubrange(range, with: "select(undef, undef, undef, \(linger))")
+        return patched
+    }
+
+    /// The bridge's script as shipped in the app, and the library it loads.
+    nonisolated static func bridgePaths() -> (script: String, library: String)? {
+        guard let bundleURL = Bundle.main.url(forResource: "MediaRemoteAdapter_MediaRemoteAdapter", withExtension: "bundle"),
+              let script = Bundle(url: bundleURL)?.path(forResource: "run", ofType: "pl"),
+              let library = Bundle(for: MediaController.self).executablePath else { return nil }
+        return (script, library)
+    }
+
+    /// The patched script, written once to the temporary folder. Nil when it cannot be made.
+    nonisolated static func patchedScriptPath() -> String? {
+        guard let paths = bridgePaths(), let source = try? String(contentsOfFile: paths.script, encoding: .utf8),
+              let patched = patchedScript(from: source) else { return nil }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("LaVoixMediaRemote", isDirectory: true)
+        let file = directory.appendingPathComponent("run-command.pl")
+        if (try? String(contentsOf: file, encoding: .utf8)) == patched { return file.path }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        do { try patched.write(to: file, atomically: true, encoding: .utf8) } catch { return nil }
+        return file.path
+    }
+
+    /// Runs one command to the end, on the calling thread (call it off the main thread). Returns whether the script ran and exited cleanly, and how long it took.
+    @discardableResult
+    nonisolated static func run(_ arguments: [String]) -> (ok: Bool, output: Data, seconds: Double)? {
+        guard let paths = bridgePaths(), let script = patchedScriptPath() else { return nil }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+        process.arguments = [script, paths.library] + arguments
+        let out = Pipe(), err = Pipe()
+        process.standardOutput = out
+        process.standardError = err
+        let started = Date()
+        do { try process.run() } catch { return (false, Data(), 0) }
+        // Read while it runs: a full pipe would otherwise hold the script up (the answer to `get` carries the artwork).
+        final class Box: @unchecked Sendable { var data = Data() }
+        let box = Box()
+        let reader = DispatchQueue(label: "nowplaying.command.out")
+        let done = DispatchGroup()
+        done.enter()
+        reader.async { box.data = out.fileHandleForReading.readDataToEndOfFile(); done.leave() }
+        process.waitUntilExit()
+        done.wait()
+        let output = box.data
+        let errors = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let seconds = Date().timeIntervalSince(started)
+        let ok = process.terminationStatus == 0 && errors.isEmpty
+        if !ok { DebugLogger.shared.warning("Now Playing command \(arguments.joined(separator: " ")) failed: exit \(process.terminationStatus) \(errors.prefix(200))", source: "NowPlaying") }
+        return (ok, output, seconds)
+    }
+
+    /// Whether what is playing is playing right now, read from the system (nil when nothing is, or it could not be read).
+    nonisolated static func currentlyPlaying() -> Bool? {
+        guard let result = run(["get"]), result.ok,
+              let json = try? JSONSerialization.jsonObject(with: result.output) as? [String: Any],
+              let payload = json["payload"] as? [String: Any] else { return nil }
+        if let playing = payload["isPlaying"] as? Bool { return playing }
+        if let playing = payload["isPlaying"] as? Int { return playing == 1 }
+        return nil
+    }
+}
+#endif
+
 /// Where the current track is, in seconds. Only the progress bar watches this.
 @MainActor
 final class PlaybackClock: ObservableObject {
@@ -288,21 +375,46 @@ final class NowPlayingStore: ObservableObject {
     }
 
     func togglePlayPause() {
-        #if arch(arm64)
-        self.controller.togglePlayPause()
-        #endif
+        // The icon changes at once so the press feels answered; what the system says afterwards decides what it shows.
         if var t = self.track { t.isPlaying.toggle(); self.track = t }
+        self.send(.togglePlayPause, thenReadState: true)
     }
 
     func next() {
-        #if arch(arm64)
-        self.controller.nextTrack()
-        #endif
+        self.send(.next, thenReadState: false)
     }
 
     func previous() {
+        self.send(.previous, thenReadState: false)
+    }
+
+    /// Sends a command off the main thread. If the script cannot be run, the bridge's own method is used. For play/pause the real state is read back
+    /// afterwards, so an icon that was changed for a command that did not take goes back to what is true.
+    private func send(_ command: NowPlayingCommands.Command, thenReadState: Bool) {
         #if arch(arm64)
-        self.controller.previousTrack()
+        let fallback: () -> Void = { [controller = self.controller] in
+            switch command {
+            case .togglePlayPause: controller.togglePlayPause()
+            case .next: controller.nextTrack()
+            case .previous: controller.previousTrack()
+            }
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let result = NowPlayingCommands.run([command.rawValue]) else {
+                DebugLogger.shared.warning("Now Playing command \(command.rawValue): the script was not found, using the bridge's own", source: "NowPlaying")
+                DispatchQueue.main.async { fallback() }
+                return
+            }
+            DebugLogger.shared.info("Now Playing command \(command.rawValue): \(result.ok ? "sent" : "FAILED") in \(Int(result.seconds * 1000)) ms", source: "NowPlaying")
+            guard thenReadState else { return }
+            let playing = NowPlayingCommands.currentlyPlaying()
+            Task { @MainActor [weak self] in
+                guard let self, let playing, var t = self.track, t.isPlaying != playing else { return }
+                DebugLogger.shared.info("Now Playing: the icon said \(t.isPlaying ? "playing" : "paused") but the system says \(playing ? "playing" : "paused"); showing that", source: "NowPlaying")
+                t.isPlaying = playing
+                self.track = t
+            }
+        }
         #endif
     }
 

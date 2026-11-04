@@ -90,12 +90,16 @@ enum NotchHubDebug {
                 model.setBannerExpanded(widgetName.hasSuffix("expanded") || widgetName.hasSuffix("enlarged"))
                 if widgetName.hasSuffix("enlarged") { model.setBannerEnlarged(true) }
             } else if widgetName.hasPrefix("nowplaying") {
-                let store = widgetName == "nowplaying-empty"
+                // nowplaying-bookshelf: Bookshelf's song takes the card (the system names nothing that plays), with a made-up cover.
+                if widgetName == "nowplaying-bookshelf" {
+                    BookshelfCapture.shared.debugShow(.init(state: .playing, provider: .spotify, title: "Love Story - 2024 Remastered Version", artist: "O'Donel Levy", album: "Black Velvet", artworkURL: nil, canRate: true, score: nil, note: nil, status: "Ready to rate"))
+                }
+                let store = widgetName == "nowplaying-empty" || widgetName == "nowplaying-bookshelf"
                     ? NowPlayingStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-np-empty-\(UUID().uuidString)"))
                     : NowPlayingStore.sample(playing: widgetName != "nowplaying-paused")
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
-                    NotchWidget(id: "nowplaying", title: "Now Playing", systemImage: "music.note") { AnyView(NowPlayingWidgetView(store: store, staticLayout: true)) },
+                    NotchWidget(id: "nowplaying", title: "Now Playing", systemImage: "music.note") { AnyView(NowPlayingWidgetView(store: store, staticLayout: true, previewCover: widgetName == "nowplaying-bookshelf" ? NowPlayingStore.sampleArtwork() : nil)) },
                 ])
                 model.selectedWidgetID = "nowplaying"
             } else if widgetName.hasPrefix("download") {
@@ -2021,6 +2025,25 @@ enum NotchHubDebug {
 
             try? FileManager.default.removeItem(at: dir)
             try? FileManager.default.removeItem(at: junkDir)
+            // 9. The playback buttons. The bridge's own script exits 10 ms after sending a command, which a loaded Mac's media service has not finished
+            // connecting by, so commands were dropped. The commands run a copy of the script that waits long enough.
+            #if arch(arm64)
+            let fake = "bootstrap();\nif ($command ne 'loop') {\n    select(undef, undef, undef, 0.01); # Sleep for 100ms\n}\n"
+            let fakePatched = NowPlayingCommands.patchedScript(from: fake)
+            check("the script's short wait is replaced by the longer one", fakePatched?.contains("select(undef, undef, undef, \(NowPlayingCommands.lingerSeconds))") == true && fakePatched?.contains("0.01") == false && fakePatched?.contains("bootstrap();") == true)
+            check("a script with no such wait is not patched (so a changed bridge is noticed)", NowPlayingCommands.patchedScript(from: "print 'hi';\n") == nil)
+            check("the wait is long enough for a loaded Mac and short enough for a button", NowPlayingCommands.lingerSeconds >= 0.3 && NowPlayingCommands.lingerSeconds <= 1.5)
+            let shipped = NowPlayingCommands.bridgePaths()
+            check("the bridge's script and library are found in the app", shipped != nil && FileManager.default.fileExists(atPath: shipped?.script ?? "") && FileManager.default.fileExists(atPath: shipped?.library ?? ""))
+            let realSource = shipped.flatMap { try? String(contentsOfFile: $0.script, encoding: .utf8) }
+            check("the script that ships with the bridge still has the wait this patches", realSource.flatMap { NowPlayingCommands.patchedScript(from: $0) } != nil)
+            let patchedPath = NowPlayingCommands.patchedScriptPath()
+            check("the patched script is written where it can be run", patchedPath.flatMap { try? String(contentsOfFile: $0, encoding: .utf8) }?.contains("0.01") == false)
+            // Read-only: asks the system what is playing. It must run to the end and stay alive for the wait.
+            let readOnly = NowPlayingCommands.run(["get"])
+            check("the patched script runs and waits before exiting (a read of what is playing, nothing is sent to any player)", readOnly != nil && readOnly?.ok == true && (readOnly?.seconds ?? 0) >= NowPlayingCommands.lingerSeconds - 0.1)
+            #endif
+
             print(failures == 0 ? "NOWPLAYING HISTORY AUTOTEST ALL PASSED" : "NOWPLAYING HISTORY AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)
         }

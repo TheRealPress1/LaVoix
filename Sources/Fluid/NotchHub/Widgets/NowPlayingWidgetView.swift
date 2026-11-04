@@ -8,6 +8,8 @@ struct NowPlayingWidgetView: View {
 
     private enum RightTab { case grade, history }
     var staticLayout = false
+    /// Previews can't load a picture from the web: they draw this instead of the song's cover.
+    var previewCover: NSImage? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -66,35 +68,50 @@ struct NowPlayingWidgetView: View {
         return plain(track.title) == plain(title)
     }
 
+    /// The song's cover fills the whole card, as the artwork of the playing card does, with the title and artist over a dark fade at its foot.
     private var bookshelfCard: some View {
         let n = self.bookshelf.now
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 11) {
-                AsyncImage(url: n.artworkURL.flatMap(URL.init(string:))) { image in
-                    image.resizable().aspectRatio(contentMode: .fill)
-                } placeholder: {
-                    ZStack { Color.white.opacity(0.1); Image(systemName: "music.note").foregroundStyle(.white.opacity(0.5)) }
-                }
-                .frame(width: 62, height: 62)
-                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(n.title ?? "").font(.system(size: 13.5, weight: .semibold)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                    Text([n.artist, n.provider?.displayName].compactMap { $0 }.joined(separator: " · "))
-                        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
-                }
+        return ZStack(alignment: .bottomLeading) {
+            self.bookshelfCover(n.artworkURL)
+            LinearGradient(stops: [.init(color: .clear, location: 0.3), .init(color: .black.opacity(0.88), location: 1)], startPoint: .top, endPoint: .bottom)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(n.title ?? "").font(.system(size: 13.5, weight: .semibold)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                Text([n.artist, n.provider?.displayName].compactMap { $0 }.joined(separator: " · "))
+                    .font(.system(size: 11)).foregroundStyle(.white.opacity(0.75)).lineLimit(1)
             }
-            Spacer(minLength: 0)
+            .shadow(color: .black.opacity(0.5), radius: 4)
+            .padding(12)
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.07)))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
     }
 
-    /// The card fills the whole left side. A widescreen thumbnail (a video) runs edge to edge; anything else (a square
-    /// album cover, or no artwork) sits on a blurred backdrop of itself.
+    /// The cover, filling the card. Drawn as an overlay of an empty box so the picture fills the card but can't make it any bigger.
+    private func bookshelfCover(_ urlString: String?) -> some View {
+        Color.clear
+            .overlay(
+                Group {
+                    if let preview = self.previewCover {
+                        Image(nsImage: preview).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
+                    } else {
+                        AsyncImage(url: urlString.flatMap(URL.init(string:))) { image in
+                            image.resizable().interpolation(.high).aspectRatio(contentMode: .fill)
+                        } placeholder: {
+                            LinearGradient(colors: [Color.white.opacity(0.14), Color.white.opacity(0.04)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                                .overlay(Image(systemName: "music.note").font(.system(size: 28, weight: .light)).foregroundStyle(.white.opacity(0.4)))
+                        }
+                    }
+                }
+            )
+            .clipped()
+    }
+
+    /// The card fills the whole left side. Whatever picture there is (an album cover, a video's thumbnail) runs edge to edge behind the title
+    /// and the controls; with no picture at all, a small logo of where it plays from sits on a plain backdrop.
     private func card(_ track: NowPlayingStore.Track) -> some View {
         let art = track.artwork
-        let wide = art.map { $0.size.width / max($0.size.height, 1) >= 1.4 } ?? false
+        let wide = art != nil
         return ZStack(alignment: .bottom) {
             self.backdrop(track, art: art, wide: wide)
             VStack(alignment: .leading, spacing: 7) {
@@ -206,15 +223,11 @@ struct NowPlayingWidgetView: View {
     }
 
     private func controls(_ track: NowPlayingStore.Track) -> some View {
-        HStack(spacing: 30) {
-            Button { self.store.previous() } label: { Image(systemName: "backward.fill").font(.system(size: 14)) }
-            Button { self.store.togglePlayPause() } label: {
-                Image(systemName: track.isPlaying ? "pause.fill" : "play.fill").font(.system(size: 20))
-                    .frame(width: 26)
-            }
-            Button { self.store.next() } label: { Image(systemName: "forward.fill").font(.system(size: 14)) }
+        HStack(spacing: 10) {
+            NowPlayingControlButton(symbol: "backward.fill", size: 15, label: "Previous") { self.store.previous() }
+            NowPlayingControlButton(symbol: track.isPlaying ? "pause.fill" : "play.fill", size: 22, label: track.isPlaying ? "Pause" : "Play") { self.store.togglePlayPause() }
+            NowPlayingControlButton(symbol: "forward.fill", size: 15, label: "Next") { self.store.next() }
         }
-        .buttonStyle(.plain)
         .frame(maxWidth: .infinity)
         .shadow(color: .black.opacity(0.4), radius: 3)
     }
@@ -477,5 +490,38 @@ nonisolated enum NowPlayingClock {
     static func text(_ seconds: TimeInterval) -> String {
         let s = Int(max(seconds, 0))
         return s >= 3600 ? String(format: "%dh%02d", s / 3600, (s % 3600) / 60) : String(format: "%d:%02d", s / 60, s % 60)
+    }
+}
+
+/// A playback button: the whole round area around the symbol takes the click (a 14 pt glyph alone was a target you had to hit exactly), it lights up
+/// under the pointer and shrinks a little while pressed, so a press visibly lands.
+private struct NowPlayingControlButton: View {
+    let symbol: String
+    let size: CGFloat
+    let label: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: self.action) {
+            Image(systemName: self.symbol)
+                .font(.system(size: self.size))
+                .frame(width: 44, height: 38)
+                .background(Capsule().fill(Color.white.opacity(self.hovering ? 0.16 : 0)))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(NowPlayingPressStyle())
+        .onHover { self.hovering = $0 }
+        .help(self.label)
+        .accessibilityLabel(self.label)
+    }
+}
+
+private struct NowPlayingPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.88 : 1)
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
     }
 }

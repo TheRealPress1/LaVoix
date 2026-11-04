@@ -28,6 +28,9 @@ final class BookshelfCapture: ObservableObject {
 
     @Published private(set) var now = Now(state: .notRunning, provider: nil, title: nil, artist: nil, album: nil, artworkURL: nil, canRate: false, score: nil, note: nil, status: "Not connected")
 
+    /// For previews: shows a song without reading any player.
+    func debugShow(_ now: Now) { self.now = now }
+
     private let store: any BookshelfCredentialStoring
     private let site: URL
     private let sessionConfiguration: URLSessionConfiguration
