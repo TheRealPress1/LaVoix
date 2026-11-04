@@ -4,9 +4,16 @@ import SwiftUI
 struct NowPlayingWidgetView: View {
     @ObservedObject var store: NowPlayingStore
     @ObservedObject private var bookshelf = BookshelfCapture.shared
-    @State private var rightTab: RightTab = .grade
+    @State private var rightTab: RightTab = NowPlayingWidgetView.defaultRightTab
 
-    private enum RightTab { case grade, history }
+    /// What the right side can show, in the order the switch lists them. History is what the tab opens on; grading a song is one tap away, not the first thing seen.
+    enum RightTab: CaseIterable {
+        case history, grade
+
+        var label: String { self == .history ? "History" : "Grade" }
+    }
+
+    static let defaultRightTab = RightTab.history
     var staticLayout = false
     /// Previews can't load a picture from the web: they draw this instead of the song's cover.
     var previewCover: NSImage? = nil
@@ -245,7 +252,7 @@ struct NowPlayingWidgetView: View {
 
     // MARK: - Right side: your grade and note, or the history
 
-    /// Grade and Notes while Bookshelf has a song to grade (the default), with a switch to the history; just the history otherwise.
+    /// The history, with a switch to Grade and Notes while Bookshelf has a song to grade (the history is what it opens on); just the history otherwise.
     @ViewBuilder
     private var rightSide: some View {
         if self.gradesShownCard, !self.staticLayout {
@@ -260,9 +267,9 @@ struct NowPlayingWidgetView: View {
 
     private var tabSwitch: some View {
         HStack(spacing: 4) {
-            ForEach([(RightTab.grade, "Grade"), (RightTab.history, "History")], id: \.1) { tab, label in
+            ForEach(RightTab.allCases, id: \.label) { tab in
                 Button { self.rightTab = tab } label: {
-                    Text(label).font(.system(size: 11, weight: .semibold))
+                    Text(tab.label).font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white.opacity(self.rightTab == tab ? 1 : 0.5))
                         .padding(.horizontal, 10).padding(.vertical, 4)
                         .background(Capsule().fill(Color.white.opacity(self.rightTab == tab ? 0.16 : 0)))

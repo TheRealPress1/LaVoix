@@ -2044,6 +2044,10 @@ enum NotchHubDebug {
             check("the patched script runs and waits before exiting (a read of what is playing, nothing is sent to any player)", readOnly != nil && readOnly?.ok == true && (readOnly?.seconds ?? 0) >= NowPlayingCommands.lingerSeconds - 0.1)
             #endif
 
+            // 9b. What the right side opens on: the history, with grading listed second.
+            check("Now Playing opens on the history, not on grading", NowPlayingWidgetView.defaultRightTab == .history)
+            check("the switch lists History first and Grade second", NowPlayingWidgetView.RightTab.allCases.map(\.label) == ["History", "Grade"])
+
             // 10. The buttons on the Bookshelf card act on the player the card shows, by its bundle identifier, and only when it is running.
             final class Recorder: @unchecked Sendable { var scripts: [String] = [] }
             struct FakeExecutor: AppleScriptExecuting {
