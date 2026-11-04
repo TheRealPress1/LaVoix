@@ -131,6 +131,18 @@ enum NotchHubDebug {
             } else if widgetName.hasPrefix("messages") {
                 let store = MessagesStore.sample(access: widgetName == "messages-denied" ? .needsFullDiskAccess : .granted)
                 if widgetName == "messages-group" { store.select(5) }
+                // messages-times: a thread over several days, to see the times iMessage puts above a pause (invented words).
+                if widgetName == "messages-times" {
+                    let now = Date()
+                    let times = [
+                        ThreadMessage(id: 101, text: "can you send the deck?", date: now.addingTimeInterval(-86400 * 9), isFromMe: false, senderHandle: ""),
+                        ThreadMessage(id: 102, text: "sure, tonight", date: now.addingTimeInterval(-86400 * 9 + 60), isFromMe: true, senderHandle: ""),
+                        ThreadMessage(id: 103, text: "sent it", date: now.addingTimeInterval(-86400 * 1 - 3600 * 3), isFromMe: true, senderHandle: ""),
+                        ThreadMessage(id: 104, text: "got it, thank you", date: now.addingTimeInterval(-86400 * 1 - 3600 * 3 + 240), isFromMe: false, senderHandle: ""),
+                        ThreadMessage(id: 105, text: "are you free for a call?", date: now.addingTimeInterval(-3600 * 2), isFromMe: false, senderHandle: ""),
+                    ]
+                    store.apply(conversations: store.conversations, threads: [1: times], incoming: [], announce: false)
+                }
                 // Files in the thread: invented pictures, a video, a PDF (messages-files), their labels (messages-files-chips), or one enlarged (messages-files-enlarged).
                 var enlargedFileID: Int64?
                 if widgetName.hasPrefix("messages-files") {
@@ -1195,6 +1207,31 @@ enum NotchHubDebug {
             print("\(store.selectedChatID == 2 && store.thread.map(\.id) == [10] ? "PASS" : "FAIL") switching to a cached chat shows its thread in the same tick (was \(before) now \(store.thread.map(\.id)))")
             store.select(1)
             print("\(store.thread.map(\.id) == before ? "PASS" : "FAIL") switching back restores the first thread")
+
+            // The times above messages (invented dates, a fixed calendar and locale so the words do not depend on the machine).
+            do {
+                var cal = Calendar(identifier: .gregorian)
+                cal.timeZone = TimeZone(identifier: "America/New_York")!
+                let us = Locale(identifier: "en_US")
+                let now = cal.date(from: DateComponents(year: 2026, month: 11, day: 3, hour: 20, minute: 30))!
+                func at(_ y: Int, _ m: Int, _ d: Int, _ h: Int, _ min: Int) -> Date { cal.date(from: DateComponents(year: y, month: m, day: d, hour: h, minute: min))! }
+                func text(_ date: Date) -> String { ThreadTimestamp.text(for: date, now: now, calendar: cal, locale: us) }
+                let time = { (date: Date) -> String in let f = DateFormatter(); f.locale = us; f.calendar = cal; f.timeZone = cal.timeZone; f.dateStyle = .none; f.timeStyle = .short; return f.string(from: date) }
+                func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)") }
+                check("a message from today says Today and the time", text(at(2026, 11, 3, 19, 9)) == "Today \(time(at(2026, 11, 3, 19, 9)))" && text(at(2026, 11, 3, 19, 9)).hasPrefix("Today 7:09"))
+                check("a message from yesterday says Yesterday", text(at(2026, 11, 2, 15, 14)).hasPrefix("Yesterday 3:14"))
+                check("a message from the past week says the weekday", text(at(2026, 10, 30, 15, 14)).hasPrefix("Friday 3:14"))
+                check("an older message this year says weekday, month and day, then at and the time", text(at(2026, 8, 24, 15, 14)).hasPrefix("Mon, Aug 24 at 3:14"))
+                check("a message from another year says the year", text(at(2025, 8, 24, 15, 14)).hasPrefix("Aug 24, 2025 at 3:14"))
+                check("Today follows the calendar day, not the last 24 hours", text(at(2026, 11, 3, 0, 5)).hasPrefix("Today 12:05") && text(at(2026, 11, 2, 23, 55)).hasPrefix("Yesterday 11:55"))
+                func m(_ id: Int64, _ date: Date) -> ThreadMessage { ThreadMessage(id: id, text: "x", date: date, isFromMe: false, senderHandle: "") }
+                let thread = [m(1, now.addingTimeInterval(-7200 - 600)), m(2, now.addingTimeInterval(-7200 - 500)), m(3, now.addingTimeInterval(-7200 + 3000)), m(4, now.addingTimeInterval(-7200 + 3010)), m(5, now.addingTimeInterval(-60))]
+                check("the first message shown has a time above it", ThreadTimestamp.isShown(at: 0, in: thread))
+                check("a message close after the last has none", !ThreadTimestamp.isShown(at: 1, in: thread))
+                check("a pause of an hour or more brings one", ThreadTimestamp.isShown(at: 2, in: thread) == false && ThreadTimestamp.isShown(at: 4, in: thread))
+                check("a pause of exactly an hour counts", ThreadTimestamp.isShown(at: 1, in: [m(1, now), m(2, now.addingTimeInterval(ThreadTimestamp.pause))]) && !ThreadTimestamp.isShown(at: 1, in: [m(1, now), m(2, now.addingTimeInterval(ThreadTimestamp.pause - 1))]))
+                check("an index outside the thread has none, and an empty thread is fine", !ThreadTimestamp.isShown(at: 9, in: thread) && !ThreadTimestamp.isShown(at: 0, in: []))
+            }
 
             // Database failures must not look like "no conversations". A locked or unreadable database gives nil
             // (so the screen keeps what it has), while a readable empty one gives an empty list.

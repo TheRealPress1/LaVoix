@@ -330,7 +330,10 @@ private struct ThreadView: View {
             if self.staticLayout {
                 VStack(spacing: 5) {
                     ForEach(Array(self.store.thread.enumerated()), id: \.element.id) { index, message in
-                        Bubble(message: message, label: self.senderLabel(at: index), staticLayout: true)
+                        VStack(spacing: 3) {
+                            if ThreadTimestamp.isShown(at: index, in: self.store.thread) { ThreadStamp(date: message.date) }
+                            Bubble(message: message, label: self.senderLabel(at: index), staticLayout: true)
+                        }
                     }
                     Spacer(minLength: 0)
                 }
@@ -339,7 +342,11 @@ private struct ThreadView: View {
                     ScrollView(.vertical, showsIndicators: false) {
                         VStack(spacing: 5) {
                             ForEach(Array(self.store.thread.enumerated()), id: \.element.id) { index, message in
-                                Bubble(message: message, label: self.senderLabel(at: index), onHoverFile: { file, inside in self.hovering.hover(file, inside) }).id(message.id)
+                                VStack(spacing: 3) {
+                                    if ThreadTimestamp.isShown(at: index, in: self.store.thread) { ThreadStamp(date: message.date) }
+                                    Bubble(message: message, label: self.senderLabel(at: index), onHoverFile: { file, inside in self.hovering.hover(file, inside) })
+                                }
+                                .id(message.id)
                             }
                         }
                         .padding(.vertical, 2)
@@ -437,6 +444,20 @@ private struct ThreadView: View {
         guard !message.isFromMe, !message.senderHandle.isEmpty else { return nil }
         if index > 0, !thread[index - 1].isFromMe, thread[index - 1].senderHandle == message.senderHandle { return nil }
         return self.store.firstName(forHandle: message.senderHandle)
+    }
+}
+
+/// The centred time above a run of messages ("Today 7:09 PM"), in the quiet grey iMessage uses.
+private struct ThreadStamp: View {
+    let date: Date
+
+    var body: some View {
+        Text(ThreadTimestamp.text(for: self.date))
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(.white.opacity(0.4))
+            .lineLimit(1)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 4)
     }
 }
 

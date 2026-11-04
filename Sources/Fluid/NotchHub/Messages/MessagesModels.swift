@@ -47,6 +47,47 @@ struct ThreadMessage: Identifiable, Equatable {
     var textIsPlaceholder = false
 }
 
+/// The centred time above messages in a conversation, as iMessage shows it: above the first message shown and above any message that comes after a pause
+/// of an hour or more, so messages sent at different times can be told apart without a time on every bubble.
+nonisolated enum ThreadTimestamp {
+    /// How long a pause has to be before the next message gets a time above it.
+    static let pause: TimeInterval = 3600
+
+    /// Does the message at `index` get a time above it?
+    static func isShown(at index: Int, in thread: [ThreadMessage]) -> Bool {
+        guard thread.indices.contains(index) else { return false }
+        return index == 0 || thread[index].date.timeIntervalSince(thread[index - 1].date) >= self.pause
+    }
+
+    /// "Today 7:09 PM", "Yesterday 7:09 PM", "Monday 3:14 PM" (the past week), "Mon, Aug 24 at 3:14 PM" (earlier this year), "Aug 24, 2025 at 3:14 PM".
+    static func text(for date: Date, now: Date = Date(), calendar: Calendar = .current, locale: Locale = .current) -> String {
+        func formatter() -> DateFormatter {
+            let f = DateFormatter()
+            f.locale = locale
+            f.calendar = calendar
+            f.timeZone = calendar.timeZone
+            return f
+        }
+        func format(_ template: String) -> String {
+            let f = formatter()
+            f.setLocalizedDateFormatFromTemplate(template)
+            return f.string(from: date)
+        }
+        let time: String = {
+            let f = formatter()
+            f.dateStyle = .none
+            f.timeStyle = .short
+            return f.string(from: date)
+        }()
+        if calendar.isDate(date, inSameDayAs: now) { return "Today \(time)" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) { return "Yesterday \(time)" }
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 99
+        if days > 0, days < 7 { return "\(format("EEEE")) \(time)" }
+        if calendar.component(.year, from: date) == calendar.component(.year, from: now) { return "\(format("EEEMMMd")) at \(time)" }
+        return "\(format("yMMMd")) at \(time)"
+    }
+}
+
 /// A file attached to a message. Its bytes stay where Messages keeps them; only the path is held here.
 nonisolated struct MessageAttachment: Identifiable, Equatable {
     enum Kind: Equatable {
