@@ -135,6 +135,7 @@ enum NotchHubDebug {
             } else if widgetName.hasPrefix("messages") {
                 let store = MessagesStore.sample(access: widgetName == "messages-denied" ? .needsFullDiskAccess : .granted)
                 if widgetName == "messages-group" { store.select(5) }
+                let emojiOpen = widgetName == "messages-emoji"
                 // messages-times: a thread over several days, to see the times iMessage puts above a pause (invented words).
                 if widgetName == "messages-times" {
                     let now = Date()
@@ -160,7 +161,7 @@ enum NotchHubDebug {
                 }
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
-                    NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") { AnyView(MessagesWidgetView(store: store, staticLayout: true, previewEnlargedFileID: enlargedFileID)) },
+                    NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") { AnyView(MessagesWidgetView(store: store, staticLayout: true, previewEnlargedFileID: enlargedFileID, previewEmojiOpen: emojiOpen)) },
                 ])
                 model.selectedWidgetID = "messages"
                 model.setBadge("messages", 3)
@@ -1383,6 +1384,32 @@ enum NotchHubDebug {
                 chats.requestReplyFocus()
                 chats.requestReplyFocus()
                 check("each ask for the reply box is counted, so asking again for the same chat still starts typing", chats.replyFocusRequest == before + 2)
+            }
+
+            // A file that Messages was slow to show: only a real message of yours with a file, newly sent, counts as having arrived.
+            do {
+                func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)") }
+                let t0 = Date()
+                let file = MessageAttachment(id: 5, path: "/x/a.png", name: "a.png", kind: .image)
+                func msg(_ id: Int64, _ date: Date, me: Bool = true, files: [MessageAttachment]? = nil) -> ThreadMessage {
+                    var m = ThreadMessage(id: id, text: "x", date: date, isFromMe: me, senderHandle: ""); m.attachments = files ?? [file]; return m
+                }
+                check("a real file message of yours sent just now has arrived", SendConfirmation.fileAppeared(in: [msg(40, t0.addingTimeInterval(2))], since: t0))
+                check("the dimmed copy still waiting (no real id yet) does not count", !SendConfirmation.fileAppeared(in: [msg(-1, t0.addingTimeInterval(2))], since: t0))
+                check("an older file, someone else's file, and a message with no file do not count", !SendConfirmation.fileAppeared(in: [msg(41, t0.addingTimeInterval(-600)), msg(42, t0.addingTimeInterval(2), me: false), msg(43, t0.addingTimeInterval(2), files: [])], since: t0))
+                check("a few seconds of clock difference are allowed", SendConfirmation.fileAppeared(in: [msg(44, t0.addingTimeInterval(-6))], since: t0))
+            }
+
+            // The emoji strip: what it offers and how the recents are kept.
+            do {
+                func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)") }
+                let all = EmojiPalette.all
+                check("the palette has a good few emojis, each once", all.count >= 32 && Set(all).count == all.count)
+                check("each is one character on screen", all.allSatisfy { $0.count == 1 })
+                check("using one puts it first", EmojiPalette.recording("🔥", in: ["😂", "🔥", "👍"]) == ["🔥", "😂", "👍"])
+                check("an emoji is kept once, and the recents are cut to the limit", EmojiPalette.recording("😀", in: ["😀", "😂"]) == ["😀", "😂"] && EmojiPalette.recording("🎉", in: all.prefix(12).map { $0 }).count == EmojiPalette.recentLimit && EmojiPalette.recording("🎉", in: all.prefix(12).map { $0 }).first == "🎉")
+                let strip = EmojiPalette.strip(recents: ["🔥", "😂"])
+                check("the strip shows the recents first and every emoji once", strip.prefix(2).elementsEqual(["🔥", "😂"]) && Set(strip) == Set(all) && strip.count == all.count)
             }
 
             // Switching tabs from the keyboard: which keys count, and how the model steps (going round, and nothing while closed or dragging).

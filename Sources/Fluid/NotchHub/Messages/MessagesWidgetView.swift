@@ -7,21 +7,37 @@ struct MessagesWidgetView: View {
     @ObservedObject var store: MessagesStore
     /// Image previews can't draw scroll views or text fields; this swaps in static stand-ins.
     var staticLayout = false
+    @Environment(\.notchWidgetActive) private var widgetActive
     /// A still preview can't hover, so it can ask for one file's enlarged view to be drawn.
     var previewEnlargedFileID: Int64? = nil
+    /// Previews can't click: this draws the emoji strip open.
+    var previewEmojiOpen = false
     /// The conversation a dragged file is over.
     @State private var dropChatID: Int64?
 
     var body: some View {
-        switch self.store.access {
-        case .granted:
-            self.conversationsAndThread
-        case .needsFullDiskAccess:
-            self.permissionCard
-        case .missing:
-            self.infoCard(icon: "message", title: "Messages isn't set up on this Mac", detail: "Sign in to Messages and your conversations will show up here.")
-        case .unknown:
-            ProgressView().controlSize(.small).colorScheme(.dark).frame(maxWidth: .infinity, maxHeight: .infinity)
+        Group {
+            switch self.store.access {
+            case .granted:
+                self.conversationsAndThread
+            case .needsFullDiskAccess:
+                self.permissionCard
+            case .missing:
+                self.infoCard(icon: "message", title: "Messages isn't set up on this Mac", detail: "Sign in to Messages and your conversations will show up here.")
+            case .unknown:
+                ProgressView().controlSize(.small).colorScheme(.dark).frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        // Up to date while you look at it: a read the moment the tab appears (the notch's widgets are rebuilt each time it opens), and one every
+        // few seconds while it is on screen, on top of the one Messages' own file changes trigger and the slower one that runs all the time. A read
+        // that is still running absorbs the next, so a slow Mac is not piled on.
+        .onAppear { if !self.staticLayout { self.store.refresh(announce: false) } }
+        .task {
+            guard !self.staticLayout else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                if self.widgetActive { self.store.refresh(announce: false) }
+            }
         }
     }
 
@@ -66,7 +82,7 @@ struct MessagesWidgetView: View {
             }
             .frame(width: 232)
 
-            ThreadView(store: self.store, staticLayout: self.staticLayout, previewEnlargedFileID: self.previewEnlargedFileID)
+            ThreadView(store: self.store, staticLayout: self.staticLayout, previewEnlargedFileID: self.previewEnlargedFileID, previewEmojiOpen: self.previewEmojiOpen)
                 .frame(maxWidth: .infinity)
         }
         .foregroundStyle(.white)
@@ -307,6 +323,10 @@ private struct ThreadView: View {
     @ObservedObject var store: MessagesStore
     var staticLayout = false
     var previewEnlargedFileID: Int64? = nil
+    var previewEmojiOpen = false
+    @State private var emojiOpen = false
+    @State private var recentEmojis = NotchEmojiSettings.recents
+    private var showsEmoji: Bool { self.emojiOpen || self.previewEmojiOpen }
     @State private var draft = ""
     @FocusState private var focused: Bool
     /// A dragged file is over the thread.
@@ -372,6 +392,7 @@ private struct ThreadView: View {
                 StagedFilesBar(store: self.store, recipient: self.recipient)
             }
 
+            if self.showsEmoji { self.emojiStrip }
             HStack(spacing: 8) {
                 (self.staticLayout ? AnyView(Text("iMessage").foregroundStyle(.white.opacity(0.4)).frame(maxWidth: .infinity, alignment: .leading)) : AnyView(TextField("", text: self.$draft, prompt: Text("iMessage").foregroundStyle(.white.opacity(0.45))).foregroundStyle(.white).tint(.white)))
                     .textFieldStyle(.plain)
@@ -384,6 +405,15 @@ private struct ThreadView: View {
                     .background(Capsule().fill(Color.white.opacity(0.1)))
                     .contentShape(Capsule())
                     .onTapGesture { self.startTyping() }
+                Button { self.emojiOpen.toggle(); if self.emojiOpen { self.startTyping() } } label: {
+                    Image(systemName: "face.smiling")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.white.opacity(self.showsEmoji ? 0.9 : 0.5))
+                        .frame(width: 30, height: 30)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("Emoji")
                 Button(action: self.send) {
                     Image(systemName: self.store.isSending ? "ellipsis" : "arrow.up")
                         .font(.system(size: 12, weight: .bold))
@@ -426,6 +456,38 @@ private struct ThreadView: View {
             if isFocused { NotchHubController.shared.beginTextEntry() }
         }
         .onDisappear { NotchHubController.shared.endTextEntry() }
+    }
+
+    /// One row of emojis above the reply box (the conversation keeps its height): the ones used last first, then the common ones, scrolling sideways.
+    /// A tap adds the emoji to what is being typed and leaves the cursor in the box, so several can be added in a row.
+    private var emojiStrip: some View {
+        // A still cannot scroll, so it shows the first dozen instead of laying all of them out at their full width.
+        let items = self.staticLayout ? Array(EmojiPalette.strip(recents: self.recentEmojis).prefix(11)) : EmojiPalette.strip(recents: self.recentEmojis)
+        let row = HStack(spacing: 2) {
+            ForEach(items, id: \.self) { emoji in
+                Button { self.add(emoji) } label: {
+                    Text(emoji).font(.system(size: 20)).frame(width: 34, height: 32).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        return Group {
+            if self.staticLayout {
+                row.frame(maxWidth: .infinity, alignment: .leading).clipped()
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) { row }
+            }
+        }
+        .frame(height: 34)
+        .padding(.horizontal, 4)
+        .background(Capsule().fill(Color.white.opacity(0.1)))
+    }
+
+    private func add(_ emoji: String) {
+        self.draft += emoji
+        self.recentEmojis = EmojiPalette.recording(emoji, in: self.recentEmojis)
+        NotchEmojiSettings.recents = self.recentEmojis
+        self.startTyping()
     }
 
     /// Gives the notch the keyboard and puts the cursor in the reply box. The window has to become key before the field can take focus, hence the short wait.

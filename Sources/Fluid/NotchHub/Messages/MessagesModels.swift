@@ -47,6 +47,45 @@ struct ThreadMessage: Identifiable, Equatable {
     var textIsPlaceholder = false
 }
 
+/// Whether a file you sent has turned up in the thread as a real message of yours. A message only shown as pending (it has no real id yet) does not count.
+nonisolated enum SendConfirmation {
+    /// A real message from you with a file, sent at or after `since` (ten seconds of slack for the clocks of Messages and this Mac).
+    static func fileAppeared(in thread: [ThreadMessage], since: Date) -> Bool {
+        thread.contains { $0.id > 0 && $0.isFromMe && !$0.attachments.isEmpty && $0.date >= since.addingTimeInterval(-10) }
+    }
+}
+
+/// The emojis the reply box offers, and how the ones used last are kept. Common ones, in the order people reach for them; each is one character on screen.
+nonisolated enum EmojiPalette {
+    static let all: [String] = [
+        "😀", "😂", "🤣", "😊", "😍", "🥰", "😘", "😎", "🤔", "😭", "😅", "😉", "🙂", "🙃", "😴", "🥺",
+        "😢", "😡", "🤯", "🥳", "🙏", "👍", "👎", "👏", "🙌", "💪", "🤝", "👀", "🔥", "✨", "💯", "❤️",
+        "😬", "😮", "😤", "🤦", "🎉", "✅", "💀", "😈",
+    ]
+
+    /// How many recently used emojis are kept.
+    static let recentLimit = 8
+
+    /// `emoji` put first among the recents, once, and the list cut to `recentLimit`.
+    static func recording(_ emoji: String, in recents: [String]) -> [String] {
+        Array(([emoji] + recents.filter { $0 != emoji }).prefix(self.recentLimit))
+    }
+
+    /// What the strip shows: the recents first, then everything else once.
+    static func strip(recents: [String]) -> [String] {
+        recents + self.all.filter { !recents.contains($0) }
+    }
+}
+
+enum NotchEmojiSettings {
+    private static let key = "LaVoixNotchEmojiRecents"
+
+    static var recents: [String] {
+        get { UserDefaults.standard.stringArray(forKey: self.key) ?? [] }
+        set { UserDefaults.standard.set(newValue, forKey: self.key) }
+    }
+}
+
 /// The centred time above messages in a conversation, as iMessage shows it: above the first message shown and above any message that comes after a pause
 /// of an hour or more, so messages sent at different times can be told apart without a time on every bubble.
 nonisolated enum ThreadTimestamp {

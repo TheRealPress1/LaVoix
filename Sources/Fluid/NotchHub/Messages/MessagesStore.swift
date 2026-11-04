@@ -558,7 +558,9 @@ final class MessagesStore: ObservableObject {
                 }
                 self.markSeen(chatID)
                 var confirmed = false
-                for delay in [0.5, 1.0, 2.0, 4.0, 8.0] as [Double] {
+                // Messages can be slow to write a sent file where it is read from, especially when the Mac is short of memory: about fifty seconds
+                // are allowed before saying anything, where fifteen used to be, and then only that it is slow.
+                for delay in [0.5, 1.0, 2.0, 4.0, 8.0, 8.0, 8.0, 8.0, 8.0] as [Double] {
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     self.refresh(announce: false)
                     try? await Task.sleep(nanoseconds: 250_000_000)
@@ -566,12 +568,30 @@ final class MessagesStore: ObservableObject {
                 }
                 if !confirmed {
                     self.removePending(tempID)
-                    self.sendError = "Messages did not show \(url.lastPathComponent) as sent. Check the chat in Messages."
+                    self.sendError = "Messages is slow to show \(url.lastPathComponent). It may still arrive; check the chat in Messages if it does not."
+                    self.clearSlowNotice(for: url.lastPathComponent, chatID: chatID, since: started)
                     return
                 }
                 self.watchForFailure(of: url.lastPathComponent, chatID: chatID, since: started)
             }
             if !text.isEmpty { self.deliver(text, chatID: chatID, chatGUID: chatGUID) }
+        }
+    }
+
+    /// A send that Messages was slow to show may still arrive (it usually does). The notice stays until the real message is in the thread, and then it goes
+    /// by itself, so it never says a file did not arrive when it did. It gives up after ten minutes, or when something else has replaced the notice.
+    private func clearSlowNotice(for name: String, chatID: Int64, since: Date) {
+        Task {
+            for _ in 0..<120 {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard self.sendError?.contains(name) == true else { return }
+                self.refresh(announce: false)
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                if SendConfirmation.fileAppeared(in: self.threadCache[chatID] ?? [], since: since) {
+                    self.sendError = nil
+                    return
+                }
+            }
         }
     }
 
