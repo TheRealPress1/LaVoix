@@ -113,17 +113,18 @@ final class NotchHubController {
             if self?.toggleTabsIfTitleClicked(event) == true { return nil }
             return event
         }
-        // Command-Shift with the left or right arrow switches the tab while the notch is open. When the pointer is only resting on the notch the keyboard
-        // is still the other app's, so the global monitor can watch for the chord but cannot take it (that app gets it too, which is why it is only
-        // acted on while the notch is open); when the notch has the keyboard (typing in it) the local monitor sees the key first and takes it.
-        // Held down, the key switches once: a repeat does nothing, so the tabs are not thrashed.
+        // Command-Shift with the arrow keys drives the notch while it is open: left and right switch the tab, up folds the row of tab icons and down
+        // unfolds it (the tabs still switch with the row folded). When the pointer is only resting on the notch the keyboard is still the other app's,
+        // so the global monitor can watch for the chord but cannot take it (that app gets it too, which is why it is only acted on while the notch is
+        // open); when the notch has the keyboard (typing in it) the local monitor sees the key first and takes it.
+        // Held down, the key acts once: a repeat does nothing, so the tabs are not thrashed.
         self.keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
-            guard !event.isARepeat, let step = Self.tabSwitchStep(keyCode: event.keyCode, flags: event.modifierFlags) else { return }
-            Task { @MainActor in self?.switchTab(by: step) }
+            guard !event.isARepeat, let chord = Self.tabChord(keyCode: event.keyCode, flags: event.modifierFlags) else { return }
+            Task { @MainActor in self?.handleTabChord(chord) }
         }
         self.localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
-            guard let step = Self.tabSwitchStep(keyCode: event.keyCode, flags: event.modifierFlags) else { return event }
-            let taken = MainActor.assumeIsolated { event.isARepeat ? self?.model.isOpen == true : self?.switchTab(by: step) == true }
+            guard let chord = Self.tabChord(keyCode: event.keyCode, flags: event.modifierFlags) else { return event }
+            let taken = MainActor.assumeIsolated { event.isARepeat ? self?.model.isOpen == true : self?.handleTabChord(chord) == true }
             return taken ? nil : event
         }
         self.startMessagesIfEnabled()
@@ -774,14 +775,40 @@ final class NotchHubController {
     }
 
     /// Called after a tab click; says so in the log if the selection did not change.
-    /// Which way a key press moves the tabs: -1 for Command-Shift-Left, 1 for Command-Shift-Right, nil for anything else (any other modifier on top of those
-    /// two, such as Option, is a different shortcut and is left alone; Caps Lock and the flags arrow keys always carry are ignored).
-    nonisolated static func tabSwitchStep(keyCode: UInt16, flags: NSEvent.ModifierFlags) -> Int? {
+    /// What a keyboard shortcut for the notch's tabs means.
+    enum TabChord: Equatable {
+        /// -1: the tab before; 1: the tab after.
+        case step(Int)
+        /// Fold the row of tab icons along the bottom edge, so the notch is just the title and the page.
+        case foldTabs
+        case unfoldTabs
+    }
+
+    /// What a key press means: Command-Shift with Left (the tab before), Right (the tab after), Up (fold the tab icons) or Down (unfold them), nil for anything
+    /// else (any other modifier on top of those two, such as Option, is a different shortcut and is left alone; Caps Lock and the flags arrow keys always
+    /// carry are ignored).
+    nonisolated static func tabChord(keyCode: UInt16, flags: NSEvent.ModifierFlags) -> TabChord? {
         guard flags.intersection([.command, .shift, .option, .control]) == [.command, .shift] else { return nil }
         switch keyCode {
-        case 123: return -1
-        case 124: return 1
+        case 123: return .step(-1)
+        case 124: return .step(1)
+        case 126: return .foldTabs
+        case 125: return .unfoldTabs
         default: return nil
+        }
+    }
+
+    /// Does what the shortcut says if the notch is open. True when it did.
+    @discardableResult
+    func handleTabChord(_ chord: TabChord) -> Bool {
+        switch chord {
+        case let .step(step):
+            return self.switchTab(by: step)
+        case .foldTabs, .unfoldTabs:
+            let unfold = chord == .unfoldTabs
+            guard self.model.setTabRow(expanded: unfold) else { return false }
+            DebugLogger.shared.info("Tabs \(unfold ? "unfolded" : "folded") by keyboard", source: "NotchHub")
+            return true
         }
     }
 

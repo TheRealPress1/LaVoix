@@ -22,6 +22,14 @@ final class NotchHubModel: ObservableObject {
         self.selectedWidgetID = resolved.first?.id ?? ""
     }
 
+    /// Folds or unfolds the row of tab icons along the bottom edge. Does nothing (and says so) while the notch is closed or a file is being dragged over it.
+    @discardableResult
+    func setTabRow(expanded: Bool) -> Bool {
+        guard self.isOpen, !self.dropSplit else { return false }
+        self.tabsExpanded = expanded
+        return true
+    }
+
     /// Moves to the next tab (1) or the one before (-1), going round at the ends, and says which tab it landed on. Does nothing while the notch is closed,
     /// while a file is being dragged over it, or when there is only one tab.
     @discardableResult

@@ -1386,11 +1386,12 @@ enum NotchHubDebug {
                 func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)") }
                 typealias Hub = NotchHubController
                 let cs: NSEvent.ModifierFlags = [.command, .shift]
-                check("Command-Shift-Right is one step on and Left one step back", Hub.tabSwitchStep(keyCode: 124, flags: cs) == 1 && Hub.tabSwitchStep(keyCode: 123, flags: cs) == -1)
-                check("the flags arrow keys always carry, and Caps Lock, do not matter", Hub.tabSwitchStep(keyCode: 124, flags: cs.union([.numericPad, .function, .capsLock])) == 1)
-                check("without Command, or without Shift, an arrow key is left alone", Hub.tabSwitchStep(keyCode: 124, flags: [.shift]) == nil && Hub.tabSwitchStep(keyCode: 124, flags: [.command]) == nil && Hub.tabSwitchStep(keyCode: 123, flags: []) == nil)
-                check("another modifier on top makes it a different shortcut", Hub.tabSwitchStep(keyCode: 124, flags: cs.union([.option])) == nil && Hub.tabSwitchStep(keyCode: 124, flags: cs.union([.control])) == nil)
-                check("the up and down arrows and letters are not tab keys", Hub.tabSwitchStep(keyCode: 125, flags: cs) == nil && Hub.tabSwitchStep(keyCode: 126, flags: cs) == nil && Hub.tabSwitchStep(keyCode: 0, flags: cs) == nil)
+                check("Command-Shift-Right is one step on and Left one step back", Hub.tabChord(keyCode: 124, flags: cs) == .step(1) && Hub.tabChord(keyCode: 123, flags: cs) == .step(-1))
+                check("Command-Shift-Up folds the tab icons and Down unfolds them", Hub.tabChord(keyCode: 126, flags: cs) == .foldTabs && Hub.tabChord(keyCode: 125, flags: cs) == .unfoldTabs)
+                check("the flags arrow keys always carry, and Caps Lock, do not matter", Hub.tabChord(keyCode: 124, flags: cs.union([.numericPad, .function, .capsLock])) == .step(1) && Hub.tabChord(keyCode: 126, flags: cs.union([.numericPad, .function])) == .foldTabs)
+                check("without Command, or without Shift, an arrow key is left alone", Hub.tabChord(keyCode: 124, flags: [.shift]) == nil && Hub.tabChord(keyCode: 124, flags: [.command]) == nil && Hub.tabChord(keyCode: 123, flags: []) == nil && Hub.tabChord(keyCode: 126, flags: [.command]) == nil && Hub.tabChord(keyCode: 125, flags: [.shift]) == nil)
+                check("another modifier on top makes it a different shortcut", Hub.tabChord(keyCode: 124, flags: cs.union([.option])) == nil && Hub.tabChord(keyCode: 126, flags: cs.union([.control])) == nil && Hub.tabChord(keyCode: 125, flags: cs.union([.option])) == nil)
+                check("letters are not tab keys", Hub.tabChord(keyCode: 0, flags: cs) == nil && Hub.tabChord(keyCode: 36, flags: cs) == nil)
 
                 func tab(_ id: String) -> NotchWidget { NotchWidget(id: id, title: id, systemImage: "circle") { AnyView(EmptyView()) } }
                 let tabs = NotchHubModel(widgets: [tab("a"), tab("b"), tab("c")])
@@ -1406,6 +1407,19 @@ enum NotchHubDebug {
                 let single = NotchHubModel(widgets: [tab("only")])
                 single.open()
                 check("with one tab there is nothing to switch to", single.selectAdjacentTab(1) == nil && single.selectedWidgetID == "only")
+                // Folding and unfolding the row of tab icons, and switching tabs with it folded.
+                let row = NotchHubModel(widgets: [tab("a"), tab("b"), tab("c")])
+                check("a closed notch does not fold", row.setTabRow(expanded: true) == false && row.tabsExpanded == false)
+                row.open()
+                check("open, unfolding shows the row and folding hides it", row.setTabRow(expanded: true) && row.tabsExpanded && row.setTabRow(expanded: false) && !row.tabsExpanded)
+                check("folding when it is already folded is still the key being taken", row.setTabRow(expanded: false) && !row.tabsExpanded)
+                row.beginDropSplit()
+                check("while a file is dragged over the notch, the row is left alone", row.setTabRow(expanded: true) == false && row.tabsExpanded == false)
+                row.close()
+                let folded = NotchHubModel(widgets: [tab("a"), tab("b"), tab("c")])
+                folded.open()
+                folded.setTabRow(expanded: false)
+                check("with the row folded the tabs still switch", folded.selectAdjacentTab(1) == "b" && folded.tabsExpanded == false)
                 let stray = NotchHubModel(widgets: [tab("a"), tab("b")])
                 stray.open()
                 stray.selectedWidgetID = "gone"
