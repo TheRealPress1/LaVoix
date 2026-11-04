@@ -3075,6 +3075,12 @@ struct ContentView: View {
             if !stopOverlay.didRequestHide {
                 await self.menuBarManager.finishProcessingAndHideOverlay()
             }
+            // A Look with nothing said is still a Look: the screen was read when Control went down, and myOS is told with no words so it can say what it
+            // is looking at. Returning here without this left the companion spinning for its twenty seconds and nothing ever answered.
+            if route == .look {
+                DebugLogger.shared.info("Look: nothing was said, finishing the Look with the screen alone", source: "ContentView")
+                Task { await LookSession.shared.finish(said: "") }
+            }
             return
         }
 
