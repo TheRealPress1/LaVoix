@@ -68,18 +68,29 @@ struct NowPlayingWidgetView: View {
         return plain(track.title) == plain(title)
     }
 
-    /// The song's cover fills the whole card, as the artwork of the playing card does, with the title and artist over a dark fade at its foot.
+    /// The song's cover fills the whole card, as the artwork of the playing card does, with the title and artist and the playback buttons over a dark
+    /// fade at its foot.
     private var bookshelfCard: some View {
         let n = self.bookshelf.now
         return ZStack(alignment: .bottomLeading) {
             self.bookshelfCover(n.artworkURL)
-            LinearGradient(stops: [.init(color: .clear, location: 0.3), .init(color: .black.opacity(0.88), location: 1)], startPoint: .top, endPoint: .bottom)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(n.title ?? "").font(.system(size: 13.5, weight: .semibold)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                Text([n.artist, n.provider?.displayName].compactMap { $0 }.joined(separator: " · "))
-                    .font(.system(size: 11)).foregroundStyle(.white.opacity(0.75)).lineLimit(1)
+            LinearGradient(stops: [.init(color: .clear, location: 0.2), .init(color: .black.opacity(0.9), location: 1)], startPoint: .top, endPoint: .bottom)
+            VStack(alignment: .leading, spacing: 7) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(n.title ?? "").font(.system(size: 13.5, weight: .semibold)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    Text([n.artist, n.provider?.displayName].compactMap { $0 }.joined(separator: " · "))
+                        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.75)).lineLimit(1)
+                }
+                .shadow(color: .black.opacity(0.5), radius: 4)
+                // These act on the player the card shows (Spotify or Apple Music), not on whatever macOS names as playing.
+                HStack(spacing: 10) {
+                    NowPlayingControlButton(symbol: "backward.fill", size: 15, label: "Previous") { Task { await self.bookshelf.send(.previous) } }
+                    NowPlayingControlButton(symbol: n.state == .playing ? "pause.fill" : "play.fill", size: 22, label: n.state == .playing ? "Pause" : "Play") { Task { await self.bookshelf.send(.playPause) } }
+                    NowPlayingControlButton(symbol: "forward.fill", size: 15, label: "Next") { Task { await self.bookshelf.send(.next) } }
+                }
+                .frame(maxWidth: .infinity)
+                .shadow(color: .black.opacity(0.4), radius: 3)
             }
-            .shadow(color: .black.opacity(0.5), radius: 4)
             .padding(12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

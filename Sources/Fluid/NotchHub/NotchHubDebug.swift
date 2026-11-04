@@ -2044,6 +2044,38 @@ enum NotchHubDebug {
             check("the patched script runs and waits before exiting (a read of what is playing, nothing is sent to any player)", readOnly != nil && readOnly?.ok == true && (readOnly?.seconds ?? 0) >= NowPlayingCommands.lingerSeconds - 0.1)
             #endif
 
+            // 10. The buttons on the Bookshelf card act on the player the card shows, by its bundle identifier, and only when it is running.
+            final class Recorder: @unchecked Sendable { var scripts: [String] = [] }
+            struct FakeExecutor: AppleScriptExecuting {
+                let recorder: Recorder
+                let result: AppleScriptExecutionResult
+                func execute(_ source: String) -> AppleScriptExecutionResult { self.recorder.scripts.append(source); return self.result }
+            }
+            struct FakeDetector: PlayerApplicationDetecting {
+                let running: Bool
+                func isRunning(bundleIdentifier: String) -> Bool { self.running }
+            }
+            let capture = BookshelfCapture.shared
+            capture.debugShow(.init(state: .paused, provider: .spotify, title: "x", artist: "y", album: nil, artworkURL: nil, canRate: false, score: nil, note: nil, status: ""))
+            let rec = Recorder()
+            let sent = await capture.send(.playPause, executor: FakeExecutor(recorder: rec, result: .success(stringValue: nil, data: nil)), detector: FakeDetector(running: true))
+            check("play/pause on the Bookshelf card goes to Spotify by its bundle identifier", sent && rec.scripts == ["tell application id \"com.spotify.client\" to playpause"])
+            _ = await capture.send(.next, executor: FakeExecutor(recorder: rec, result: .success(stringValue: nil, data: nil)), detector: FakeDetector(running: true))
+            _ = await capture.send(.previous, executor: FakeExecutor(recorder: rec, result: .success(stringValue: nil, data: nil)), detector: FakeDetector(running: true))
+            check("next and previous are next track and previous track", rec.scripts.suffix(2) == ["tell application id \"com.spotify.client\" to next track", "tell application id \"com.spotify.client\" to previous track"])
+            capture.debugShow(.init(state: .playing, provider: .appleMusic, title: "x", artist: "y", album: nil, artworkURL: nil, canRate: false, score: nil, note: nil, status: ""))
+            _ = await capture.send(.playPause, executor: FakeExecutor(recorder: rec, result: .success(stringValue: nil, data: nil)), detector: FakeDetector(running: true))
+            check("with Apple Music's song on the card the command goes to Apple Music", rec.scripts.last == "tell application id \"com.apple.Music\" to playpause")
+            let before = rec.scripts.count
+            let notRunning = await capture.send(.playPause, executor: FakeExecutor(recorder: rec, result: .success(stringValue: nil, data: nil)), detector: FakeDetector(running: false))
+            check("a player that is not running is not started by a button", !notRunning && rec.scripts.count == before)
+            let denied = await capture.send(.playPause, executor: FakeExecutor(recorder: rec, result: .failure(code: -1743, message: "not allowed")), detector: FakeDetector(running: true))
+            check("a refused command says it did not go through", !denied)
+            capture.debugShow(.init(state: .notRunning, provider: nil, title: nil, artist: nil, album: nil, artworkURL: nil, canRate: false, score: nil, note: nil, status: ""))
+            let beforeNone = rec.scripts.count
+            let noSong = await capture.send(.playPause, executor: FakeExecutor(recorder: rec, result: .success(stringValue: nil, data: nil)), detector: FakeDetector(running: true))
+            check("with no song on the card nothing is sent", !noSong && rec.scripts.count == beforeNone)
+
             print(failures == 0 ? "NOWPLAYING HISTORY AUTOTEST ALL PASSED" : "NOWPLAYING HISTORY AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)
         }

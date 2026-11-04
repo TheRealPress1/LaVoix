@@ -31,6 +31,40 @@ final class BookshelfCapture: ObservableObject {
     /// For previews: shows a song without reading any player.
     func debugShow(_ now: Now) { self.now = now }
 
+    enum PlayerCommand: String {
+        case playPause = "playpause"
+        case next = "next track"
+        case previous = "previous track"
+    }
+
+    /// Sends a command to the player the card shows (Spotify or Apple Music), addressed by its bundle identifier, so it acts on that app and never on
+    /// whatever macOS happens to name as playing (a paused browser video can hold that slot while Spotify is what you are listening to). It uses the same
+    /// permission to control the player that reading it needs. An app that is not running is not started by a button. The state is read again afterwards, so
+    /// the icon shows what the player did. Returns whether the command was sent.
+    @discardableResult
+    func send(_ command: PlayerCommand, executor: any AppleScriptExecuting = SystemAppleScriptExecutor(), detector: any PlayerApplicationDetecting = SystemPlayerApplicationDetector()) async -> Bool {
+        guard let provider = self.now.provider else { return false }
+        let bundleID = provider.applicationBundleIdentifier
+        let script = "tell application id \"\(bundleID)\" to \(command.rawValue)"
+        let result: AppleScriptExecutionResult? = await Task.detached(priority: .userInitiated) {
+            guard detector.isRunning(bundleIdentifier: bundleID) else { return nil }
+            return executor.execute(script)
+        }.value
+        guard let result else {
+            DebugLogger.shared.info("Bookshelf player command \(command.rawValue): \(provider.displayName) is not running, nothing sent", source: "NowPlaying")
+            return false
+        }
+        switch result {
+        case .success:
+            DebugLogger.shared.info("Bookshelf player command \(command.rawValue) sent to \(provider.displayName)", source: "NowPlaying")
+        case let .failure(code, message):
+            DebugLogger.shared.warning("Bookshelf player command \(command.rawValue) to \(provider.displayName) failed: \(code.map(String.init) ?? "?") \(message ?? "")", source: "NowPlaying")
+            return false
+        }
+        await self.tick()
+        return true
+    }
+
     private let store: any BookshelfCredentialStoring
     private let site: URL
     private let sessionConfiguration: URLSessionConfiguration
