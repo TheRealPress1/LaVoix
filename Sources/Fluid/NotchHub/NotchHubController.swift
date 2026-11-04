@@ -542,9 +542,7 @@ final class NotchHubController {
         guard self.isRunning, !self.recordingOverlayIsVisible, !self.isEditingText else { return }
         self.model.selectedWidgetID = widgetID
         if let chatID { MessagesStore.shared.select(chatID) }
-        self.isPeeking = true
         self.open()
-        self.isPeeking = false
         self.peekTask?.cancel()
         self.peekTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -639,7 +637,7 @@ final class NotchHubController {
             guard let screen = NotchGeometry.targetScreen(),
                   NotchGeometry.triggerRect(for: screen).contains(NSEvent.mouseLocation),
                   !self.recordingOverlayIsVisible else { return }
-            self.open()
+            self.open(byHover: true)
         }
     }
 
@@ -660,14 +658,19 @@ final class NotchHubController {
         }
     }
 
-    private var isPeeking = false
+    /// The tab an open lands on by itself: Now Playing, but only when the notch is opened by resting the pointer on it while something plays. Every other
+    /// open (a clicked message card, a file dragged to the notch, a peek) chose its tab first and keeps it; this used to override that choice, so a clicked
+    /// notification landed on Now Playing whenever audio was playing.
+    nonisolated static func autoLandingTab(opensByHover: Bool, somethingPlaying: Bool, hasNowPlayingTab: Bool) -> String? {
+        opensByHover && somethingPlaying && hasNowPlayingTab ? "nowplaying" : nil
+    }
 
-    private func open() {
+    private func open(byHover: Bool = false) {
         if !self.model.isOpen {
             self.openedAt = Date()
-            // Opening by hovering lands on Now Playing while something plays; a peek has already chosen its own tab.
-            if !self.isPeeking, NotchNowPlayingStrip.shared.isPlayingAudibly || BookshelfCapture.shared.now.state == .playing, self.model.widgets.contains(where: { $0.id == "nowplaying" }) {
-                self.model.selectedWidgetID = "nowplaying"
+            let playing = NotchNowPlayingStrip.shared.isPlayingAudibly || BookshelfCapture.shared.now.state == .playing
+            if let tab = Self.autoLandingTab(opensByHover: byHover, somethingPlaying: playing, hasNowPlayingTab: self.model.widgets.contains(where: { $0.id == "nowplaying" })) {
+                self.model.selectedWidgetID = tab
             }
         }
         self.releaseTask?.cancel()

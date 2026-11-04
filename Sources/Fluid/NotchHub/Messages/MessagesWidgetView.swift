@@ -113,7 +113,11 @@ struct MessagesWidgetView: View {
             dropTargeted: self.dropChatID == conversation.id,
             staticLayout: self.staticLayout
         )
-        .onTapGesture { self.store.select(conversation.id) }
+        .onTapGesture {
+            self.store.select(conversation.id)
+            // Picking a chat by hand puts you in its reply box, so you can start typing at once.
+            self.store.requestReplyFocus()
+        }
         // A file dropped on a conversation opens it and waits there for Send.
         .modifier(MessagesDropTarget(enabled: !self.staticLayout, targeted: targeted) { providers in
             self.dropOnRow(providers, chatID: conversation.id)
@@ -379,13 +383,7 @@ private struct ThreadView: View {
                     .frame(height: 30)
                     .background(Capsule().fill(Color.white.opacity(0.1)))
                     .contentShape(Capsule())
-                    .onTapGesture {
-                        NotchHubController.shared.beginTextEntry()
-                        Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 120_000_000)
-                            self.focused = true
-                        }
-                    }
+                    .onTapGesture { self.startTyping() }
                 Button(action: self.send) {
                     Image(systemName: self.store.isSending ? "ellipsis" : "arrow.up")
                         .font(.system(size: 12, weight: .bold))
@@ -418,12 +416,25 @@ private struct ThreadView: View {
             NotchDropLoader.load(providers) { urls in store.stage(urls) }
         })
         .onChange(of: self.store.selectedChatID) { _, _ in self.draft = ""; self.hovering.clear() }
+        // A chat was picked by hand: the keyboard goes to its reply box.
+        .onChange(of: self.store.replyFocusRequest) { _, _ in
+            if !self.staticLayout { self.startTyping() }
+        }
         // However the field got focus (a click on the native field, or the tap handler), make sure the notch has the
         // keyboard and stays open while you type.
         .onChange(of: self.focused) { _, isFocused in
             if isFocused { NotchHubController.shared.beginTextEntry() }
         }
         .onDisappear { NotchHubController.shared.endTextEntry() }
+    }
+
+    /// Gives the notch the keyboard and puts the cursor in the reply box. The window has to become key before the field can take focus, hence the short wait.
+    private func startTyping() {
+        NotchHubController.shared.beginTextEntry()
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            self.focused = true
+        }
     }
 
     private func send() {

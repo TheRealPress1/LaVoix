@@ -1367,6 +1367,20 @@ enum NotchHubDebug {
             splitModel.close()
             print("\(!splitModel.dropSplit && splitModel.dropHover == nil ? "PASS" : "FAIL") closing the notch ends the split")
 
+            // Where an open lands (the bug: a clicked message card landed on Now Playing whenever audio was playing), and the reply box asked for on a chat click.
+            do {
+                func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)") }
+                typealias Hub = NotchHubController
+                check("opening by hovering while something plays lands on Now Playing", Hub.autoLandingTab(opensByHover: true, somethingPlaying: true, hasNowPlayingTab: true) == "nowplaying")
+                check("a clicked message card, a dragged file or a peek is not an open by hovering, so it keeps the tab it chose even while audio plays", Hub.autoLandingTab(opensByHover: false, somethingPlaying: true, hasNowPlayingTab: true) == nil)
+                check("hovering with nothing playing, or without a Now Playing tab, lands nowhere in particular", Hub.autoLandingTab(opensByHover: true, somethingPlaying: false, hasNowPlayingTab: true) == nil && Hub.autoLandingTab(opensByHover: true, somethingPlaying: true, hasNowPlayingTab: false) == nil)
+                let chats = MessagesStore.sample()
+                let before = chats.replyFocusRequest
+                chats.requestReplyFocus()
+                chats.requestReplyFocus()
+                check("each ask for the reply box is counted, so asking again for the same chat still starts typing", chats.replyFocusRequest == before + 2)
+            }
+
             // Switching tabs from the keyboard: which keys count, and how the model steps (going round, and nothing while closed or dragging).
             do {
                 func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)") }

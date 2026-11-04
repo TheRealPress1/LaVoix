@@ -21,6 +21,8 @@ final class MessagesStore: ObservableObject {
     @Published private(set) var hasLoaded = false
     /// True when the first read keeps failing, so the screen can say so and offer to try again.
     @Published private(set) var loadFailed = false
+    /// Goes up each time a chat is picked by hand, so the open thread puts you in its reply box ready to type (see ThreadView).
+    @Published private(set) var replyFocusRequest = 0
     @Published private(set) var thread: [ThreadMessage] = []
     @Published private(set) var unreadTotal = 0
     @Published private(set) var selectedChatID: Int64?
@@ -357,6 +359,9 @@ final class MessagesStore: ObservableObject {
         }
     }
 
+    /// Asks the open thread to take the keyboard in its reply box.
+    func requestReplyFocus() { self.replyFocusRequest += 1 }
+
     func select(_ chatID: Int64) {
         if self.newChat != nil { self.newChat = nil; self.thread = [] }
         self.markSeen(chatID)
@@ -627,6 +632,7 @@ final class MessagesStore: ObservableObject {
     func openResult(_ result: ComposeResult) {
         if let group = result.group {
             self.show(group)
+            self.requestReplyFocus()
             return
         }
         guard let handle = result.handle else { return }
@@ -638,12 +644,13 @@ final class MessagesStore: ObservableObject {
                     continuation.resume(returning: chat.flatMap { database.conversation(id: $0.id) })
                 }
             }
-            if let found { self.show(found); return }
+            if let found { self.show(found); self.requestReplyFocus(); return }
             self.selectedChatID = nil
             self.thread = []
             self.sendError = nil
             self.newChat = NewChat(name: result.name == handle ? handle : result.name, handle: handle)
             self.composing = false
+            self.requestReplyFocus()
         }
     }
 
