@@ -6,8 +6,14 @@ struct FrenchWidgetView: View {
     @ObservedObject var store: FrenchStore
     /// Image previews can't draw a text editor; this swaps in a static stand-in.
     var staticLayout = false
+    /// Previews can't click: this draws the "Copied" state.
+    var previewCopied = false
     @FocusState private var focused: Bool
     @State private var copied = false
+    @State private var copyToken = 0
+    @State private var hoveringResult = false
+
+    private var showsCopied: Bool { self.copied || self.previewCopied }
 
     /// Where the first line of typed text sits inside the editor: the editor's own padding plus the text view's side gap (5 pt) horizontally,
     /// and just the padding vertically. The placeholder, the static preview and the hint on the right all use these so they share one first line.
@@ -49,6 +55,7 @@ struct FrenchWidgetView: View {
                         .onExitCommand { self.focused = false; NotchHubController.shared.endTextEntry() }
                         .onChange(of: self.focused) { _, on in if on { NotchHubController.shared.beginTextEntry() } }
                         .onChange(of: self.store.input) { _, _ in self.copied = false }
+                        .onChange(of: self.store.phase) { _, _ in self.copied = false }
                     if self.store.input.isEmpty {
                         Text(Self.placeholder)
                             .font(.system(size: 13))
@@ -148,10 +155,9 @@ struct FrenchWidgetView: View {
 
     private func resultView(_ result: FrenchResult) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            // The same top inset as the editor's text, inside the scrolled content so a scrolled result still slides under the top edge.
-            self.scrolling { self.resultBody(result).padding(.top, Self.textInsetY) }
+            self.scrolling { self.resultBody(result) }
             HStack(spacing: 8) {
-                self.pill(self.copied ? "Copied" : "Copy", prominent: true, enabled: true) { self.copy(result.corrected) }
+                self.pill(self.showsCopied ? "Copied" : "Copy", prominent: true, enabled: true) { self.copy(result.corrected) }
                 self.pill("Keep editing", prominent: false, enabled: true) { self.store.keepEditing(); self.startTyping() }
                 Spacer(minLength: 0)
             }
@@ -172,42 +178,72 @@ struct FrenchWidgetView: View {
         }
     }
 
+    /// The result as a card, the same shape as the editor beside it: click anywhere on it to copy the text (no marks, just the text). What follows it
+    /// (the note, where it was translated from, the corrections) is inset to the card's own text.
     private func resultBody(_ result: FrenchResult) -> some View {
         VStack(alignment: .leading, spacing: 10) {
+            self.resultCard(result)
+            VStack(alignment: .leading, spacing: 10) {
+                self.resultDetails(result)
+            }
+            .padding(.horizontal, Self.textInsetX)
+        }
+    }
+
+    private func resultCard(_ result: FrenchResult) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
             Text(self.marked(result))
                 .font(.system(size: 13))
-                .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if let note = result.note {
-                Text(note).font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.55)).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer(minLength: 0)
+                // Always there, so nobody has to find out that the text is the button; it turns into "Copied" when it has been.
+                Label(self.showsCopied ? "Copied" : "Click to copy", systemImage: self.showsCopied ? "checkmark" : "doc.on.doc")
+                    .labelStyle(.titleAndIcon)
+                    .font(.system(size: 10.5, weight: self.showsCopied ? .semibold : .regular))
+                    .foregroundStyle(.white.opacity(self.showsCopied ? 0.9 : (self.hoveringResult ? 0.6 : 0.35)))
             }
-            if let from = result.translatedFrom {
-                Text("Translated from \(from)")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.4))
-                    .textCase(.uppercase)
-            } else if result.changes.isEmpty {
-                Text(result.note == nil ? "Already correct: nothing to change." : "")
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(Color(red: 0.45, green: 0.85, blue: 0.55))
-            } else {
-                Text("\(result.changes.count) correction\(result.changes.count == 1 ? "" : "s")")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.4))
-                    .textCase(.uppercase)
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(result.changes) { change in
-                        VStack(alignment: .leading, spacing: 1) {
-                            HStack(spacing: 5) {
-                                Text(change.before).strikethrough().foregroundStyle(.white.opacity(0.5))
-                                Image(systemName: "arrow.right").font(.system(size: 8, weight: .bold)).foregroundStyle(.white.opacity(0.4))
-                                Text(change.after).fontWeight(.medium)
-                            }
-                            .font(.system(size: 12))
-                            if !change.why.isEmpty {
-                                Text(change.why).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)).fixedSize(horizontal: false, vertical: true)
-                            }
+        }
+        .padding(.horizontal, Self.textInsetX)
+        .padding(.vertical, Self.textInsetY)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(self.showsCopied ? 0.2 : (self.hoveringResult ? 0.14 : 0.08))))
+        .contentShape(Rectangle())
+        .onHover { self.hoveringResult = $0 }
+        .onTapGesture { self.copy(result.corrected) }
+        .help("Copy the text")
+    }
+
+    @ViewBuilder
+    private func resultDetails(_ result: FrenchResult) -> some View {
+        if let note = result.note {
+            Text(note).font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.55)).fixedSize(horizontal: false, vertical: true)
+        }
+        if let from = result.translatedFrom {
+            Text("Translated from \(from)")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.4))
+                .textCase(.uppercase)
+        } else if result.changes.isEmpty {
+            Text(result.note == nil ? "Already correct: nothing to change." : "")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(Color(red: 0.45, green: 0.85, blue: 0.55))
+        } else {
+            Text("\(result.changes.count) correction\(result.changes.count == 1 ? "" : "s")")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.4))
+                .textCase(.uppercase)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(result.changes) { change in
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 5) {
+                            Text(change.before).strikethrough().foregroundStyle(.white.opacity(0.5))
+                            Image(systemName: "arrow.right").font(.system(size: 8, weight: .bold)).foregroundStyle(.white.opacity(0.4))
+                            Text(change.after).fontWeight(.medium)
+                        }
+                        .font(.system(size: 12))
+                        if !change.why.isEmpty {
+                            Text(change.why).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)).fixedSize(horizontal: false, vertical: true)
                         }
                     }
                 }
@@ -231,6 +267,13 @@ struct FrenchWidgetView: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         self.copied = true
+        // "Copied" goes back to "Click to copy" after a moment, so a second click later is understood as another copy.
+        self.copyToken += 1
+        let token = self.copyToken
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            if self.copyToken == token { self.copied = false }
+        }
     }
 
     private func pill(_ title: String, prominent: Bool, enabled: Bool, action: @escaping () -> Void) -> some View {

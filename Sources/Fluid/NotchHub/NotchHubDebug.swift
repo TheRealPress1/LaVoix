@@ -149,14 +149,14 @@ enum NotchHubDebug {
                 model.selectedWidgetID = "messages"
                 model.setBadge("messages", 3)
             } else if widgetName.hasPrefix("french") {
-                // french / french-languages (the destination list open) / french-translated (English in, French out) / french-english (English, destination Spanish: the button says Translate) / french-done / french-clean / french-allow / french-working / french-failed: invented French with the mistakes a quick email has.
+                // french / french-languages (the destination list open) / french-translated (English in, French out) / french-english (English, destination Spanish: the button says Translate) / french-copied (the result after a click) / french-done / french-clean / french-allow / french-working / french-failed: invented French with the mistakes a quick email has.
                 let store = FrenchStore(destination: widgetName == "french-english" ? .spanish : .french)
                 store.persist = { _ in }
                 let typed = widgetName == "french-translated" ? Self.frenchSampleEnglish : Self.frenchSampleTyped
                 store.input = widgetName == "french-clean" ? Self.frenchSampleCorrected : typed
                 switch widgetName {
                 case "french-translated": store.debugShow(.done(FrenchResult(corrected: Self.frenchSampleTranslated, changes: [], note: nil, translatedFrom: "English")), from: typed)
-                case "french-done": store.debugShow(.done(Self.frenchSampleResult), from: typed)
+                case "french-done", "french-copied": store.debugShow(.done(Self.frenchSampleResult), from: typed)
                 case "french-clean": store.debugShow(.done(FrenchResult(corrected: Self.frenchSampleCorrected, changes: [], note: nil)), from: Self.frenchSampleCorrected)
                 case "french-allow": store.debugShow(.needsAllow, from: typed)
                 case "french-working": store.debugShow(.working, from: typed)
@@ -166,7 +166,7 @@ enum NotchHubDebug {
                 }
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
-                    NotchWidget(id: "french", title: "Translate", systemImage: "highlighter", headerAccessory: { AnyView(FrenchLanguagePicker(store: store, startOpen: widgetName == "french-languages")) }) { AnyView(FrenchWidgetView(store: store, staticLayout: true)) },
+                    NotchWidget(id: "french", title: "Translate", systemImage: "highlighter", headerAccessory: { AnyView(FrenchLanguagePicker(store: store, startOpen: widgetName == "french-languages")) }) { AnyView(FrenchWidgetView(store: store, staticLayout: true, previewCopied: widgetName == "french-copied")) },
                 ])
                 model.selectedWidgetID = "french"
             } else if widgetName.hasPrefix("dropsplit") {
