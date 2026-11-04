@@ -36,6 +36,8 @@ final class NotchHubController {
     private var becomeKeyObserver: NSObjectProtocol?
     private var clickMonitor: Any?
     private var localClickMonitor: Any?
+    private var keyMonitor: Any?
+    private var localKeyMonitor: Any?
     private var stallTask: Task<Void, Never>?
     private(set) var isEditingText = false
 
@@ -111,6 +113,19 @@ final class NotchHubController {
             if self?.toggleTabsIfTitleClicked(event) == true { return nil }
             return event
         }
+        // Command-Shift with the left or right arrow switches the tab while the notch is open. When the pointer is only resting on the notch the keyboard
+        // is still the other app's, so the global monitor can watch for the chord but cannot take it (that app gets it too, which is why it is only
+        // acted on while the notch is open); when the notch has the keyboard (typing in it) the local monitor sees the key first and takes it.
+        // Held down, the key switches once: a repeat does nothing, so the tabs are not thrashed.
+        self.keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            guard !event.isARepeat, let step = Self.tabSwitchStep(keyCode: event.keyCode, flags: event.modifierFlags) else { return }
+            Task { @MainActor in self?.switchTab(by: step) }
+        }
+        self.localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            guard let step = Self.tabSwitchStep(keyCode: event.keyCode, flags: event.modifierFlags) else { return event }
+            let taken = MainActor.assumeIsolated { event.isARepeat ? self?.model.isOpen == true : self?.switchTab(by: step) == true }
+            return taken ? nil : event
+        }
         self.startMessagesIfEnabled()
         self.startWhatsAppAlertsIfEnabled()
         ConnectionsStore.shared.restoreBadge()
@@ -171,6 +186,10 @@ final class NotchHubController {
         self.clickMonitor = nil
         if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor) }
         self.localClickMonitor = nil
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        self.keyMonitor = nil
+        if let localKeyMonitor { NSEvent.removeMonitor(localKeyMonitor) }
+        self.localKeyMonitor = nil
         self.stopStallWatch()
         self.prewarmTask?.cancel()
         ClipboardStore.shared.stop()
@@ -752,6 +771,25 @@ final class NotchHubController {
     }
 
     /// Called after a tab click; says so in the log if the selection did not change.
+    /// Which way a key press moves the tabs: -1 for Command-Shift-Left, 1 for Command-Shift-Right, nil for anything else (any other modifier on top of those
+    /// two, such as Option, is a different shortcut and is left alone; Caps Lock and the flags arrow keys always carry are ignored).
+    nonisolated static func tabSwitchStep(keyCode: UInt16, flags: NSEvent.ModifierFlags) -> Int? {
+        guard flags.intersection([.command, .shift, .option, .control]) == [.command, .shift] else { return nil }
+        switch keyCode {
+        case 123: return -1
+        case 124: return 1
+        default: return nil
+        }
+    }
+
+    /// Switches to the neighbouring tab if the notch is open. True when it did.
+    @discardableResult
+    func switchTab(by step: Int) -> Bool {
+        guard let id = self.model.selectAdjacentTab(step) else { return false }
+        DebugLogger.shared.info("Tab switched by keyboard to \(id)", source: "NotchHub")
+        return true
+    }
+
     func verifyTabSwitch(to id: String) {
         DebugLogger.shared.info("Tab click on \(id) (was \(self.model.selectedWidgetID))", source: "NotchHub")
         Task { @MainActor [weak self] in

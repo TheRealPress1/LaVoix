@@ -22,6 +22,18 @@ final class NotchHubModel: ObservableObject {
         self.selectedWidgetID = resolved.first?.id ?? ""
     }
 
+    /// Moves to the next tab (1) or the one before (-1), going round at the ends, and says which tab it landed on. Does nothing while the notch is closed,
+    /// while a file is being dragged over it, or when there is only one tab.
+    @discardableResult
+    func selectAdjacentTab(_ step: Int) -> String? {
+        guard self.isOpen, !self.dropSplit, self.widgets.count > 1 else { return nil }
+        let ids = self.widgets.map(\.id)
+        let current = ids.firstIndex(of: self.selectedWidgetID) ?? 0
+        let next = ((current + step) % ids.count + ids.count) % ids.count
+        self.selectedWidgetID = ids[next]
+        return ids[next]
+    }
+
     func setExtraHeight(_ height: CGFloat) {
         let clamped = min(max(height.rounded(), -(NotchGeometry.maxShrink)), 340)
         guard clamped != self.extraHeight else { return }

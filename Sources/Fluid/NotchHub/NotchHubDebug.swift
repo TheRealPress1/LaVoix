@@ -1367,6 +1367,37 @@ enum NotchHubDebug {
             splitModel.close()
             print("\(!splitModel.dropSplit && splitModel.dropHover == nil ? "PASS" : "FAIL") closing the notch ends the split")
 
+            // Switching tabs from the keyboard: which keys count, and how the model steps (going round, and nothing while closed or dragging).
+            do {
+                func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)") }
+                typealias Hub = NotchHubController
+                let cs: NSEvent.ModifierFlags = [.command, .shift]
+                check("Command-Shift-Right is one step on and Left one step back", Hub.tabSwitchStep(keyCode: 124, flags: cs) == 1 && Hub.tabSwitchStep(keyCode: 123, flags: cs) == -1)
+                check("the flags arrow keys always carry, and Caps Lock, do not matter", Hub.tabSwitchStep(keyCode: 124, flags: cs.union([.numericPad, .function, .capsLock])) == 1)
+                check("without Command, or without Shift, an arrow key is left alone", Hub.tabSwitchStep(keyCode: 124, flags: [.shift]) == nil && Hub.tabSwitchStep(keyCode: 124, flags: [.command]) == nil && Hub.tabSwitchStep(keyCode: 123, flags: []) == nil)
+                check("another modifier on top makes it a different shortcut", Hub.tabSwitchStep(keyCode: 124, flags: cs.union([.option])) == nil && Hub.tabSwitchStep(keyCode: 124, flags: cs.union([.control])) == nil)
+                check("the up and down arrows and letters are not tab keys", Hub.tabSwitchStep(keyCode: 125, flags: cs) == nil && Hub.tabSwitchStep(keyCode: 126, flags: cs) == nil && Hub.tabSwitchStep(keyCode: 0, flags: cs) == nil)
+
+                func tab(_ id: String) -> NotchWidget { NotchWidget(id: id, title: id, systemImage: "circle") { AnyView(EmptyView()) } }
+                let tabs = NotchHubModel(widgets: [tab("a"), tab("b"), tab("c")])
+                check("a closed notch does not switch", tabs.selectAdjacentTab(1) == nil && tabs.selectedWidgetID == "a")
+                tabs.open()
+                check("open, Right goes to the next tab", tabs.selectAdjacentTab(1) == "b" && tabs.selectedWidgetID == "b")
+                check("Left goes back", tabs.selectAdjacentTab(-1) == "a" && tabs.selectedWidgetID == "a")
+                check("Left from the first tab goes round to the last", tabs.selectAdjacentTab(-1) == "c")
+                check("Right from the last tab goes round to the first", tabs.selectAdjacentTab(1) == "a")
+                tabs.beginDropSplit()
+                check("while a file is dragged over the notch, tabs do not switch", tabs.selectAdjacentTab(1) == nil && tabs.selectedWidgetID == "a")
+                tabs.close()
+                let single = NotchHubModel(widgets: [tab("only")])
+                single.open()
+                check("with one tab there is nothing to switch to", single.selectAdjacentTab(1) == nil && single.selectedWidgetID == "only")
+                let stray = NotchHubModel(widgets: [tab("a"), tab("b")])
+                stray.open()
+                stray.selectedWidgetID = "gone"
+                check("a selected tab that no longer exists steps from the first", stray.selectAdjacentTab(1) == "b")
+            }
+
             // What a drop hands over: a file stays where it is, image data from a browser becomes a file.
             let fileProvider = NSItemProvider(object: photo as NSURL)
             let loadedFile: [URL] = await withCheckedContinuation { continuation in
