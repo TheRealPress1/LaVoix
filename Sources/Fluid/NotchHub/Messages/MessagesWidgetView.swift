@@ -375,6 +375,7 @@ private struct ThreadView: View {
                         }
                         .padding(.vertical, 2)
                     }
+                    .simultaneousGesture(TapGesture().onEnded { self.emojiOpen = false })
                     .onChange(of: self.store.thread) { _, thread in
                         if let last = thread.last { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
@@ -404,7 +405,7 @@ private struct ThreadView: View {
                     .frame(height: 30)
                     .background(Capsule().fill(Color.white.opacity(0.1)))
                     .contentShape(Capsule())
-                    .onTapGesture { self.startTyping() }
+                    .onTapGesture { self.emojiOpen = false; self.startTyping() }
                 Button { self.emojiOpen.toggle(); if self.emojiOpen { self.startTyping() } } label: {
                     Image(systemName: "face.smiling")
                         .font(.system(size: 16))
@@ -445,9 +446,10 @@ private struct ThreadView: View {
             let store = self.store
             NotchDropLoader.load(providers) { urls in store.stage(urls) }
         })
-        .onChange(of: self.store.selectedChatID) { _, _ in self.draft = ""; self.hovering.clear() }
+        .onChange(of: self.store.selectedChatID) { _, _ in self.draft = ""; self.hovering.clear(); self.emojiOpen = false }
         // A chat was picked by hand: the keyboard goes to its reply box.
         .onChange(of: self.store.replyFocusRequest) { _, _ in
+            self.emojiOpen = false
             if !self.staticLayout { self.startTyping() }
         }
         // However the field got focus (a click on the native field, or the tap handler), make sure the notch has the
