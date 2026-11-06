@@ -364,7 +364,8 @@ final class NotchHubController {
     }
 
     private func startMessagesIfEnabled() {
-        guard NotchMessagesSettings.isEnabled else { return }
+        // Likewise a test or render run never starts the Messages reader.
+        guard NotchMessagesSettings.isEnabled, !DiagnosticRun.isActive else { return }
         self.model.reloadWidgets()
         let store = MessagesStore.shared
         store.onIncoming = { [weak self] message, name in
@@ -402,7 +403,8 @@ final class NotchHubController {
     }
 
     private func startWhatsAppAlertsIfEnabled() {
-        guard NotchWhatsAppSettings.alertsEnabled, WhatsAppSender.isAvailable else {
+        // A test or render run never starts the watcher: it would read the user's real WhatsApp database from a copy of the app that is not the engine.
+        guard NotchWhatsAppSettings.alertsEnabled, WhatsAppSender.isAvailable, !DiagnosticRun.isActive else {
             WhatsAppAlerts.shared.stop()
             self.whatsAppBadgeObserver = nil
             self.model.setBadge("whatsapp", 0)
@@ -498,6 +500,8 @@ final class NotchHubController {
             if self.model.widgets.contains(where: { $0.id == "whatsapp" }) {
                 self.model.selectedWidgetID = "whatsapp"
                 WhatsAppStore.shared.open(phone: phone, name: banner.title)
+                // The cursor goes to the reply box once the chat is on screen (the request is kept for a few seconds, because the notch is still opening).
+                WhatsAppStore.shared.requestReplyFocus()
                 self.open()
             } else if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "net.whatsapp.WhatsApp") {
                 NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
@@ -506,6 +510,8 @@ final class NotchHubController {
         }
         self.model.selectedWidgetID = "messages"
         MessagesStore.shared.select(banner.chatID)
+        // Answering a message you were just shown: the cursor goes to the reply box once the chat is on screen.
+        MessagesStore.shared.requestReplyFocus()
         self.open()
     }
 
@@ -558,6 +564,11 @@ final class NotchHubController {
 
     // MARK: - Typing
 
+    /// Whether the cursor is really in a text field of the notch: the notch is the key window and a field is being edited. `isEditingText` only says it was asked for.
+    var hasTextFocus: Bool {
+        (self.window?.isKeyWindow ?? false) && self.window?.firstResponder is NSTextView
+    }
+
     /// Lets the notch take the keyboard while a reply is being typed.
     func beginTextEntry() {
         guard let window else { return }
@@ -566,9 +577,55 @@ final class NotchHubController {
         self.closeTask = nil
         window.allowsKey = true
         window.makeKey()
+        // AppKit can think this panel is already the key window when it is not (it is still its app's key window after `resignKey` was called on it by hand, in
+        // `endTextEntry`), and then `makeKey` does nothing at all: the cursor sits in a field, but the keys go elsewhere. Ordering the panel out and back in makes
+        // AppKit forget that, and the key can be given again.
+        // At most twice a second, so a panel that cannot take the key for some other reason is not ordered out and back in over and over.
+        if !window.isKeyWindow, Date().timeIntervalSince(self.lastKeyReset) > 0.5 {
+            self.lastKeyReset = Date()
+            DebugLogger.shared.info("Notch asked for the keyboard but is not the key window; resetting", source: "NotchHub")
+            window.orderOut(nil)
+            window.orderFrontRegardless()
+            window.makeKey()
+        }
+    }
+
+    private var cursorTask: Task<Void, Never>?
+    private var lastKeyReset = Date.distantPast
+
+    /// Puts the cursor in a text field of the notch (`setFocus` sets that field's SwiftUI focus), for a click or a message card that should leave you ready to
+    /// type. Takes the keyboard first, then runs `placeCursorLoop`. Letting go of the keyboard (`endTextEntry`) stops it.
+    func placeCursor(setFocus: @escaping @MainActor (Bool) -> Void) {
+        self.cursorTask?.cancel()
+        self.beginTextEntry()
+        self.cursorTask = Task { @MainActor [weak self] in await self?.placeCursorLoop(setFocus: setFocus) }
+    }
+
+    /// Sets the field's focus once the window has had a moment to become key, then looks again a few times until the cursor really is in a field with the notch as
+    /// the key window. Two different things can be missing, and each has its own remedy: if the cursor is not in a field, the field's focus is set again; if it is in
+    /// one but the notch is not the key window (a panel that only becomes key for a field can give that up again when the focus is switched off and on), only the
+    /// keyboard is asked for again. Switching the focus off and on while the cursor is already in a field would itself cost the notch the keyboard.
+    func placeCursorLoop(setFocus: @escaping @MainActor (Bool) -> Void) async {
+        for (attempt, pause) in ([120, 300, 500, 900, 1400] as [UInt64]).enumerated() {
+            try? await Task.sleep(nanoseconds: pause * 1_000_000)
+            if Task.isCancelled { return }
+            if attempt > 0, self.hasTextFocus { return }
+            let cursorIsInAField = self.window?.firstResponder is NSTextView
+            if attempt == 0 || !cursorIsInAField {
+                if attempt > 0 {
+                    setFocus(false)
+                    await Task.yield()
+                }
+                setFocus(true)
+                await Task.yield()
+            }
+            if !(self.window?.isKeyWindow ?? false) { self.beginTextEntry() }
+        }
     }
 
     func endTextEntry() {
+        self.cursorTask?.cancel()
+        self.cursorTask = nil
         guard self.isEditingText else { return }
         self.isEditingText = false
         window?.allowsKey = false

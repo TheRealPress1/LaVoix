@@ -77,6 +77,9 @@ extension NotchHubDebug {
                 Row(pk: 32, session: 11, mine: false, type: 1, text: nil, path: relative + "photo.jpg", title: nil),
                 Row(pk: 33, session: 11, mine: false, type: 59, text: nil, path: nil, title: nil),
                 Row(pk: 34, session: 12, mine: false, type: 10, text: nil, path: nil, title: nil),
+                // GIFs (type 11): kept as short silent mp4 files; one downloaded, one not.
+                Row(pk: 35, session: 13, mine: false, type: 11, text: nil, path: relative + "clip.mp4", title: nil),
+                Row(pk: 36, session: 14, mine: false, type: 11, text: nil, path: nil, title: nil),
             ]
             func quoted(_ value: String?) -> String { value.map { "'" + $0.replacingOccurrences(of: "'", with: "''") + "'" } ?? "NULL" }
             let base = Date().timeIntervalSince1970 - 978_307_200 - 30
@@ -89,10 +92,10 @@ extension NotchHubDebug {
                 """
                 if withMedia { sql += "CREATE TABLE ZWAMEDIAITEM (Z_PK INTEGER PRIMARY KEY, ZMESSAGE INTEGER, ZMEDIALOCALPATH TEXT, ZTHUMBNAILLOCALPATH TEXT, ZTITLE TEXT);\n" }
                 // The newest message of each chat.
-                let newest: [Int: Int] = [1: 14, 2: 20, 3: 21, 4: 22, 5: 23, 6: 24, 7: 25, 8: 26, 9: 27, 10: 31, 11: 33, 12: 34]
+                let newest: [Int: Int] = [1: 14, 2: 20, 3: 21, 4: 22, 5: 23, 6: 24, 7: 25, 8: 26, 9: 27, 10: 31, 11: 33, 12: 34, 13: 35, 14: 36]
                 // What the chat's own "last text" holds: encoded data (as for real events), and, for chat 11, words that belong to no message that is shown.
                 let lastTexts: [Int: String] = [10: encoded + encoded, 11: "words of the event row, never to be borrowed"]
-                for session in 1...12 {
+                for session in 1...14 {
                     let last = newest[session]!
                     sql += "INSERT INTO ZWACHATSESSION VALUES (\(session), '1555123000\(session)@s.whatsapp.net', 'Chat \(session)', \(base + Double(last) * 0.01), \(quoted(lastTexts[session])), 0, 0, 0, 0, \(last));\n"
                 }
@@ -134,7 +137,7 @@ extension NotchHubDebug {
             // The list.
             let chats = WhatsAppDatabase.recents(in: container) ?? []
             func chat(_ number: Int) -> WhatsAppChat? { chats.first { $0.phone == "1555123000\(number)" } }
-            check("the list has every chat", chats.count == 12)
+            check("the list has every chat", chats.count == 14)
             check("a chat whose newest message is a bare photo carries the file for the tiny picture, and still says Photo", chat(2)?.lastFile?.kind == .image && chat(2)?.lastText == "Photo")
             check("a chat whose newest message has a caption shows the caption and no tiny picture", chat(3)?.lastText == "from the terrace" && chat(3)?.lastFile == nil)
             check("a chat whose newest message is text has no tiny picture", chat(4)?.lastText == "see you at 7" && chat(4)?.lastFile == nil)
@@ -153,7 +156,13 @@ extension NotchHubDebug {
             }
             check("in every chat the list says what the last bubble of the thread says", disagree.isEmpty)
             check("the events and the call do not show up in a thread", (WhatsAppDatabase.thread(phone: "155512300010", in: container) ?? []).map(\.id) == [30] && (WhatsAppDatabase.thread(phone: "155512300012", in: container) ?? []).isEmpty)
-            check("without the media table the list still loads, with the plain words", (WhatsAppDatabase.recents(in: dir.appendingPathComponent("old").path) ?? []).count == 12 && (WhatsAppDatabase.recents(in: dir.appendingPathComponent("old").path) ?? []).allSatisfy { $0.lastFile == nil })
+            if videoWritten {
+                let gifThread = WhatsAppDatabase.thread(phone: "155512300013", in: container) ?? []
+                check("a GIF is a video tile marked as a GIF, and the word GIF gives way to it", gifThread.first?.attachments.first?.kind == .video && gifThread.first?.attachments.first?.isGIF == true && gifThread.first?.text == "GIF" && gifThread.first?.textIsPlaceholder == true)
+                check("a chat whose newest message is a GIF carries its file for the tiny picture, and says GIF", chat(13)?.lastFile?.isGIF == true && chat(13)?.lastFile?.kind == .video && chat(13)?.lastText == "GIF")
+            } else { print("SKIP video could not be written on this Mac, so the GIF files are missing") }
+            check("a GIF that is not downloaded is the plain word GIF, in the chat and in the list", (WhatsAppDatabase.thread(phone: "155512300014", in: container) ?? []).first?.attachments.isEmpty == true && (WhatsAppDatabase.thread(phone: "155512300014", in: container) ?? []).first?.text == "GIF" && chat(14)?.lastText == "GIF" && chat(14)?.lastFile == nil)
+            check("without the media table the list still loads, with the plain words", (WhatsAppDatabase.recents(in: dir.appendingPathComponent("old").path) ?? []).count == 14 && (WhatsAppDatabase.recents(in: dir.appendingPathComponent("old").path) ?? []).allSatisfy { $0.lastFile == nil })
 
             // The cards for new messages.
             let incoming = WhatsAppDatabase.incomingSince(pk: 0, in: container)?.messages ?? []
@@ -163,6 +172,7 @@ extension NotchHubDebug {
             check("a new text message brings no file", card(4)?.files.isEmpty == true && card(4)?.textIsPlaceholder == false && card(4)?.text == "see you at 7")
             check("a new photo with no media row brings none and says Photo", card(5)?.files.isEmpty == true && card(5)?.text == "Photo")
             check("a card keeps a file that has not reached the disk yet, so its tile can keep looking", card(8)?.files.count == 1 && card(8)?.files.first?.exists == false)
+            check("a new GIF brings its file, marked as a GIF, and its card says GIF", card(13)?.files.first?.isGIF == true && card(13)?.text == "GIF" && card(13)?.textIsPlaceholder == true && card(14)?.files.isEmpty == true && card(14)?.text == "GIF")
             check("a new video and a new document bring theirs", card(6)?.files.first?.kind == .video && card(9)?.files.first?.kind == .pdf)
 
             // The pure rules.
@@ -174,6 +184,8 @@ extension NotchHubDebug {
             check("no path, a blank path, a voice note, a location and a text message give no file", make(1, "") == nil && make(1, "   ") == nil && make(3, "a/b.opus") == nil && make(5, "a/b.jpg") == nil && make(0, "a/b.jpg") == nil)
             check("dots in a file name are fine, only a climbing path is refused", make(1, "a/b..c.jpg") != nil && make(1, "a/../b.jpg") == nil && make(1, "../b.jpg") == nil && make(1, "/abs/b.jpg") == nil)
             check("a document keeps the name it was sent with, adds the extension when it lacks it, and never keeps a folder in the name", make(8, "a/x1.docx", title: "Report")?.name == "Report.docx" && make(8, "a/x1.docx", title: "Report.docx")?.name == "Report.docx" && make(8, "a/x1.pdf", title: "../../Report")?.name == "Report.pdf" && make(8, "a/x1.pdf", title: "")?.name == "x1.pdf")
+            check("a GIF is a video file marked as one, even under an extension the system has no name for; nothing else is marked", make(11, "a/b.mp4")?.isGIF == true && make(11, "a/b.mp4")?.kind == .video && make(11, "a/b.zzz")?.kind == .video && make(2, "a/b.mp4")?.isGIF == false && make(15, "a/b.webp")?.isGIF == false)
+            check("a message that is only a GIF is named GIF", MessageAttachment.summary([MessageAttachment(id: 1, path: "/x", name: "n", kind: .video, isGIF: true)]) == "GIF")
             check("only messages with a file are asked about", WhatsAppDatabase.isBareFile(code: 1, text: "") && !WhatsAppDatabase.isBareFile(code: 1, text: "hi") && !WhatsAppDatabase.isBareFile(code: 0, text: "") && !WhatsAppDatabase.isBareFile(code: 3, text: "") && WhatsAppDatabase.isBareFile(code: 2, text: encoded))
 
             // The pictures themselves, from files WhatsApp-style (no thumbnail columns: everything is made from the file).
@@ -203,6 +215,29 @@ extension NotchHubDebug {
                 check("clicking a document opens a copy of it, under its own name, and leaves WhatsApp's file alone", copy.lastPathComponent == "Lease agreement 2026.pdf" && FileManager.default.fileExists(atPath: copy.path) && copy.path != page.path && page.exists)
                 try? FileManager.default.removeItem(at: copy.deletingLastPathComponent())
             } else { check("clicking a document opens a copy of it", false) }
+
+            // Pictures that are drawn on their own (a Memoji, an emoji, a sticker): see-through corners, not a flag alone.
+            let cutoutURL = dir.appendingPathComponent("memoji.png"), solidURL = dir.appendingPathComponent("solid.png")
+            MessagesSampleFiles.writeImage(MessagesSampleFiles.cutout(size: 400), to: cutoutURL, type: .png)
+            MessagesSampleFiles.writeImage(MessagesSampleFiles.scene(width: 800, height: 500, warm: false), to: solidURL, type: .png)
+            let cutoutFile = MessageAttachment(id: 71, path: cutoutURL.path, name: "memoji.png", kind: .image)
+            let solidFile = MessageAttachment(id: 72, path: solidURL.path, name: "solid.png", kind: .image)
+            let cutoutPicture = await picture(cutoutFile, MessageAttachmentImages.tilePixels)
+            let solidPicture = await picture(solidFile, MessageAttachmentImages.tilePixels)
+            let photoPicture = await picture(message(2)?.attachments.first, MessageAttachmentImages.tilePixels)
+            check("a picture with see-through corners (a Memoji) is a cut-out", cutoutPicture.map { MessageAttachmentImages.hasTransparentCorners($0) } == true)
+            check("a picture with an alpha channel but solid corners is a picture, not a cut-out", solidPicture.map { MessageAttachmentImages.hasTransparentCorners($0) } == false)
+            check("a photo (JPEG, no alpha at all) is not a cut-out", photoPicture.map { MessageAttachmentImages.hasTransparentCorners($0) } == false)
+            check("the answer is asked once per picture and kept", cutoutPicture.map { MessageAttachmentImages.isCutout($0, for: cutoutFile) && MessageAttachmentImages.isCutout($0, for: cutoutFile) } == true && solidPicture.map { !MessageAttachmentImages.isCutout($0, for: solidFile) } == true)
+
+            // The cursor asked for before the reply box exists (a clicked card opens the notch and the chat in one go).
+            var focus = PendingReplyFocus()
+            let t0 = Date()
+            check("nothing asked: nothing waits", focus.consume(now: t0) == false)
+            focus.request(now: t0)
+            check("a request is taken once, by a box that appears soon after", focus.consume(now: t0.addingTimeInterval(1)) == true && focus.consume(now: t0.addingTimeInterval(1.1)) == false)
+            focus.request(now: t0)
+            check("a request is not taken by a box that appears long after (it was for something else)", focus.consume(now: t0.addingTimeInterval(PendingReplyFocus.lifetime + 1)) == false && focus.consume(now: t0.addingTimeInterval(1)) == false)
 
             print(failures == 0 ? "WHATSAPP FILES AUTOTEST ALL PASSED" : "WHATSAPP FILES AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)

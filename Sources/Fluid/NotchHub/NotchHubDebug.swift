@@ -81,6 +81,10 @@ enum NotchHubDebug {
                     files = [photo]
                     if widgetName.hasSuffix("enlarged") { NotchBannerView.previewEnlarged = photo }
                 }
+                // banner-sticker (flagged as a sticker) / banner-sticker-plain (only see-through corners): a message that is only a Memoji-style picture, drawn with no square behind it.
+                if widgetName == "banner-sticker" || widgetName == "banner-sticker-plain" {
+                    files = [MessagesSampleFiles.makeBannerSticker(flagged: widgetName == "banner-sticker")]
+                }
                 model.showBanner(NotchBannerContent(
                     chatID: 1, chatGUID: "g", title: long ? "Krish, Aryan +1" : "Maya Chen", avatarHandle: long ? nil : "+15551230001",
                     groupHandles: long ? ["+15551230004", "+15551230005", "+15551230006"] : [],

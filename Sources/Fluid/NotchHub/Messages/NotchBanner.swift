@@ -273,7 +273,10 @@ struct NotchBannerView: View {
             .frame(height: 34)
             .background(Capsule().fill(Color.white.opacity(0.13)))
             .contentShape(Capsule())
-            .onAppear { self.focusSoon() }
+            // The whole capsule is the reply box, not only the line of text inside it: pressing anywhere on it starts the cursor.
+            .onTapGesture { self.startTyping() }
+            // Hovering a card is enough to start typing; this runs for as long as the box is on screen, until the cursor is really in it.
+            .task { await self.focusWhenReady() }
 
             Button(action: self.send) {
                 Image(systemName: "arrow.up")
@@ -287,13 +290,17 @@ struct NotchBannerView: View {
         }
     }
 
-    /// The notch window has to become key before a field can take focus, so ask a moment later.
-    private func focusSoon() {
-        guard !self.staticLayout else { return }
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            self.focused = true
-        }
+    /// Gives the notch the keyboard and puts the cursor in the box (looking again until it is really there).
+    private func startTyping() {
+        guard !self.staticLayout, !self.sent else { return }
+        NotchHubController.shared.placeCursor { self.focused = $0 }
+    }
+
+    /// Hovering a card is enough to start typing: once the reply box is on screen, the cursor is put in it (see `placeCursorLoop`), for as long as the box stays.
+    @MainActor
+    private func focusWhenReady() async {
+        guard !self.staticLayout, !self.sent else { return }
+        await NotchHubController.shared.placeCursorLoop { self.focused = $0 }
     }
 
     private func send() {

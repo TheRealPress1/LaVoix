@@ -55,6 +55,24 @@ nonisolated enum SendConfirmation {
     }
 }
 
+/// A request for the cursor in a reply box, kept for a few seconds. Clicking a message card opens the notch and the chat in one go: the request is made
+/// before the reply box exists, so a box that appears soon after takes it (once), and one that appears much later, for another reason, does not.
+nonisolated struct PendingReplyFocus {
+    private var until: Date?
+
+    /// How long a request waits for the reply box to appear. The notch opens and builds its tabs within a second, a busy Mac a little more.
+    static let lifetime: TimeInterval = 4
+
+    mutating func request(now: Date = Date()) { self.until = now.addingTimeInterval(Self.lifetime) }
+
+    /// True once if a request is still waiting; the request is used up either way.
+    mutating func consume(now: Date = Date()) -> Bool {
+        defer { self.until = nil }
+        guard let until = self.until else { return false }
+        return until > now
+    }
+}
+
 /// The emojis the reply box offers, and how the ones used last are kept. Common ones, in the order people reach for them; each is one character on screen.
 nonisolated enum EmojiPalette {
     static let all: [String] = [
@@ -139,6 +157,8 @@ nonisolated struct MessageAttachment: Identifiable, Equatable {
     let name: String
     let kind: Kind
     var isSticker = false
+    /// A moving picture sent as a GIF (WhatsApp keeps these as short silent videos): a video tile with a "GIF" mark instead of a play mark.
+    var isGIF = false
 
     var url: URL { URL(fileURLWithPath: self.path) }
 
@@ -173,6 +193,7 @@ nonisolated struct MessageAttachment: Identifiable, Equatable {
         guard let first = attachments.first else { return "Attachment" }
         if attachments.count == 1 {
             if first.isSticker { return "Sticker" }
+            if first.isGIF { return "GIF" }
             switch first.kind {
             case .image: return "Photo"
             case .video: return "Video"

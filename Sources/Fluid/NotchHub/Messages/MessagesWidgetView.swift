@@ -395,12 +395,7 @@ private struct ThreadView: View {
 
             if self.showsEmoji { self.emojiStrip }
             HStack(spacing: 8) {
-                (self.staticLayout ? AnyView(Text("iMessage").foregroundStyle(.white.opacity(0.4)).frame(maxWidth: .infinity, alignment: .leading)) : AnyView(TextField("", text: self.$draft, prompt: Text("iMessage").foregroundStyle(.white.opacity(0.45))).foregroundStyle(.white).tint(.white)))
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                    .focused(self.$focused)
-                    .onSubmit { self.send() }
-                    .onExitCommand { self.focused = false; NotchHubController.shared.endTextEntry() }
+                self.replyField
                     .padding(.horizontal, 12)
                     .frame(height: 30)
                     .background(Capsule().fill(Color.white.opacity(0.1)))
@@ -450,8 +445,11 @@ private struct ThreadView: View {
         // A chat was picked by hand: the keyboard goes to its reply box.
         .onChange(of: self.store.replyFocusRequest) { _, _ in
             self.emojiOpen = false
+            _ = self.store.consumePendingReplyFocus()
             if !self.staticLayout { self.startTyping() }
         }
+        // A chat opened from a message card: the request was made before this thread existed, so it takes it as it appears.
+        .onAppear { if !self.staticLayout, self.store.consumePendingReplyFocus() { self.startTyping() } }
         // However the field got focus (a click on the native field, or the tap handler), make sure the notch has the
         // keyboard and stays open while you type.
         .onChange(of: self.focused) { _, isFocused in
@@ -492,12 +490,25 @@ private struct ThreadView: View {
         self.startTyping()
     }
 
-    /// Gives the notch the keyboard and puts the cursor in the reply box. The window has to become key before the field can take focus, hence the short wait.
+    /// Gives the notch the keyboard and puts the cursor in the reply box (looking again until it is really there).
     private func startTyping() {
-        NotchHubController.shared.beginTextEntry()
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 120_000_000)
-            self.focused = true
+        NotchHubController.shared.placeCursor { self.focused = $0 }
+    }
+
+    /// The reply box. The focus is set on the text field itself (set on a wrapper around it, it did nothing: only a click on the field gave it the cursor).
+    @ViewBuilder
+    private var replyField: some View {
+        if self.staticLayout {
+            Text("iMessage").font(.system(size: 13)).foregroundStyle(.white.opacity(0.4)).frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            TextField("", text: self.$draft, prompt: Text("iMessage").foregroundStyle(.white.opacity(0.45)))
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(.white)
+                .tint(.white)
+                .focused(self.$focused)
+                .onSubmit { self.send() }
+                .onExitCommand { self.focused = false; NotchHubController.shared.endTextEntry() }
         }
     }
 

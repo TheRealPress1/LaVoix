@@ -32,11 +32,18 @@ final class WhatsAppStore: ObservableObject {
     /// How many chats have something you have not looked at yet (the dot on the notch's WhatsApp tab).
     @Published private(set) var unreadChats = 0
     private var latestSearch = 0
+    /// Goes up each time the cursor is asked for in the open chat's reply box (a chat picked by hand, or opened from a card).
+    @Published private(set) var replyFocusRequest = 0
+    private var pendingReplyFocus = PendingReplyFocus()
 
     /// The newest message time you have looked at, per number, kept in this app only: it clears the notch's unread dot for a chat you opened.
     private static let seenKey = "LaVoixNotchWhatsAppSeenUpTo"
     private var seenUpTo: [String: TimeInterval] = UserDefaults.standard.dictionary(forKey: "LaVoixNotchWhatsAppSeenUpTo") as? [String: Double] ?? [:]
     var persistsSeen = true
+
+    /// Where chats and a chat's messages are read from. Tests replace these so WhatsApp's real database is never opened.
+    var recentsSource: @Sendable () -> [WhatsAppChat]? = { WhatsAppDatabase.recents() }
+    var threadSource: @Sendable (String) -> [WhatsAppMessage]? = { WhatsAppDatabase.thread(phone: $0) }
 
     /// How a message is actually sent. Tests replace this so no real message is ever sent.
     var sendHandler: (String, String) async throws -> Void = { text, handle in
@@ -49,7 +56,8 @@ final class WhatsAppStore: ObservableObject {
 
     func refreshRecents() {
         Task {
-            let result = await Task.detached(priority: .userInitiated) { WhatsAppDatabase.recents() }.value
+            let source = self.recentsSource
+            let result = await Task.detached(priority: .userInitiated) { source() }.value
             if let result {
                 self.recents = result
                 self.updateUnreadCount()
@@ -100,13 +108,23 @@ final class WhatsAppStore: ObservableObject {
         self.refreshThread()
     }
 
+    /// Asks the open chat to take the keyboard in its reply box. A chat that is not on screen yet (a clicked card is opening the notch) takes it as it appears.
+    func requestReplyFocus() {
+        self.replyFocusRequest += 1
+        self.pendingReplyFocus.request()
+    }
+
+    /// Used by the chat when it appears: true if the cursor was asked for just before.
+    func consumePendingReplyFocus() -> Bool { self.pendingReplyFocus.consume() }
+
     func refreshThread() {
         Task { await self.reloadThread() }
     }
 
     private func reloadThread() async {
         guard let target = self.selected else { return }
-        let result = await Task.detached(priority: .userInitiated) { WhatsAppDatabase.thread(phone: target.phone) }.value
+        let source = self.threadSource
+        let result = await Task.detached(priority: .userInitiated) { source(target.phone) }.value
         guard self.selected == target, let result else { return }
         if result != self.thread { self.thread = result }
         if let last = result.last { self.markSeen(target.phone, upTo: last.date) }

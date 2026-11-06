@@ -46,6 +46,44 @@ nonisolated enum MessageAttachmentImages {
         return image
     }
 
+    /// Whether a picture is a cut-out (a Memoji, an emoji, a sticker): its four corners are see-through. Such a picture is drawn as it is, without the
+    /// rounded square a photo gets, so it does not look like a photo of a sticker. A photo, even a PNG with an alpha channel, has solid corners.
+    static func hasTransparentCorners(_ image: NSImage) -> Bool {
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return false }
+        switch cgImage.alphaInfo {
+        case .none, .noneSkipFirst, .noneSkipLast: return false
+        default: break
+        }
+        // The picture squeezed into 16 by 16: each corner pixel is the average of its corner of the picture.
+        let side = 16
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(data: buffer.baseAddress, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+                                          space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.interpolationQuality = .medium
+            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: side, height: side))
+            return true
+        }
+        guard drawn else { return false }
+        func alpha(_ x: Int, _ y: Int) -> Int { Int(pixels[(y * side + x) * 4 + 3]) }
+        return [alpha(0, 0), alpha(side - 1, 0), alpha(0, side - 1), alpha(side - 1, side - 1)].allSatisfy { $0 < 26 }
+    }
+
+    /// `hasTransparentCorners`, asked once per picture (the answer is kept by the file's path).
+    static func isCutout(_ image: NSImage, for attachment: MessageAttachment) -> Bool {
+        let key = attachment.path as NSString
+        if let known = self.cutouts.object(forKey: key) { return known.boolValue }
+        let answer = self.hasTransparentCorners(image)
+        self.cutouts.setObject(NSNumber(value: answer), forKey: key)
+        return answer
+    }
+
+    private static let cutouts: NSCache<NSString, NSNumber> = {
+        let cache = NSCache<NSString, NSNumber>()
+        cache.countLimit = 200
+        return cache
+    }()
+
     private static func store(_ image: NSImage, for attachment: MessageAttachment, maxPixel: Int) {
         self.cache.setObject(image, forKey: self.key(attachment, maxPixel), cost: Int(image.size.width * image.size.height * 4))
     }

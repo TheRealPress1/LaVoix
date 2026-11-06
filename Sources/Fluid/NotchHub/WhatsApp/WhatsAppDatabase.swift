@@ -82,7 +82,7 @@ nonisolated enum WhatsAppDatabase {
 
     /// The message types the thread shows (text, photo, video, voice note, contact, location, link, document, deleted, sticker), as an SQL list. WhatsApp also
     /// keeps rows with no words and no file that are not messages anyone wrote (type 59 and others), and calls: those are left out of the thread and the previews.
-    static let shownKinds = "0,1,2,3,4,5,7,8,14,15"
+    static let shownKinds = "0,1,2,3,4,5,7,8,11,14,15"
 
     /// The latest one-to-one chats (archived ones left out), newest first, one per number. nil when WhatsApp's database can't be read.
     static func recents(limit: Int = 40, in directory: String? = nil) -> [WhatsAppChat]? {
@@ -155,6 +155,7 @@ nonisolated enum WhatsAppDatabase {
         case 5: return "Location"
         case 7: return "Link"
         case 8: return "Document"
+        case 11: return "GIF"
         case 14: return "Deleted message"
         case 15: return "Sticker"
         default: return "Message"
@@ -163,8 +164,8 @@ nonisolated enum WhatsAppDatabase {
 
     // MARK: - Files
 
-    /// The message kinds that have a file to draw: a photo, a video, a document, a sticker. (A voice note, a contact or a location has nothing to show as a tile.)
-    static let fileKinds: Set<Int32> = [1, 2, 8, 15]
+    /// The message kinds that have a file to draw: a photo, a video, a document, a GIF, a sticker. (A voice note, a contact or a location has nothing to show as a tile.)
+    static let fileKinds: Set<Int32> = [1, 2, 8, 11, 15]
 
     /// A message of one of those kinds with no words of its own: the line reads "Photo" and the file itself is the message.
     static func isBareFile(code: Int32, text: String) -> Bool {
@@ -191,7 +192,7 @@ nonisolated enum WhatsAppDatabase {
         if kind == .file {
             switch messageType {
             case 1, 15: kind = .image
-            case 2: kind = .video
+            case 2, 11: kind = .video
             default: break
             }
         }
@@ -204,7 +205,7 @@ nonisolated enum WhatsAppDatabase {
                 name = ext.isEmpty || (title as NSString).pathExtension.caseInsensitiveCompare(ext) == .orderedSame ? title : title + "." + ext
             }
         }
-        return MessageAttachment(id: id, path: full, name: name, kind: kind, isSticker: messageType == 15)
+        return MessageAttachment(id: id, path: full, name: name, kind: kind, isSticker: messageType == 15, isGIF: messageType == 11)
     }
 
     /// The files of these messages (`messages` maps a message number to its type), from the media table, by message number. A database without that table (or
@@ -296,8 +297,8 @@ nonisolated enum WhatsAppDatabase {
         let mutedUntil: Double
     }
 
-    /// The message kinds that get a card: text and the things that have a name (photo, voice note, ...). Deleted messages, notices and the like do not.
-    private static let alertKinds: Set<Int32> = [0, 1, 2, 3, 4, 5, 7, 8, 15]
+    /// The message kinds that get a card: text and the things that have a name (photo, voice note, GIF, ...). Deleted messages, notices and the like do not.
+    private static let alertKinds: Set<Int32> = [0, 1, 2, 3, 4, 5, 7, 8, 11, 15]
 
     /// From the new messages, the ones to show: one-to-one chats only, not muted, not older than a minute and a half (a backlog arriving after sleep is not
     /// news), and only the latest message of each chat. Pure, so it is tested without a database.

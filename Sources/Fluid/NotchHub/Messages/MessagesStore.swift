@@ -149,6 +149,7 @@ final class MessagesStore: ObservableObject {
         // A sample store is for tests and previews: it must never write the "seen" record to this Mac's real preferences (opening a sample chat did,
         // and a later test then saw those chats as already read).
         store.persistsSeen = false
+        store.readsDatabase = false
         let now = Date()
         store.access = access
         store.hasLoaded = true
@@ -217,8 +218,12 @@ final class MessagesStore: ObservableObject {
 
     // MARK: - Reading
 
+    /// False for a sample store (tests and previews): it never reads the real Messages database, whatever shows it. A failed read of the real one, in a test
+    /// process that has no access to it, used to flip a sample store to the Full Disk Access card.
+    var readsDatabase = true
+
     func refresh(announce: Bool) {
-        guard self.access == .granted else { return }
+        guard self.readsDatabase, self.access == .granted else { return }
         let database = self.database
         let after = self.lastSeenRowID
         let chatID = self.selectedChatID
@@ -359,8 +364,16 @@ final class MessagesStore: ObservableObject {
         }
     }
 
-    /// Asks the open thread to take the keyboard in its reply box.
-    func requestReplyFocus() { self.replyFocusRequest += 1 }
+    private var pendingReplyFocus = PendingReplyFocus()
+
+    /// Asks the open thread to take the keyboard in its reply box. A thread that is not on screen yet (a clicked card is opening the notch) takes it when it appears.
+    func requestReplyFocus() {
+        self.replyFocusRequest += 1
+        self.pendingReplyFocus.request()
+    }
+
+    /// Used by a thread when it appears: true if the cursor was asked for just before.
+    func consumePendingReplyFocus() -> Bool { self.pendingReplyFocus.consume() }
 
     func select(_ chatID: Int64) {
         if self.newChat != nil { self.newChat = nil; self.thread = [] }

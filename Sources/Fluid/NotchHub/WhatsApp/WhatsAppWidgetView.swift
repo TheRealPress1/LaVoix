@@ -82,11 +82,15 @@ struct WhatsAppWidgetView: View {
                     Text("No one with a phone number matches.").font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.45)).padding(.top, 8)
                 }
                 ForEach(self.store.contacts) { person in
-                    self.contactRow(person).onTapGesture { self.store.open(contact: person); self.query = "" }
+                    self.contactRow(person).onTapGesture { self.store.open(contact: person); self.query = ""; self.store.requestReplyFocus() }
                 }
             } else {
                 ForEach(self.store.recents) { chat in
-                    self.chatRow(chat).onTapGesture { self.store.open(chat: chat) }
+                    self.chatRow(chat).onTapGesture {
+                        self.store.open(chat: chat)
+                        // Picking a chat by hand puts you in its reply box, so you can start typing at once (as in Messages).
+                        self.store.requestReplyFocus()
+                    }
                 }
             }
         }
@@ -101,7 +105,7 @@ struct WhatsAppWidgetView: View {
                 TextField("", text: self.$query, prompt: Text("Search or new message").foregroundStyle(.white.opacity(0.55)))
                     .textFieldStyle(.plain).font(.system(size: 12, weight: .medium)).foregroundStyle(.white).tint(.white)
                     .focused(self.$searchFocused)
-                    .onSubmit { if let first = self.store.contacts.first, self.searching { self.store.open(contact: first); self.query = "" } }
+                    .onSubmit { if let first = self.store.contacts.first, self.searching { self.store.open(contact: first); self.query = ""; self.store.requestReplyFocus() } }
             }
         }
         .padding(.horizontal, 10)
@@ -173,23 +177,11 @@ struct WhatsAppWidgetView: View {
                 Text(error).font(.system(size: 10.5)).foregroundStyle(.orange).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack(spacing: 8) {
-                (self.staticLayout
-                    ? AnyView(Text("WhatsApp").foregroundStyle(.white.opacity(0.4)).frame(maxWidth: .infinity, alignment: .leading))
-                    : AnyView(TextField("", text: self.$draft, prompt: Text("WhatsApp").foregroundStyle(.white.opacity(0.45))).foregroundStyle(.white).tint(.white)))
-                    .textFieldStyle(.plain).font(.system(size: 13))
-                    .focused(self.$draftFocused)
-                    .onSubmit { self.send() }
-                    .onExitCommand { self.draftFocused = false; NotchHubController.shared.endTextEntry() }
+                self.replyField
                     .padding(.horizontal, 12).frame(height: 30)
                     .background(Capsule().fill(Color.white.opacity(0.1)))
                     .contentShape(Capsule())
-                    .onTapGesture {
-                        NotchHubController.shared.beginTextEntry()
-                        Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 120_000_000)
-                            self.draftFocused = true
-                        }
-                    }
+                    .onTapGesture { self.startTyping() }
                 Button(action: self.send) {
                     Image(systemName: self.store.isSending ? "ellipsis" : "arrow.up")
                         .font(.system(size: 12, weight: .bold)).foregroundStyle(.black)
@@ -207,6 +199,32 @@ struct WhatsAppWidgetView: View {
             }
         }
         .animation(.easeOut(duration: 0.12), value: self.enlargedFile?.id)
+        // The cursor was asked for (a chat picked by hand, or opened from a card): it goes to the reply box.
+        .onChange(of: self.store.replyFocusRequest) { _, _ in
+            _ = self.store.consumePendingReplyFocus()
+            if !self.staticLayout { self.startTyping() }
+        }
+        // A chat opened from a card: the request was made before this chat was on screen, so it takes it as it appears.
+        .onAppear { if !self.staticLayout, self.store.consumePendingReplyFocus() { self.startTyping() } }
+    }
+
+    /// Gives the notch the keyboard and puts the cursor in the reply box (looking again until it is really there).
+    private func startTyping() {
+        NotchHubController.shared.placeCursor { self.draftFocused = $0 }
+    }
+
+    /// The reply box. The focus is set on the text field itself (set on a wrapper around it, it did nothing: only a click on the field gave it the cursor).
+    @ViewBuilder
+    private var replyField: some View {
+        if self.staticLayout {
+            Text("WhatsApp").font(.system(size: 13)).foregroundStyle(.white.opacity(0.4)).frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            TextField("", text: self.$draft, prompt: Text("WhatsApp").foregroundStyle(.white.opacity(0.45)))
+                .textFieldStyle(.plain).font(.system(size: 13)).foregroundStyle(.white).tint(.white)
+                .focused(self.$draftFocused)
+                .onSubmit { self.send() }
+                .onExitCommand { self.draftFocused = false; NotchHubController.shared.endTextEntry() }
+        }
     }
 
     /// One message: its picture, video, sticker or document as small tiles on the sender's side, then its words (none when the words were only the stand-in "Photo").

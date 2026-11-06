@@ -95,6 +95,32 @@ nonisolated enum MessagesSampleFiles {
         return writer.status == .completed
     }
 
+    /// A made-up round face on a TRANSPARENT background (the kind of picture a Memoji or an emoji is): a yellow disc, two eyes, a smile. The corners are see-through.
+    static func cutout(size: Int) -> CGImage {
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        let context = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        let s = CGFloat(size)
+        context.setFillColor(CGColor(red: 1.0, green: 0.8, blue: 0.2, alpha: 1))
+        context.fillEllipse(in: CGRect(x: s * 0.08, y: s * 0.08, width: s * 0.84, height: s * 0.84))
+        context.setFillColor(CGColor(red: 0.25, green: 0.15, blue: 0.05, alpha: 1))
+        context.fillEllipse(in: CGRect(x: s * 0.3, y: s * 0.55, width: s * 0.1, height: s * 0.14))
+        context.fillEllipse(in: CGRect(x: s * 0.6, y: s * 0.55, width: s * 0.1, height: s * 0.14))
+        context.setStrokeColor(CGColor(red: 0.25, green: 0.15, blue: 0.05, alpha: 1))
+        context.setLineWidth(s * 0.04)
+        context.addArc(center: CGPoint(x: s * 0.5, y: s * 0.46), radius: s * 0.2, startAngle: .pi * 1.15, endAngle: .pi * 1.85, clockwise: false)
+        context.strokePath()
+        return context.makeImage()!
+    }
+
+    /// One invented sticker on disk for the card previews: flagged as a sticker, or (`flagged: false`) a plain picture that only has see-through corners.
+    @MainActor
+    static func makeBannerSticker(flagged: Bool = true) -> MessageAttachment {
+        let url = self.makeDirectory().appendingPathComponent("memoji.png")
+        self.writeImage(self.cutout(size: 400), to: url, type: .png)
+        return MessageAttachment(id: 951, path: url.path, name: url.lastPathComponent, kind: .image, isSticker: flagged)
+    }
+
     /// One invented landscape photo on disk, for the notification card previews.
     @MainActor
     static func makeBannerPhoto() -> MessageAttachment {

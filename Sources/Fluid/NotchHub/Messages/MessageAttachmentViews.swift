@@ -146,14 +146,22 @@ struct AttachmentTile: View {
         }
     }
 
+    /// A sticker, a Memoji or an emoji picture (see-through corners) is drawn on its own, not on the rounded square a photo gets.
+    private var cutout: Bool {
+        guard self.file.kind == .image, let image = self.image else { return false }
+        return self.file.isSticker || MessageAttachmentImages.isCutout(image, for: self.file)
+    }
+
     private var square: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 12, style: .continuous).fill(self.file.kind == .pdf ? Color.white : Color.white.opacity(0.12))
+        let cutout = self.cutout
+        let shape = RoundedRectangle(cornerRadius: cutout ? 0 : 12, style: .continuous)
+        return ZStack {
+            if !cutout { shape.fill(self.file.kind == .pdf ? Color.white : Color.white.opacity(0.12)) }
             if let image = self.image {
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.high)
-                    .aspectRatio(contentMode: self.file.kind == .pdf ? .fit : .fill)
+                    .aspectRatio(contentMode: self.file.kind == .pdf || cutout ? .fit : .fill)
                     .frame(width: Self.side, height: Self.side)
                     .clipped()
             } else {
@@ -163,16 +171,28 @@ struct AttachmentTile: View {
                     .foregroundStyle(.white.opacity(0.5))
             }
             if self.file.kind == .video {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 26, height: 26)
-                    .background(Circle().fill(Color.black.opacity(0.5)))
+                if self.file.isGIF {
+                    // A GIF moves on its own when the pointer rests on it; it is marked, not given a play button.
+                    Text("GIF")
+                        .font(.system(size: 9.5, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .frame(height: 16)
+                        .background(Capsule().fill(Color.black.opacity(0.55)))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                        .padding(5)
+                } else {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 26, height: 26)
+                        .background(Circle().fill(Color.black.opacity(0.5)))
+                }
             }
         }
         .frame(width: Self.side, height: Self.side)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.white.opacity(0.1), lineWidth: 0.5))
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(Color.white.opacity(cutout ? 0 : 0.1), lineWidth: 0.5))
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onHover { self.onHover($0) }
     }
