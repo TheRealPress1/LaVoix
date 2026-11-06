@@ -9,6 +9,8 @@ nonisolated struct WhatsAppChat: Identifiable, Equatable {
     let lastText: String
     let lastDate: Date
     let unread: Int
+    /// When the newest message is only a file (no caption): that file, so the list can show a tiny picture of it beside "Photo".
+    var lastFile: MessageAttachment? = nil
 }
 
 /// A new message from someone else, for a card in the notch.
@@ -20,6 +22,10 @@ nonisolated struct WhatsAppIncoming: Identifiable, Equatable {
     let name: String
     let text: String
     let date: Date
+    /// The picture, video or document that came with it, for a tile on the card.
+    var files: [MessageAttachment] = []
+    /// `text` is only the stand-in for the file ("Photo"), not words the sender wrote, so the tile is shown instead of it.
+    var textIsPlaceholder = false
 }
 
 nonisolated struct WhatsAppMessage: Identifiable, Equatable {
@@ -27,6 +33,10 @@ nonisolated struct WhatsAppMessage: Identifiable, Equatable {
     let text: String
     let date: Date
     let isFromMe: Bool
+    /// The picture, video, sticker or document that is the message (or came with its caption). Only the path is held; the file stays where WhatsApp keeps it.
+    var attachments: [MessageAttachment] = []
+    /// `text` is only the stand-in "Photo" (no caption), so the file is shown instead of it.
+    var textIsPlaceholder = false
 }
 
 /// Reads WhatsApp Desktop's own database, read-only and in place (it is 80 MB, so it is not copied; nothing is ever written to it). Chats are found by phone
@@ -71,13 +81,13 @@ nonisolated enum WhatsAppDatabase {
     }
 
     /// The latest one-to-one chats (archived ones left out), newest first, one per number. nil when WhatsApp's database can't be read.
-    static func recents(limit: Int = 40) -> [WhatsAppChat]? {
-        guard let db = self.open("ChatStorage.sqlite") else { return nil }
+    static func recents(limit: Int = 40, in directory: String? = nil) -> [WhatsAppChat]? {
+        guard let db = self.open("ChatStorage.sqlite", in: directory) else { return nil }
         defer { sqlite3_close(db) }
-        let lids = self.lidMap()
+        let lids = self.lidMap(in: directory)
         // The preview comes from the last message itself: the chat row's own "last text" can hold encoded data for media.
         let sql = """
-        SELECT s.Z_PK, s.ZCONTACTJID, COALESCE(s.ZPARTNERNAME, ''), s.ZLASTMESSAGEDATE, COALESCE(m.ZMESSAGETYPE, -1), COALESCE(m.ZTEXT, s.ZLASTMESSAGETEXT, ''), COALESCE(s.ZUNREADCOUNT, 0)
+        SELECT s.Z_PK, s.ZCONTACTJID, COALESCE(s.ZPARTNERNAME, ''), s.ZLASTMESSAGEDATE, COALESCE(m.ZMESSAGETYPE, -1), COALESCE(m.ZTEXT, s.ZLASTMESSAGETEXT, ''), COALESCE(s.ZUNREADCOUNT, 0), COALESCE(m.Z_PK, 0)
         FROM ZWACHATSESSION s LEFT JOIN ZWAMESSAGE m ON m.Z_PK = s.ZLASTMESSAGE
         WHERE (s.ZCONTACTJID LIKE '%@s.whatsapp.net' OR s.ZCONTACTJID LIKE '%@lid')
           AND COALESCE(s.ZREMOVED, 0) = 0 AND COALESCE(s.ZARCHIVED, 0) = 0 AND COALESCE(s.ZHIDDEN, 0) = 0 AND s.ZLASTMESSAGEDATE IS NOT NULL
@@ -88,17 +98,24 @@ nonisolated enum WhatsAppDatabase {
         defer { sqlite3_finalize(statement) }
         var seen = Set<String>()
         var out: [WhatsAppChat] = []
+        // The chats whose newest message is only a file: where each is in `out`, its message number and type.
+        var bare: [(index: Int, pk: Int64, type: Int32)] = []
         while sqlite3_step(statement) == SQLITE_ROW, out.count < limit {
             guard let phone = self.phone(ofJID: self.text(statement, 1), lids: lids), seen.insert(phone).inserted else { continue }
             let name = self.text(statement, 2).trimmingCharacters(in: .whitespaces)
+            let code = sqlite3_column_int(statement, 4), body = self.text(statement, 5)
+            if self.isBareFile(code: code, text: body) { bare.append((out.count, sqlite3_column_int64(statement, 7), code)) }
             out.append(WhatsAppChat(
                 id: sqlite3_column_int64(statement, 0),
                 name: name.isEmpty ? "+" + phone : name,
                 phone: phone,
-                lastText: self.preview(code: sqlite3_column_int(statement, 4), text: self.text(statement, 5)),
+                lastText: self.preview(code: code, text: body),
                 lastDate: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3) + self.appleEpoch),
                 unread: Int(sqlite3_column_int(statement, 6))))
         }
+        // One look for all of them, only for the few chats that need a picture beside their preview.
+        let found = self.files(db, messages: Dictionary(bare.map { ($0.pk, $0.type) }, uniquingKeysWith: { first, _ in first }), root: self.mediaRoot(in: directory))
+        for item in bare { out[item.index].lastFile = found[item.pk]?.first }
         return out
     }
 
@@ -133,11 +150,77 @@ nonisolated enum WhatsAppDatabase {
         }
     }
 
+    // MARK: - Files
+
+    /// The message kinds that have a file to draw: a photo, a video, a document, a sticker. (A voice note, a contact or a location has nothing to show as a tile.)
+    static let fileKinds: Set<Int32> = [1, 2, 8, 15]
+
+    /// A message of one of those kinds with no words of its own: the line reads "Photo" and the file itself is the message.
+    static func isBareFile(code: Int32, text: String) -> Bool {
+        guard self.fileKinds.contains(code) else { return false }
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return body.isEmpty || self.looksEncoded(body)
+    }
+
+    /// WhatsApp keeps a message's file in the "Message" folder of its container, at the path its media table stores.
+    static func mediaRoot(in directory: String? = nil) -> String {
+        (directory ?? self.container) + "/Message"
+    }
+
+    /// The file for one row of the media table. nil when there is nothing to draw: not a kind with a file, no path, a path that leaves the media folder, or,
+    /// with `requireFile`, a file that is not on this Mac (yet).
+    static func attachment(id: Int64, messageType: Int32, localPath: String, title: String = "", root: String, requireFile: Bool = true) -> MessageAttachment? {
+        let path = localPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard self.fileKinds.contains(messageType), !path.isEmpty, !path.hasPrefix("/"), !path.split(separator: "/").contains("..") else { return nil }
+        let full = root + "/" + path
+        if requireFile, !FileManager.default.fileExists(atPath: full) { return nil }
+        let fileName = (path as NSString).lastPathComponent
+        var kind = MessageAttachment.kind(mime: nil, uti: nil, name: fileName)
+        // An extension the system has no name for: the message's own kind decides.
+        if kind == .file {
+            switch messageType {
+            case 1, 15: kind = .image
+            case 2: kind = .video
+            default: break
+            }
+        }
+        // A document keeps the name it was sent with (the file on disk is named by a code); it must keep its extension for the copy that gets opened.
+        var name = fileName
+        if messageType == 8 {
+            let title = (title.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).lastPathComponent
+            if !title.isEmpty, !self.looksEncoded(title) {
+                let ext = (fileName as NSString).pathExtension
+                name = ext.isEmpty || (title as NSString).pathExtension.caseInsensitiveCompare(ext) == .orderedSame ? title : title + "." + ext
+            }
+        }
+        return MessageAttachment(id: id, path: full, name: name, kind: kind, isSticker: messageType == 15)
+    }
+
+    /// The files of these messages (`messages` maps a message number to its type), from the media table, by message number. A database without that table (or
+    /// with other columns) gives none, and the messages are shown as before.
+    static func files(_ db: OpaquePointer, messages: [Int64: Int32], root: String, requireFile: Bool = true) -> [Int64: [MessageAttachment]] {
+        let wanted = messages.filter { self.fileKinds.contains($0.value) }.keys.sorted()
+        guard !wanted.isEmpty else { return [:] }
+        let sql = "SELECT Z_PK, ZMESSAGE, COALESCE(ZMEDIALOCALPATH, ''), COALESCE(ZTITLE, '') FROM ZWAMEDIAITEM WHERE ZMESSAGE IN (\(wanted.map(String.init).joined(separator: ","))) ORDER BY Z_PK"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return [:] }
+        defer { sqlite3_finalize(statement) }
+        var out: [Int64: [MessageAttachment]] = [:]
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let message = sqlite3_column_int64(statement, 1)
+            guard let type = messages[message],
+                  let file = self.attachment(id: sqlite3_column_int64(statement, 0), messageType: type, localPath: self.text(statement, 2), title: self.text(statement, 3), root: root, requireFile: requireFile)
+            else { continue }
+            out[message, default: []].append(file)
+        }
+        return out
+    }
+
     /// The newest `limit` messages of the one-to-one chat(s) with this number, oldest first. nil when the database can't be read.
-    static func thread(phone: String, limit: Int = 40) -> [WhatsAppMessage]? {
-        guard let db = self.open("ChatStorage.sqlite") else { return nil }
+    static func thread(phone: String, limit: Int = 40, in directory: String? = nil) -> [WhatsAppMessage]? {
+        guard let db = self.open("ChatStorage.sqlite", in: directory) else { return nil }
         defer { sqlite3_close(db) }
-        let lids = self.lidMap()
+        let lids = self.lidMap(in: directory)
         var sessions: [Int64] = []
         var sessionStatement: OpaquePointer?
         guard sqlite3_prepare_v2(db, "SELECT Z_PK, ZCONTACTJID FROM ZWACHATSESSION WHERE ZCONTACTJID LIKE '%@s.whatsapp.net' OR ZCONTACTJID LIKE '%@lid'", -1, &sessionStatement, nil) == SQLITE_OK else { return nil }
@@ -157,14 +240,32 @@ nonisolated enum WhatsAppDatabase {
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_int(statement, 1, Int32(limit))
         var out: [WhatsAppMessage] = []
+        var types: [Int64: Int32] = [:]
+        // The messages that have no caption, so their text is only the stand-in "Photo".
+        var bare = Set<Int64>()
         while sqlite3_step(statement) == SQLITE_ROW {
             let code = sqlite3_column_int(statement, 3)
             let body = self.text(statement, 4).trimmingCharacters(in: .whitespacesAndNewlines)
+            let id = sqlite3_column_int64(statement, 0)
+            if self.fileKinds.contains(code) { types[id] = code }
+            if self.isBareFile(code: code, text: body) { bare.insert(id) }
             out.append(WhatsAppMessage(
-                id: sqlite3_column_int64(statement, 0),
+                id: id,
                 text: code == 0 || (!body.isEmpty && !self.looksEncoded(body)) ? body : self.kindName(code),
                 date: Date(timeIntervalSince1970: sqlite3_column_double(statement, 1) + self.appleEpoch),
                 isFromMe: sqlite3_column_int(statement, 2) != 0))
+        }
+        // The pictures, videos, stickers and documents of those messages, by message number. A file that has not reached this Mac keeps its plain "Photo".
+        let found = self.files(db, messages: types, root: self.mediaRoot(in: directory))
+        if !found.isEmpty {
+            out = out.map { message in
+                guard let files = found[message.id] else { return message }
+                var copy = message
+                copy.attachments = files
+                // The stand-in word gives way to the file; a caption stays beside it.
+                copy.textIsPlaceholder = bare.contains(message.id)
+                return copy
+            }
         }
         return out.reversed()
     }
@@ -240,6 +341,18 @@ nonisolated enum WhatsAppDatabase {
                             type: sqlite3_column_int(statement, 4), text: self.text(statement, 5),
                             date: Date(timeIntervalSince1970: sqlite3_column_double(statement, 6) + self.appleEpoch), mutedUntil: sqlite3_column_double(statement, 7)))
         }
-        return (newest, self.selectAlerts(rows, lids: rows.isEmpty ? [:] : self.lidMap(in: directory)))
+        let alerts = self.selectAlerts(rows, lids: rows.isEmpty ? [:] : self.lidMap(in: directory))
+        // A photo, video or document gets its tile on the card. The file is allowed to be missing for now: a message can show up in the database a moment
+        // before its picture reaches the disk, and the tile keeps looking for a few seconds.
+        let byNumber = Dictionary(rows.map { ($0.pk, $0) }, uniquingKeysWith: { first, _ in first })
+        let found = self.files(db, messages: Dictionary(alerts.compactMap { alert in byNumber[alert.id].map { (alert.id, $0.type) } }, uniquingKeysWith: { first, _ in first }),
+                               root: self.mediaRoot(in: directory), requireFile: false)
+        return (newest, alerts.map { alert in
+            guard let files = found[alert.id], let row = byNumber[alert.id] else { return alert }
+            var copy = alert
+            copy.files = files
+            copy.textIsPlaceholder = self.isBareFile(code: row.type, text: row.text)
+            return copy
+        })
     }
 }

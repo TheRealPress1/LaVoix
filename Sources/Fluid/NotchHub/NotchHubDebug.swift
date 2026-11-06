@@ -165,6 +165,22 @@ enum NotchHubDebug {
                 ])
                 model.selectedWidgetID = "messages"
                 model.setBadge("messages", 3)
+            } else if widgetName.hasPrefix("whatsapp") {
+                // whatsapp-files (invented photos, a video and a document in the chat, a tiny picture beside "Photo" in the list), whatsapp-files-chips (a caption, a
+                // document, a photo that is not on the Mac) or whatsapp-files-enlarged (the photo enlarged). Invented chats and files only; WhatsApp's database is never read.
+                let sample = WhatsAppSamples.make(variant: widgetName)
+                if let stand_in = NSImage(systemSymbolName: "person.crop.circle.fill", accessibilityDescription: nil) {
+                    ContactResolver.shared.debugSetPhoto(stand_in, for: "+15551230001")
+                    ContactResolver.shared.debugSetName("Krish Bhatia", for: "+15551230004")
+                    ContactResolver.shared.debugSetName("Aryan Shah", for: "+15551230005")
+                }
+                model = NotchHubModel(widgets: [
+                    NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
+                    NotchWidget(id: "whatsapp", title: "WhatsApp", systemImage: "bubble.left.fill", brandImage: ConnectorIcon.whatsApp) {
+                        AnyView(WhatsAppWidgetView(store: sample.store, staticLayout: true, previewEnlargedFileID: sample.enlargedFileID))
+                    },
+                ])
+                model.selectedWidgetID = "whatsapp"
             } else if widgetName.hasPrefix("french") {
                 // french / french-languages (the destination list open) / french-translated (English in, French out) / french-english (English, destination Spanish: the button says Translate) / french-copied (the result after a click) / french-done / french-clean / french-allow / french-working / french-failed: invented French with the mistakes a quick email has.
                 let store = FrenchStore(destination: widgetName == "french-english" ? .spanish : .french)

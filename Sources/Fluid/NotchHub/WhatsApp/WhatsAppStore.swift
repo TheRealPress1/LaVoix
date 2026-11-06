@@ -166,6 +166,14 @@ final class WhatsAppStore: ObservableObject {
         }
     }
 
+    /// For stills and tests: shows these chats and this thread without reading WhatsApp's database (nothing of anyone's is ever read for a still).
+    func debugShow(recents: [WhatsAppChat], thread: [WhatsAppMessage]) {
+        self.recents = recents
+        self.state = .ready
+        if let first = recents.first { self.selected = Target(name: first.name, phone: first.phone) }
+        self.thread = thread
+    }
+
     func openWhatsApp() {
         guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "net.whatsapp.WhatsApp") else { return }
         NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())

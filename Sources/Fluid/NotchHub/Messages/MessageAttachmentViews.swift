@@ -76,6 +76,8 @@ struct AttachmentTiles: View {
     let files: [MessageAttachment]
     let fromMe: Bool
     var staticLayout = false
+    /// The colour of a file's label (a document, a voice message) when it is the user's own; Messages' blue unless another app asks for its own.
+    var mineColor: Color = .blue
     var onHover: (MessageAttachment, Bool) -> Void = { _, _ in }
     var onOpen: (MessageAttachment) -> Void = { AttachmentOpener.open($0) }
 
@@ -86,7 +88,7 @@ struct AttachmentTiles: View {
         let more = self.files.count - shown.count
         HStack(spacing: 4) {
             ForEach(shown) { file in
-                AttachmentTile(file: file, fromMe: self.fromMe, staticLayout: self.staticLayout, onHover: { self.onHover(file, $0) }, onOpen: { self.onOpen(file) })
+                AttachmentTile(file: file, fromMe: self.fromMe, staticLayout: self.staticLayout, mineColor: self.mineColor, onHover: { self.onHover(file, $0) }, onOpen: { self.onOpen(file) })
             }
             if more > 0 {
                 Text("+\(more)")
@@ -105,6 +107,7 @@ struct AttachmentTile: View {
     let file: MessageAttachment
     let fromMe: Bool
     let staticLayout: Bool
+    let mineColor: Color
     let onHover: (Bool) -> Void
     let onOpen: () -> Void
     @State private var image: NSImage?
@@ -112,10 +115,11 @@ struct AttachmentTile: View {
     static let side: CGFloat = 64
     static let pixels = MessageAttachmentImages.tilePixels
 
-    init(file: MessageAttachment, fromMe: Bool, staticLayout: Bool, onHover: @escaping (Bool) -> Void = { _ in }, onOpen: @escaping () -> Void = {}) {
+    init(file: MessageAttachment, fromMe: Bool, staticLayout: Bool, mineColor: Color = .blue, onHover: @escaping (Bool) -> Void = { _ in }, onOpen: @escaping () -> Void = {}) {
         self.file = file
         self.fromMe = fromMe
         self.staticLayout = staticLayout
+        self.mineColor = mineColor
         self.onHover = onHover
         self.onOpen = onOpen
         _image = State(initialValue: staticLayout ? MessageAttachmentImages.load(file, maxPixel: Self.pixels) : MessageAttachmentImages.cached(file, maxPixel: Self.pixels))
@@ -189,7 +193,7 @@ struct AttachmentTile: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .frame(maxWidth: 200, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(self.fromMe ? Color.blue : Color.white.opacity(0.16)))
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(self.fromMe ? self.mineColor : Color.white.opacity(0.16)))
         .fixedSize(horizontal: true, vertical: false)
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }

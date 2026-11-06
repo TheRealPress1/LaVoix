@@ -417,7 +417,9 @@ final class NotchHubController {
                 subtitle: nil,
                 text: NotchMessagesSettings.showsPreviews ? message.text : "New message",
                 date: message.date,
-                whatsAppPhone: message.phone
+                whatsAppPhone: message.phone,
+                files: NotchMessagesSettings.showsPreviews ? message.files : [],
+                textIsPlaceholder: message.textIsPlaceholder
             ))
         }
         self.whatsAppBadgeObserver = WhatsAppStore.shared.$unreadChats.sink { [weak self] count in

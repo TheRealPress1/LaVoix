@@ -36,6 +36,7 @@ struct FluidApp: App {
         NotchHubDebug.clipboardAutotestIfRequested()
         NotchHubDebug.messagesAutotestIfRequested()
         NotchHubDebug.frenchAutotestIfRequested()
+        NotchHubDebug.whatsAppFilesAutotestIfRequested()
         NotchHubDebug.calendarAutotestIfRequested()
         NotchHubDebug.nowPlayingHistoryAutotestIfRequested()
         NotchHubDebug.typingTestIfRequested()
