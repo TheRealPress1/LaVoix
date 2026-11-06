@@ -80,15 +80,26 @@ nonisolated enum WhatsAppDatabase {
         return lids[jid]
     }
 
+    /// The message types the thread shows (text, photo, video, voice note, contact, location, link, document, deleted, sticker), as an SQL list. WhatsApp also
+    /// keeps rows with no words and no file that are not messages anyone wrote (type 59 and others), and calls: those are left out of the thread and the previews.
+    static let shownKinds = "0,1,2,3,4,5,7,8,14,15"
+
     /// The latest one-to-one chats (archived ones left out), newest first, one per number. nil when WhatsApp's database can't be read.
     static func recents(limit: Int = 40, in directory: String? = nil) -> [WhatsAppChat]? {
         guard let db = self.open("ChatStorage.sqlite", in: directory) else { return nil }
         defer { sqlite3_close(db) }
         let lids = self.lidMap(in: directory)
-        // The preview comes from the last message itself: the chat row's own "last text" can hold encoded data for media.
+        // The preview comes from a message itself: the chat row's own "last text" can hold encoded data (for media, and for the empty events WhatsApp also stores
+        // as messages, which have no words at all). It is the chat's newest message that the thread shows (`shownKinds`), so the list and the thread never
+        // disagree; when the newest row is one of those events, the one before it is used. A chat with nothing to show at all keeps the plain "Message".
         let sql = """
-        SELECT s.Z_PK, s.ZCONTACTJID, COALESCE(s.ZPARTNERNAME, ''), s.ZLASTMESSAGEDATE, COALESCE(m.ZMESSAGETYPE, -1), COALESCE(m.ZTEXT, s.ZLASTMESSAGETEXT, ''), COALESCE(s.ZUNREADCOUNT, 0), COALESCE(m.Z_PK, 0)
-        FROM ZWACHATSESSION s LEFT JOIN ZWAMESSAGE m ON m.Z_PK = s.ZLASTMESSAGE
+        SELECT s.Z_PK, s.ZCONTACTJID, COALESCE(s.ZPARTNERNAME, ''), s.ZLASTMESSAGEDATE, COALESCE(m.ZMESSAGETYPE, -1),
+               COALESCE(m.ZTEXT, CASE WHEN m.Z_PK IS NULL OR m.Z_PK = s.ZLASTMESSAGE THEN s.ZLASTMESSAGETEXT END, ''), COALESCE(s.ZUNREADCOUNT, 0), COALESCE(m.Z_PK, 0)
+        FROM ZWACHATSESSION s
+        LEFT JOIN ZWAMESSAGE lm ON lm.Z_PK = s.ZLASTMESSAGE
+        LEFT JOIN ZWAMESSAGE m ON m.Z_PK = CASE WHEN lm.ZMESSAGETYPE IN (\(self.shownKinds)) THEN lm.Z_PK ELSE
+            (SELECT d.Z_PK FROM ZWAMESSAGE d WHERE d.ZCHATSESSION = s.Z_PK AND d.ZMESSAGETYPE IN (\(self.shownKinds)) AND d.ZMESSAGEDATE IS NOT NULL
+             ORDER BY d.ZMESSAGEDATE DESC, d.Z_PK DESC LIMIT 1) END
         WHERE (s.ZCONTACTJID LIKE '%@s.whatsapp.net' OR s.ZCONTACTJID LIKE '%@lid')
           AND COALESCE(s.ZREMOVED, 0) = 0 AND COALESCE(s.ZARCHIVED, 0) = 0 AND COALESCE(s.ZHIDDEN, 0) = 0 AND s.ZLASTMESSAGEDATE IS NOT NULL
         ORDER BY s.ZLASTMESSAGEDATE DESC LIMIT 200
@@ -232,7 +243,7 @@ nonisolated enum WhatsAppDatabase {
         let ids = sessions.map(String.init).joined(separator: ",")
         let sql = """
         SELECT Z_PK, ZMESSAGEDATE, ZISFROMME, ZMESSAGETYPE, COALESCE(ZTEXT, '') FROM ZWAMESSAGE
-        WHERE ZCHATSESSION IN (\(ids)) AND ZMESSAGETYPE IN (0,1,2,3,4,5,7,8,14,15) AND ZMESSAGEDATE IS NOT NULL
+        WHERE ZCHATSESSION IN (\(ids)) AND ZMESSAGETYPE IN (\(self.shownKinds)) AND ZMESSAGEDATE IS NOT NULL
         ORDER BY ZMESSAGEDATE DESC, Z_PK DESC LIMIT ?1
         """
         var statement: OpaquePointer?

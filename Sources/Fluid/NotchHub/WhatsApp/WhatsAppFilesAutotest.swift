@@ -71,6 +71,12 @@ extension NotchHubDebug {
                 Row(pk: 25, session: 7, mine: false, type: 15, text: nil, path: relative + "sticker.webp", title: nil),
                 Row(pk: 26, session: 8, mine: false, type: 1, text: nil, path: relative + "gone.jpg", title: nil),
                 Row(pk: 27, session: 9, mine: false, type: 8, text: nil, path: relative + "doc.pdf", title: "Contract"),
+                // Rows with no words and no file that WhatsApp also stores (type 59 is the common one), and a call (type 10), as a chat's newest row.
+                Row(pk: 30, session: 10, mine: false, type: 0, text: "last real words", path: nil, title: nil),
+                Row(pk: 31, session: 10, mine: false, type: 59, text: nil, path: nil, title: nil),
+                Row(pk: 32, session: 11, mine: false, type: 1, text: nil, path: relative + "photo.jpg", title: nil),
+                Row(pk: 33, session: 11, mine: false, type: 59, text: nil, path: nil, title: nil),
+                Row(pk: 34, session: 12, mine: false, type: 10, text: nil, path: nil, title: nil),
             ]
             func quoted(_ value: String?) -> String { value.map { "'" + $0.replacingOccurrences(of: "'", with: "''") + "'" } ?? "NULL" }
             let base = Date().timeIntervalSince1970 - 978_307_200 - 30
@@ -83,10 +89,12 @@ extension NotchHubDebug {
                 """
                 if withMedia { sql += "CREATE TABLE ZWAMEDIAITEM (Z_PK INTEGER PRIMARY KEY, ZMESSAGE INTEGER, ZMEDIALOCALPATH TEXT, ZTHUMBNAILLOCALPATH TEXT, ZTITLE TEXT);\n" }
                 // The newest message of each chat.
-                let newest: [Int: Int] = [1: 14, 2: 20, 3: 21, 4: 22, 5: 23, 6: 24, 7: 25, 8: 26, 9: 27]
-                for session in 1...9 {
+                let newest: [Int: Int] = [1: 14, 2: 20, 3: 21, 4: 22, 5: 23, 6: 24, 7: 25, 8: 26, 9: 27, 10: 31, 11: 33, 12: 34]
+                // What the chat's own "last text" holds: encoded data (as for real events), and, for chat 11, words that belong to no message that is shown.
+                let lastTexts: [Int: String] = [10: encoded + encoded, 11: "words of the event row, never to be borrowed"]
+                for session in 1...12 {
                     let last = newest[session]!
-                    sql += "INSERT INTO ZWACHATSESSION VALUES (\(session), '1555123000\(session)@s.whatsapp.net', 'Chat \(session)', \(base + Double(last) * 0.01), NULL, 0, 0, 0, 0, \(last));\n"
+                    sql += "INSERT INTO ZWACHATSESSION VALUES (\(session), '1555123000\(session)@s.whatsapp.net', 'Chat \(session)', \(base + Double(last) * 0.01), \(quoted(lastTexts[session])), 0, 0, 0, 0, \(last));\n"
                 }
                 for row in rows {
                     sql += "INSERT INTO ZWAMESSAGE VALUES (\(row.pk), \(row.session), \(base + Double(row.pk) * 0.01), \(row.mine ? 1 : 0), \(row.type), \(quoted(row.text)));\n"
@@ -126,7 +134,7 @@ extension NotchHubDebug {
             // The list.
             let chats = WhatsAppDatabase.recents(in: container) ?? []
             func chat(_ number: Int) -> WhatsAppChat? { chats.first { $0.phone == "1555123000\(number)" } }
-            check("the list has every chat", chats.count == 9)
+            check("the list has every chat", chats.count == 12)
             check("a chat whose newest message is a bare photo carries the file for the tiny picture, and still says Photo", chat(2)?.lastFile?.kind == .image && chat(2)?.lastText == "Photo")
             check("a chat whose newest message has a caption shows the caption and no tiny picture", chat(3)?.lastText == "from the terrace" && chat(3)?.lastFile == nil)
             check("a chat whose newest message is text has no tiny picture", chat(4)?.lastText == "see you at 7" && chat(4)?.lastFile == nil)
@@ -136,7 +144,16 @@ extension NotchHubDebug {
             check("a file that is gone gives no tiny picture", chat(8)?.lastText == "Photo" && chat(8)?.lastFile == nil)
             check("a bare document carries its file under its name", chat(9)?.lastFile?.kind == .pdf && chat(9)?.lastFile?.name == "Contract.pdf" && chat(9)?.lastText == "Document")
             check("a chat whose newest message has encoded data shows its file too", chat(1)?.lastFile?.kind == .image)
-            check("without the media table the list still loads, with the plain words", (WhatsAppDatabase.recents(in: dir.appendingPathComponent("old").path) ?? []).count == 9 && (WhatsAppDatabase.recents(in: dir.appendingPathComponent("old").path) ?? []).allSatisfy { $0.lastFile == nil })
+            check("a chat whose newest row is an event with no words shows the last thing said, not \"Message\"", chat(10)?.lastText == "last real words" && chat(10)?.lastFile == nil)
+            check("a chat whose newest row is such an event, after a bare photo, shows the photo, and the chat's own last text is not borrowed for it", chat(11)?.lastText == "Photo" && chat(11)?.lastFile?.kind == .image)
+            check("a chat with nothing to show (only a call) keeps the plain \"Message\"", chat(12)?.lastText == "Message" && chat(12)?.lastFile == nil)
+            var disagree: [String] = []
+            for item in chats {
+                if let last = WhatsAppDatabase.thread(phone: item.phone, in: container)?.last, last.text != item.lastText { disagree.append(item.phone) }
+            }
+            check("in every chat the list says what the last bubble of the thread says", disagree.isEmpty)
+            check("the events and the call do not show up in a thread", (WhatsAppDatabase.thread(phone: "155512300010", in: container) ?? []).map(\.id) == [30] && (WhatsAppDatabase.thread(phone: "155512300012", in: container) ?? []).isEmpty)
+            check("without the media table the list still loads, with the plain words", (WhatsAppDatabase.recents(in: dir.appendingPathComponent("old").path) ?? []).count == 12 && (WhatsAppDatabase.recents(in: dir.appendingPathComponent("old").path) ?? []).allSatisfy { $0.lastFile == nil })
 
             // The cards for new messages.
             let incoming = WhatsAppDatabase.incomingSince(pk: 0, in: container)?.messages ?? []
