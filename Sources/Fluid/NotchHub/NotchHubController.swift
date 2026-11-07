@@ -139,7 +139,7 @@ final class NotchHubController {
                 guard let self, let window = self.window, event.window === window else { return false }
                 guard Self.plainArrowMaySwitch(
                     isOpen: self.model.isOpen,
-                    typingInNotch: window.firstResponder is NSTextView,
+                    typingInNotch: self.notchFieldHoldsDraft,
                     notchHasKeyboard: true,
                     pointerOnNotch: true,
                     typingElsewhere: false
@@ -893,7 +893,20 @@ final class NotchHubController {
         }
     }
 
-    /// Whether a plain arrow switches the tab now. Never while the cursor is in a text field of the notch (the arrow moves it). When the notch itself
+    /// Whether the cursor is in a text field that holds something the arrows could move through: a draft, or text being composed. A field with the cursor
+    /// in it but nothing typed (the reply box a clicked chat opens with) has nothing to move, so it must not keep the arrows from the pages; and a
+    /// text view that only shows selectable text is not a place to type at all.
+    nonisolated static func fieldHoldsDraft(isEditable: Bool, text: String, hasMarkedText: Bool) -> Bool {
+        isEditable && (hasMarkedText || !text.isEmpty)
+    }
+
+    /// `fieldHoldsDraft` for whatever has the cursor in the notch right now.
+    private var notchFieldHoldsDraft: Bool {
+        guard let textView = self.window?.firstResponder as? NSTextView else { return false }
+        return Self.fieldHoldsDraft(isEditable: textView.isEditable, text: textView.string, hasMarkedText: textView.hasMarkedText())
+    }
+
+    /// Whether a plain arrow switches the tab now. Never while a text field of the notch holds a draft (the arrow moves its cursor). When the notch itself
     /// has the keyboard (it was clicked into) any arrow is for the notch. When another app has the keyboard, the arrow is only the notch's while the
     /// pointer rests on the open notch, and never while the person is typing in a text field of that other app (the key reaches that app too, and an
     /// arrow in the middle of a sentence is for the sentence).
@@ -920,7 +933,7 @@ final class NotchHubController {
             if case .editable = focus { elsewhere = true }
             guard Self.plainArrowMaySwitch(
                 isOpen: self.model.isOpen,
-                typingInNotch: self.window?.firstResponder is NSTextView,
+                typingInNotch: self.notchFieldHoldsDraft,
                 notchHasKeyboard: false,
                 pointerOnNotch: self.pointerIsOnOpenNotch,
                 typingElsewhere: elsewhere
