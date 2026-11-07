@@ -190,6 +190,25 @@ final class CalendarStore: ObservableObject {
 
     // MARK: - Month view
 
+    /// The day the arrows land on, and the month the grid should show for it. A step that crosses into another month takes the grid with it, so
+    /// the chosen day is never drawn as one of the faded days of a neighbouring month.
+    static func step(selected: Date, displayedMonth: Date, byDays offset: Int, calendar: Calendar = .current) -> (day: Date, month: Date)? {
+        guard let moved = calendar.date(byAdding: .day, value: offset, to: selected) else { return nil }
+        let day = calendar.startOfDay(for: moved)
+        let sameMonth = calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month)
+        return (day, sameMonth ? displayedMonth : self.startOfMonth(day, calendar: calendar))
+    }
+
+    /// The arrows next to the month name: one day at a time (the list on the right follows), not a month at a time.
+    func showDay(offset: Int) {
+        guard let next = Self.step(selected: self.selectedDay, displayedMonth: self.displayedMonth, byDays: offset) else { return }
+        self.selectedDay = next.day
+        if next.month != self.displayedMonth {
+            self.displayedMonth = next.month
+            self.reloadMonth()
+        }
+    }
+
     func showMonth(offset: Int) {
         guard let month = Calendar.current.date(byAdding: .month, value: offset, to: self.displayedMonth) else { return }
         self.displayedMonth = Self.startOfMonth(month)

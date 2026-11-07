@@ -118,13 +118,34 @@ final class NotchHubController {
         // so the global monitor can watch for the chord but cannot take it (that app gets it too, which is why it is only acted on while the notch is
         // open); when the notch has the keyboard (typing in it) the local monitor sees the key first and takes it.
         // Held down, the key acts once: a repeat does nothing, so the tabs are not thrashed.
+        // The plain Left and Right arrows do the same as Command-Shift-Left and -Right while the pointer rests on the open notch (see
+        // `plainArrowMaySwitch` for when they do not).
         self.keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
-            guard !event.isARepeat, let chord = Self.tabChord(keyCode: event.keyCode, flags: event.modifierFlags) else { return }
-            Task { @MainActor in self?.handleTabChord(chord) }
+            guard !event.isARepeat else { return }
+            if let chord = Self.tabChord(keyCode: event.keyCode, flags: event.modifierFlags) {
+                Task { @MainActor in self?.handleTabChord(chord) }
+            } else if Self.arrowTabsEnabled, let step = Self.plainArrowStep(keyCode: event.keyCode, flags: event.modifierFlags) {
+                Task { @MainActor in self?.plainArrowFromOtherApp(step: step) }
+            }
         }
         self.localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
-            guard let chord = Self.tabChord(keyCode: event.keyCode, flags: event.modifierFlags) else { return event }
-            let taken = MainActor.assumeIsolated { event.isARepeat ? self?.model.isOpen == true : self?.handleTabChord(chord) == true }
+            if let chord = Self.tabChord(keyCode: event.keyCode, flags: event.modifierFlags) {
+                let taken = MainActor.assumeIsolated { event.isARepeat ? self?.model.isOpen == true : self?.handleTabChord(chord) == true }
+                return taken ? nil : event
+            }
+            // Only when the key was typed into the notch itself (not one of this app's other windows).
+            guard Self.arrowTabsEnabled, let step = Self.plainArrowStep(keyCode: event.keyCode, flags: event.modifierFlags) else { return event }
+            let taken = MainActor.assumeIsolated { () -> Bool in
+                guard let self, let window = self.window, event.window === window else { return false }
+                guard Self.plainArrowMaySwitch(
+                    isOpen: self.model.isOpen,
+                    typingInNotch: window.firstResponder is NSTextView,
+                    notchHasKeyboard: true,
+                    pointerOnNotch: true,
+                    typingElsewhere: false
+                ) else { return false }
+                return event.isARepeat ? true : self.switchTab(by: step)
+            }
             return taken ? nil : event
         }
         self.startMessagesIfEnabled()
@@ -854,6 +875,57 @@ final class NotchHubController {
         case 126: return .foldTabs
         case 125: return .unfoldTabs
         default: return nil
+        }
+    }
+
+    /// `defaults write com.myos.engine LaVoixNotchArrowTabs -bool false` turns the plain arrows off again (Command-Shift keeps working).
+    nonisolated static let arrowTabsDefaultsKey = "LaVoixNotchArrowTabs"
+    nonisolated static var arrowTabsEnabled: Bool { UserDefaults.standard.object(forKey: arrowTabsDefaultsKey) as? Bool ?? true }
+
+    /// A plain Left or Right arrow, with no Command, Shift, Option or Control (Caps Lock and the flags arrow keys always carry are ignored): -1 for
+    /// the tab before, 1 for the tab after, nil for anything else.
+    nonisolated static func plainArrowStep(keyCode: UInt16, flags: NSEvent.ModifierFlags) -> Int? {
+        guard flags.intersection([.command, .shift, .option, .control]).isEmpty else { return nil }
+        switch keyCode {
+        case 123: return -1
+        case 124: return 1
+        default: return nil
+        }
+    }
+
+    /// Whether a plain arrow switches the tab now. Never while the cursor is in a text field of the notch (the arrow moves it). When the notch itself
+    /// has the keyboard (it was clicked into) any arrow is for the notch. When another app has the keyboard, the arrow is only the notch's while the
+    /// pointer rests on the open notch, and never while the person is typing in a text field of that other app (the key reaches that app too, and an
+    /// arrow in the middle of a sentence is for the sentence).
+    nonisolated static func plainArrowMaySwitch(isOpen: Bool, typingInNotch: Bool, notchHasKeyboard: Bool, pointerOnNotch: Bool, typingElsewhere: Bool) -> Bool {
+        guard isOpen, !typingInNotch else { return false }
+        if notchHasKeyboard { return true }
+        return pointerOnNotch && !typingElsewhere
+    }
+
+    /// True while the pointer is over the open notch.
+    private var pointerIsOnOpenNotch: Bool {
+        guard let screen = NotchGeometry.targetScreen() else { return false }
+        return NotchGeometry.openRect(for: screen).contains(NSEvent.mouseLocation)
+    }
+
+    /// An arrow pressed while another app has the keyboard. The question "is the person typing there?" goes to Accessibility, which can be slow
+    /// when that app is busy, so it is asked off the main thread.
+    private func plainArrowFromOtherApp(step: Int) {
+        guard self.model.isOpen, self.pointerIsOnOpenNotch else { return }
+        Task { @MainActor [weak self] in
+            let focus = await Task.detached(priority: .userInitiated) { DeliveryTargetAssessment.assessFocusedElement() }.value
+            guard let self else { return }
+            var elsewhere = false
+            if case .editable = focus { elsewhere = true }
+            guard Self.plainArrowMaySwitch(
+                isOpen: self.model.isOpen,
+                typingInNotch: self.window?.firstResponder is NSTextView,
+                notchHasKeyboard: false,
+                pointerOnNotch: self.pointerIsOnOpenNotch,
+                typingElsewhere: elsewhere
+            ) else { return }
+            self.switchTab(by: step)
         }
     }
 

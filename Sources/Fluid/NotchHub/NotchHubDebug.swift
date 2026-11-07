@@ -1459,6 +1459,16 @@ enum NotchHubDebug {
                 check("without Command, or without Shift, an arrow key is left alone", Hub.tabChord(keyCode: 124, flags: [.shift]) == nil && Hub.tabChord(keyCode: 124, flags: [.command]) == nil && Hub.tabChord(keyCode: 123, flags: []) == nil && Hub.tabChord(keyCode: 126, flags: [.command]) == nil && Hub.tabChord(keyCode: 125, flags: [.shift]) == nil)
                 check("another modifier on top makes it a different shortcut", Hub.tabChord(keyCode: 124, flags: cs.union([.option])) == nil && Hub.tabChord(keyCode: 126, flags: cs.union([.control])) == nil && Hub.tabChord(keyCode: 125, flags: cs.union([.option])) == nil)
                 check("letters are not tab keys", Hub.tabChord(keyCode: 0, flags: cs) == nil && Hub.tabChord(keyCode: 36, flags: cs) == nil)
+                // The plain arrows.
+                check("a plain Right is one tab on and Left one back", Hub.plainArrowStep(keyCode: 124, flags: []) == 1 && Hub.plainArrowStep(keyCode: 123, flags: []) == -1)
+                check("the flags arrow keys always carry, and Caps Lock, do not matter", Hub.plainArrowStep(keyCode: 124, flags: [.numericPad, .function, .capsLock]) == 1)
+                check("any of Command, Shift, Option, Control makes it another shortcut", [NSEvent.ModifierFlags.command, .shift, .option, .control].allSatisfy { Hub.plainArrowStep(keyCode: 124, flags: [$0]) == nil && Hub.plainArrowStep(keyCode: 123, flags: [$0, .numericPad]) == nil })
+                check("Up, Down and letters are not tab arrows", Hub.plainArrowStep(keyCode: 126, flags: []) == nil && Hub.plainArrowStep(keyCode: 125, flags: []) == nil && Hub.plainArrowStep(keyCode: 0, flags: []) == nil)
+                check("a closed notch never takes an arrow", !Hub.plainArrowMaySwitch(isOpen: false, typingInNotch: false, notchHasKeyboard: true, pointerOnNotch: true, typingElsewhere: false))
+                check("typing in the notch keeps its arrows, even when the notch has the keyboard", !Hub.plainArrowMaySwitch(isOpen: true, typingInNotch: true, notchHasKeyboard: true, pointerOnNotch: true, typingElsewhere: false))
+                check("the notch with the keyboard takes the arrow", Hub.plainArrowMaySwitch(isOpen: true, typingInNotch: false, notchHasKeyboard: true, pointerOnNotch: false, typingElsewhere: false))
+                check("another app's keyboard: the pointer must rest on the open notch", Hub.plainArrowMaySwitch(isOpen: true, typingInNotch: false, notchHasKeyboard: false, pointerOnNotch: true, typingElsewhere: false) && !Hub.plainArrowMaySwitch(isOpen: true, typingInNotch: false, notchHasKeyboard: false, pointerOnNotch: false, typingElsewhere: false))
+                check("typing in a text field of another app leaves the arrow to that app", !Hub.plainArrowMaySwitch(isOpen: true, typingInNotch: false, notchHasKeyboard: false, pointerOnNotch: true, typingElsewhere: true))
 
                 func tab(_ id: String) -> NotchWidget { NotchWidget(id: id, title: id, systemImage: "circle") { AnyView(EmptyView()) } }
                 let tabs = NotchHubModel(widgets: [tab("a"), tab("b"), tab("c")])

@@ -39,7 +39,7 @@ struct CalendarWidgetView: View {
         let columns = Array(repeating: GridItem(.flexible(), spacing: 0), count: 7)
         return VStack(spacing: 4) {
             HStack {
-                self.chevron("chevron.left") { self.store.showMonth(offset: -1) }
+                self.chevron("chevron.left", help: "Previous day") { self.store.showDay(offset: -1) }
                 Spacer()
                 Button { self.store.jumpToToday() } label: {
                     Text(self.store.displayedMonth.formatted(.dateTime.month(.wide).year()))
@@ -49,7 +49,7 @@ struct CalendarWidgetView: View {
                 .buttonStyle(.plain)
                 .help("Go to today")
                 Spacer()
-                self.chevron("chevron.right") { self.store.showMonth(offset: 1) }
+                self.chevron("chevron.right", help: "Next day") { self.store.showDay(offset: 1) }
             }
             LazyVGrid(columns: columns, spacing: 0) {
                 ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, symbol in
@@ -69,12 +69,14 @@ struct CalendarWidgetView: View {
         }
     }
 
-    private func chevron(_ name: String, action: @escaping () -> Void) -> some View {
+    private func chevron(_ name: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: name).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.6))
                 .frame(width: 26, height: 22).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(help)
     }
 
     private var dayList: some View {
