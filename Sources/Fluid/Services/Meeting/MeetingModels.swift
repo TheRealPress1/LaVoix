@@ -56,6 +56,8 @@ nonisolated enum MeetingInterruptionKind: String, Codable, Sendable {
     case voiceProcessingOverload
     /// Final processing completed with typed gaps or quarantined evidence.
     case transcriptCoverageIncomplete
+    /// The call audio was recorded as silence, so the transcript was made from the microphone alone (treated as room audio).
+    case microphoneOnlyTranscript
 }
 
 nonisolated enum MeetingFailureDomain: String, Codable, Sendable {
@@ -1338,6 +1340,8 @@ nonisolated struct MeetingProcessingResult: Codable, Sendable {
     /// this result was returned, so the coordinator may persist the reference with the session.
     var resultSidecarReference: MeetingResultSidecarReference? = nil
     var isComplete: Bool = true
+    /// Set when the call audio was silent and the microphone was transcribed as room audio instead (MeetingMicrophoneOnlyFallback).
+    var microphoneOnlyReason: String? = nil
 }
 
 /// Resume point written after the application-audio pass so a retry can skip re-diarizing and

@@ -743,6 +743,13 @@ final class MeetingAutoDetector {
                 ended = true // the app quit
             }
             guard ended else { continue }
+            // The call is over by the same evidence that ends its episode (the app stopped sending audio, or released the microphone) while
+            // its window may still be open: a browser tab, or Teams' main window, outlives the call. If our recording is still backing this
+            // episode, ask once whether to stop it. (A closed window already nudged above.)
+            if key == self.activeConsumedEpisodeKey, !episode.stillRecordingNudgeShown {
+                DebugLogger.shared.log("call-ended-nudge bundle=\(episode.bundleIdentifier)", source: "MeetingAutoDetector")
+                self.onStillRecordingNudge?()
+            }
             self.episodesByKey[key] = nil
             if key == self.activeConsumedEpisodeKey { self.activeConsumedEpisodeKey = nil }
             if !episode.consumed {

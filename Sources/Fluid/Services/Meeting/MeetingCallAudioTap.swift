@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import AppKit
 import CoreAudio
 import CoreMedia
 import Darwin
@@ -11,6 +12,39 @@ import Foundation
 /// whole-Mac sound does not carry it, so both of those record the other person as digital silence. A tap on the helper does (measured on a
 /// live call 2026-10-29: speech level on the process tap, identical on a whole-Mac tap).
 final nonisolated class MeetingCallAudioTap: @unchecked Sendable {
+    /// Which process objects carry the call's sound.
+    enum Target: Equatable, Sendable {
+        /// The audio the system helper at this path plays (FaceTime).
+        case helperPath(String)
+        /// An app that plays its sound in a WebKit "Graphics and Media" process of its own (Safari): that process plus the app itself.
+        case webKitMedia(applicationBundleIdentifier: String)
+
+        var label: String {
+            switch self {
+            case let .helperPath(path): return path
+            case let .webKitMedia(bundle): return "WebKit media of \(bundle)"
+            }
+        }
+    }
+
+    /// Pure rule for the WebKit target, so it can be tested without Core Audio: the app's own processes, and the "<App> Graphics and Media"
+    /// process (`com.apple.WebKit.GPU`) that belongs to that app and no other WebKit app (Conductor, myOS and Safari each have their own).
+    nonisolated enum WebKitMediaMatcher {
+        static let gpuProcessMarker = "com.apple.WebKit.GPU"
+
+        static func matches(
+            pid: pid_t,
+            path: String,
+            processName: String?,
+            applicationPIDs: Set<pid_t>,
+            applicationName: String?
+        ) -> Bool {
+            if applicationPIDs.contains(pid) { return true }
+            guard path.contains(self.gpuProcessMarker), let applicationName, !applicationName.isEmpty, let processName else { return false }
+            return processName == "\(applicationName) Graphics and Media"
+        }
+    }
+
     enum Source: Equatable, Sendable {
         /// The audio the helper at this path plays.
         case process(String)
@@ -53,7 +87,7 @@ final nonisolated class MeetingCallAudioTap: @unchecked Sendable {
     // swiftlint:disable:next force_unwrapping
     private static let canonicalFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 2, interleaved: false)!
 
-    private let helperPath: String
+    private let target: Target
     private let forceWholeMac: Bool
     private let onSample: @Sendable (CMSampleBuffer, UInt64) -> Void
     private let ioQueue = DispatchQueue(label: "com.myos.meeting.callaudiotap", qos: .userInteractive)
@@ -74,8 +108,8 @@ final nonisolated class MeetingCallAudioTap: @unchecked Sendable {
     private var clock = MeetingMicrophonePTSClock()
 
     /// `forceWholeMac` exists for diagnostic runs only (a stand-in app has no helper audio to tap).
-    init(helperPath: String, forceWholeMac: Bool = false, onSample: @escaping @Sendable (CMSampleBuffer, UInt64) -> Void) {
-        self.helperPath = helperPath
+    init(target: Target, forceWholeMac: Bool = false, onSample: @escaping @Sendable (CMSampleBuffer, UInt64) -> Void) {
+        self.target = target
         self.forceWholeMac = forceWholeMac
         self.onSample = onSample
     }
@@ -150,13 +184,13 @@ final nonisolated class MeetingCallAudioTap: @unchecked Sendable {
 
         let description: CATapDescription
         let source: Source
-        let helperObjects = self.forceWholeMac ? [] : Self.processObjects { $0.path == self.helperPath }
+        let helperObjects = self.forceWholeMac ? [] : self.targetObjects()
         if helperObjects.isEmpty {
             description = CATapDescription(stereoGlobalTapButExcludeProcesses: Self.processObjects { $0.pid == getpid() })
             source = .wholeMac
         } else {
             description = CATapDescription(stereoMixdownOfProcesses: helperObjects)
-            source = .process(self.helperPath)
+            source = .process(self.target.label)
         }
         description.name = "myOS call audio"
         description.isPrivate = true
@@ -218,6 +252,25 @@ final nonisolated class MeetingCallAudioTap: @unchecked Sendable {
         }
         if !keep { Self.teardown(rig) }
         return source
+    }
+
+    /// The Core Audio process objects to tap for this target, looked up afresh each time the tap is built (a WebKit media process can be replaced).
+    private func targetObjects() -> [AudioObjectID] {
+        switch self.target {
+        case let .helperPath(path):
+            return Self.processObjects { $0.path == path }
+        case let .webKitMedia(bundle):
+            let applications = NSRunningApplication.runningApplications(withBundleIdentifier: bundle)
+            let pids = Set(applications.map(\.processIdentifier))
+            let name = applications.first?.localizedName
+            return Self.processObjects {
+                WebKitMediaMatcher.matches(
+                    pid: $0.pid, path: $0.path,
+                    processName: NSRunningApplication(processIdentifier: $0.pid)?.localizedName,
+                    applicationPIDs: pids, applicationName: name
+                )
+            }
+        }
     }
 
     private static func teardown(_ rig: Rig) {

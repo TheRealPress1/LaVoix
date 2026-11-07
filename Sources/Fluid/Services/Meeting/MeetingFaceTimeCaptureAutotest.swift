@@ -32,7 +32,9 @@ enum MeetingFaceTimeCaptureAutotest {
     }
 
     private static func run(seconds: Double, environment: [String: String]) async throws {
-        let bundle = environment["LAVOIX_FACETIME_STANDIN_BUNDLE"] ?? "com.apple.TextEdit"
+        // `LAVOIX_WEBKIT_STANDIN_BUNDLE` names a stand-in WebKit app (a window playing an invented tone) to exercise the Safari treatment: the
+        // call audio read with a tap on the app and its "Graphics and Media" process. It must NOT also be named as the FaceTime stand-in.
+        let bundle = environment["LAVOIX_WEBKIT_STANDIN_BUNDLE"] ?? environment["LAVOIX_FACETIME_STANDIN_BUNDLE"] ?? "com.apple.TextEdit"
         let folder = URL(fileURLWithPath: environment["LAVOIX_FACETIME_CAPTURE_OUT"] ?? NSTemporaryDirectory() + "facetime-capture-test")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 

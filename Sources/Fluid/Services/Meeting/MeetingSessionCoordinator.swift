@@ -641,6 +641,12 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
     }
 
+    /// The microphone's echo protection in the recording that is running now (for the live capture watch).
+    func liveMicrophoneProtection() async -> MeetingMicrophoneEchoProtection? {
+        guard self.isRecording else { return nil }
+        return await self.capture.liveMicrophoneProtection()
+    }
+
     @discardableResult
     func retryProcessing() async throws -> MeetingSession {
         guard let activeSession else { throw MeetingCoordinatorError.noRecoverableAudio }
@@ -1650,6 +1656,15 @@ final class MeetingSessionCoordinator: ObservableObject {
                         session.audioTracks[trackIndex].chunks[chunkIndex].finalizationState = .failed
                     }
                 }
+            }
+            if let reason = result.microphoneOnlyReason {
+                session.events.append(MeetingSessionEvent(
+                    id: UUID(),
+                    occurredAt: Date(),
+                    kind: .microphoneOnlyTranscript,
+                    trackID: session.audioTracks.first(where: { $0.kind == .microphone })?.id,
+                    detail: reason
+                ))
             }
             if !result.coverageGaps.isEmpty {
                 let excludedSeconds = result.coverageGaps.reduce(0.0) { total, gap in

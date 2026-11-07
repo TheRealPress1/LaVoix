@@ -4723,15 +4723,27 @@ struct ContentView: View {
 
     private func presentExclusiveActivityBlockIfNeeded() -> Bool {
         guard let activity = self.asr.activeExclusiveActivity else { return false }
-        let message = "Wait for the active \(activity.displayName) to finish."
+        // A meeting being recorded holds the microphone and the speech model: say so and offer to stop it, instead of a bare refusal.
+        let meetingIsRecording = activity == .meeting && NotchMeetingCardController.shared.isRecordingMeeting
+        let message: String
+        if activity == .meeting {
+            message = meetingIsRecording
+                ? "A meeting is being recorded, so dictation is paused. Stop the meeting recording from the card under the notch, or wait for it to end."
+                : "The meeting is being transcribed, so dictation is paused until that finishes."
+        } else {
+            message = "Wait for the active \(activity.displayName) to finish."
+        }
         self.asr.errorTitle = "Dictation Unavailable"
         self.asr.errorMessage = message
         self.asr.showError = true
         AccessibilityNotification.Announcement("Dictation unavailable. \(message)").post()
         DebugLogger.shared.info(
-            "ContentView: dictation start blocked by \(activity.rawValue)",
+            "ContentView: dictation start blocked by \(activity.rawValue) recording=\(meetingIsRecording)",
             source: "ContentView"
         )
+        if activity == .meeting {
+            NotchMeetingCardController.shared.showNotice(MeetingNotice.dictationBlocked(meetingIsRecording: meetingIsRecording))
+        }
         return true
     }
 

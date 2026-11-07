@@ -1203,6 +1203,42 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(h.nudges, 1, "the nudge fires once per session")
     }
 
+    func testStillRecordingNudgeFiresWhenTheCallStopsSendingAudioEvenThoughItsWindowStaysOpen() throws {
+        // A browser tab (or Teams' main window) outlives the call: the window never goes, but the audio does.
+        let h = DetectorHarness()
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: "us.zoom.xos", processID: 100), at: h.clock.now())
+        h.detector.handleWindowSnapshot([.init(processID: 100, windowID: 900, title: "Zoom", layer: 0)], at: h.clock.now())
+        h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
+        let episodeID = try XCTUnwrap(h.prompts.first?.episodeID)
+        XCTAssertTrue(h.detector.startTapped(episodeID: episodeID))
+
+        h.detector.handleAudioProcessActivity(false, pid: 100, at: h.clock.now())
+        h.advance(30)
+        h.detector.handleWindowSnapshot([.init(processID: 100, windowID: 900, title: "Zoom", layer: 0)], at: h.clock.now())
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 0, "thirty seconds without audio is only a pause")
+
+        h.advance(40)
+        h.detector.handleWindowSnapshot([.init(processID: 100, windowID: 900, title: "Zoom", layer: 0)], at: h.clock.now())
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1, "the call stopped sending audio for a minute while its window is still there")
+
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 1, "asked once")
+    }
+
+    func testAnEpisodeNobodyRecordedNeverNudges() {
+        let h = DetectorHarness()
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: "us.zoom.xos", processID: 100), at: h.clock.now())
+        h.detector.handleWindowSnapshot([.init(processID: 100, windowID: 900, title: "Zoom", layer: 0)], at: h.clock.now())
+        h.detector.handleAudioProcessActivity(true, pid: 100, at: h.clock.now())
+        h.detector.timeoutDismissed(episodeID: h.prompts[0].episodeID)
+        h.detector.handleAudioProcessActivity(false, pid: 100, at: h.clock.now())
+        h.advance(70)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.nudges, 0, "no recording of ours is backing this episode, so there is nothing to stop")
+    }
+
     // MARK: - Registry / URL matcher sanity
 
     func testRegistryTierLookup() {

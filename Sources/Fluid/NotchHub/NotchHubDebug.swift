@@ -30,6 +30,22 @@ enum NotchHubDebug {
                     model.recordingIsMeet = widgetName != "meeting-pill-zoom"
                     model.recordingIcon = widgetName == "meeting-pill-zoom" ? NSImage(systemSymbolName: "video.fill", accessibilityDescription: nil) : nil
                     model.recordingTitle = widgetName == "meeting-pill-long" ? "Quarterly planning and roadmap review with the whole product team" : "Investor update"
+                case "meeting-notice-silent", "meeting-notice-both", "meeting-notice-callended", "meeting-notice-dictation", "meeting-notice-transcribing":
+                    // The recording card with a notice under the captions.
+                    model.phase = .recording
+                    model.expanded = true
+                    model.recordingTitle = "Gaspard <> Yuri"
+                    switch widgetName {
+                    case "meeting-notice-silent":
+                        model.notice = .captureWarning(MeetingCaptureWatch.evaluate(mode: .onlineCall, callAudioSilentFor: 190, microphoneUnprotectedFor: nil)
+                            ?? MeetingCaptureWarning(kind: .callAudioSilent, text: ""))
+                    case "meeting-notice-both":
+                        model.notice = .captureWarning(MeetingCaptureWatch.evaluate(mode: .onlineCall, callAudioSilentFor: 190, microphoneUnprotectedFor: 190)
+                            ?? MeetingCaptureWarning(kind: .callAudioSilent, text: ""))
+                    case "meeting-notice-callended": model.notice = .callEnded
+                    case "meeting-notice-dictation": model.notice = .dictationBlocked(meetingIsRecording: true)
+                    default: model.notice = .dictationBlocked(meetingIsRecording: false)
+                    }
                 case "meeting-starting": model.phase = .starting
                 case "meeting-detected", "meeting-detected-starting", "meeting-detected-error":
                     model.phase = .detected

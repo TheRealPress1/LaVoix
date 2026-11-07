@@ -358,6 +358,8 @@ struct MeetingResultCanvas: View {
     let onClose: (() -> Void)?
 
     var summaryASRService: ASRService? = nil
+    /// Offered next to the empty-transcript explanation when the audio is still on this Mac.
+    var onRetryTranscription: (() -> Void)? = nil
 
     @Environment(\.theme) private var theme
     @State private var pendingEditedSegment: MeetingTranscriptSegment?
@@ -466,6 +468,12 @@ struct MeetingResultCanvas: View {
                                 .font(self.theme.typography.body)
                                 .foregroundStyle(self.theme.palette.secondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
+                            if let onRetryTranscription = self.onRetryTranscription,
+                               self.session.hasRetryableAudio, self.session.state == .completed
+                            {
+                                Button("Try the transcription again", systemImage: "arrow.clockwise") { onRetryTranscription() }
+                                    .disabled(!self.isQuiescent)
+                            }
                         }
                         .padding(.vertical, self.theme.metrics.spacing.sm)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -796,14 +804,15 @@ struct MeetingResultCanvas: View {
         if self.hasEchoSegments, !self.showsProbableEchoes {
             return "All transcript turns are marked as probable echo. Choose Show probable echo from the More menu to view them."
         }
+        let why = MeetingMicrophoneOnlyFallback.emptyTranscriptReason(for: self.session).map { " \($0)" } ?? ""
         if self.session.retention.audioDeletedAt != nil {
-            return "No transcript text is available. The captured audio has been deleted."
+            return "No transcript text is available.\(why) The captured audio has been deleted."
         }
         if self.session.hasRetryableAudio {
-            return "No transcript text is available. The captured audio is saved on this Mac."
+            return "No transcript text is available.\(why) The captured audio is saved on this Mac, so you can try again."
         }
         if self.session.hasFinalizedAudio {
-            return "No transcript text is available. Some captured audio is saved on this Mac."
+            return "No transcript text is available.\(why) Some captured audio is saved on this Mac."
         }
         return "There is no transcript text or saved audio available for this meeting."
     }

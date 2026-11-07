@@ -189,7 +189,11 @@ final class AppServices: ObservableObject {
             self?.meetingAutoDetectHealth = health
         }
         detector.onStillRecordingNudge = {
-            MeetingStillRecordingNudgeController.shared.present()
+            // The card under the notch is the recorder's face: ask there, with Stop and Keep recording. The older floating panel only
+            // appears when the notch card is not on screen.
+            if !NotchMeetingCardController.shared.showNotice(MeetingNotice.callEnded) {
+                MeetingStillRecordingNudgeController.shared.present()
+            }
         }
         detector.onSuggestDisablingAutoDetect = {
             MeetingAutoDetectDismissalAdvisor.shared.shouldSuggest = true

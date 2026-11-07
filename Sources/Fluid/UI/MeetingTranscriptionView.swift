@@ -1501,7 +1501,8 @@ struct MeetingTranscriptionCanvas: View {
                         onRenameSession: { title in self.onRenameSession(session.id, title) },
                         onAssignSpeakers: { names in await self.onAssignSpeakers(session.id, names) },
                         onClose: self.onCloseSelection,
-                        summaryASRService: self.summaryASRService
+                        summaryASRService: self.summaryASRService,
+                        onRetryTranscription: { self.onRetrySession(session) }
                     )
                 }
             case let .failed(session, message):

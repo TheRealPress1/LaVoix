@@ -295,6 +295,7 @@ final class MessagesInboxScheduler {
             // Counted as the rows arrive. (`defaults write com.myos.engine MessagesActivityLegacyRead -bool true` reads them all into a list
             // first, the old way, to compare the memory.)
             var rowCount = 0
+            var readHighWater = before
             let conversations: [MessageActivity.Conversation]
             if UserDefaults.standard.bool(forKey: "MessagesActivityLegacyRead") {
                 guard let rows = database.activityRows() else {
@@ -305,14 +306,20 @@ final class MessagesInboxScheduler {
                 conversations = MessageActivity.aggregate(rows: rows, excluded: excluded, now: Date(), calendar: .current)
             } else {
                 var aggregator = MessageActivity.Aggregator(excluded: excluded, now: Date(), calendar: .current)
-                guard database.streamActivityRows({ rowCount += 1; aggregator.feed($0) }) else {
+                guard database.streamActivityRows({
+                    rowCount += 1
+                    aggregator.feed($0)
+                    // The highest footprint seen WHILE reading: the "peak" printed below is the whole process's since it launched (its start-up
+                    // model loading reaches about 14 GB), which is not this read's.
+                    if rowCount % 25_000 == 0 { readHighWater = max(readHighWater, MemoryProbe.footprintMB()) }
+                }) else {
                     DebugLogger.shared.warning("Messages export skipped: the Messages database could not be read right now", source: "MessagesInbox")
                     return
                 }
                 conversations = aggregator.finish()
             }
             let after = MemoryProbe.footprintMB()
-            DebugLogger.shared.info("Read \(rowCount) message records into \(conversations.count) conversations in \(Int(Date().timeIntervalSince(started) * 1000)) ms (memory \(before) -> \(after) MB, peak \(MemoryProbe.peakMB()) MB)", source: "MessagesInbox")
+            DebugLogger.shared.info("Read \(rowCount) message records into \(conversations.count) conversations in \(Int(Date().timeIntervalSince(started) * 1000)) ms (memory \(before) -> \(after) MB, highest while reading \(max(readHighWater, after)) MB, process peak since launch \(MemoryProbe.peakMB()) MB)", source: "MessagesInbox")
             // Message text stays on this Mac, in a private database outside the synced myOS folder.
             if keepText {
                 let qualified = Set(conversations.filter(\.qualifies).map { String($0.external_id.dropFirst("imessage:".count)) })

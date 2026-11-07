@@ -53,9 +53,12 @@ enum NotchGeometry {
 
     /// Live-meeting card size; like the notification card, its top band sits behind the hardware notch.
     /// The "meeting starting soon" heads-up is a slim single strip.
-    static func meetingCardSize(notchHeight: CGFloat, compact: Bool = false) -> CGSize {
-        CGSize(width: compact ? 360 : 400, height: notchHeight + (compact ? 54 : 66))
+    static func meetingCardSize(notchHeight: CGFloat, compact: Bool = false, noticeHeight: CGFloat = 0) -> CGSize {
+        CGSize(width: compact ? 360 : 400, height: notchHeight + (compact ? 54 : 66) + noticeHeight)
     }
+
+    /// Extra height the recording card needs for a notice row (a sentence of up to three lines and a row of buttons).
+    static let meetingNoticeHeight: CGFloat = 78
 
     /// While recording the card sits closed: a strip at the notch's own height that reaches out to either side of it
     /// (logo and meeting name on the left, the live dot on the right). Hover or click opens the full card.
@@ -65,9 +68,11 @@ enum NotchGeometry {
         CGSize(width: notch.width + self.meetingPillWing * 2, height: notch.height)
     }
 
-    @MainActor static func meetingCardFrame(for screen: NSScreen, compact: Bool = false, pill: Bool = false) -> NSRect {
+    @MainActor static func meetingCardFrame(for screen: NSScreen, compact: Bool = false, pill: Bool = false, hasNotice: Bool = false) -> NSRect {
         let notch = self.closedSize(for: screen)
-        let size = pill ? self.meetingPillSize(notch: notch) : self.meetingCardSize(notchHeight: notch.height, compact: compact)
+        let size = pill
+            ? self.meetingPillSize(notch: notch)
+            : self.meetingCardSize(notchHeight: notch.height, compact: compact, noticeHeight: hasNotice ? self.meetingNoticeHeight : 0)
         let width = size.width + self.meetingCardPadding * 2
         let height = size.height + self.meetingCardPadding
         return NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height)

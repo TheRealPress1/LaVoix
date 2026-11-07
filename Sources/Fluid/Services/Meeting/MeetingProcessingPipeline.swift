@@ -1396,10 +1396,20 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     }
 
     func process(
-        session: MeetingSession,
+        session savedSession: MeetingSession,
         sessionDirectory: URL,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
+        // Never discard the only speech source: when the call's own audio was recorded as silence, the microphone is processed as room audio
+        // instead of being refused for lack of echo protection (see MeetingMicrophoneOnlyFallback). Only this run sees the changed mode.
+        let effective = MeetingMicrophoneOnlyFallback.effectiveSession(for: savedSession)
+        let session = effective.session
+        if let reason = effective.reason {
+            DebugLogger.shared.info(
+                "Meeting final processing: \(reason) session=\(session.id.uuidString.prefix(8))",
+                source: "MeetingProcessingPipeline"
+            )
+        }
         guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(session.languageCode) else {
             throw MeetingProcessingError.unsupportedLanguage
         }
@@ -1525,7 +1535,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         }
         // Exactly one release on every path: the throwing paths above, this one otherwise.
         await self.serializationGate.release()
-        return result
+        var finished = result
+        finished.microphoneOnlyReason = effective.reason
+        return finished
     }
 
     /// The canonical Stage C2b2 path, run under the same serialization and cancellation ownership

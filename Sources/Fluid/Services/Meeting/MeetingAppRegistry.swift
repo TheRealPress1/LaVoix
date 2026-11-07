@@ -39,6 +39,31 @@ nonisolated enum MeetingAppRegistry {
         return environment["LAVOIX_FACETIME_CAPTURE_AUTOTEST"] != nil && environment["LAVOIX_FACETIME_STANDIN_BUNDLE"] == bundleIdentifier
     }
 
+    /// Safari plays a call's sound in a separate WebKit process ("Safari Graphics and Media", `com.apple.WebKit.GPU`) that ScreenCaptureKit does not
+    /// attribute to the Safari app, so an app-filtered stream records the other side of a Meet/Teams-in-Safari call as digital silence. Measured on
+    /// a 76 minute call (2026-11-06) and on an invented tone in a stand-in WebKit app on both displays: the same all-silent track. A Core Audio tap on
+    /// the app and its Graphics-and-Media process hears it. The microphone then joins voice processing (as for FaceTime) because the echo canceller
+    /// that otherwise guards the ScreenCaptureKit microphone needs that same silent track as its reference.
+    static let safariBundleIdentifier = "com.apple.Safari"
+    /// `defaults write com.myos.engine MeetingSafariCallAudioTapEnabled -bool false` puts Safari back on the app-filtered ScreenCaptureKit capture
+    /// (the call audio then records as silence, and the microphone falls back to room audio) without a new build.
+    static let safariTapDefaultsKey = "MeetingSafariCallAudioTapEnabled"
+
+    static func callAudioComesFromWebKitMedia(bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier else { return false }
+        if bundleIdentifier == self.safariBundleIdentifier {
+            return UserDefaults.standard.object(forKey: self.safariTapDefaultsKey) as? Bool ?? true
+        }
+        // A diagnostic run may name a stand-in WebKit app (a small window playing an invented tone) to exercise this path without a call.
+        let environment = ProcessInfo.processInfo.environment
+        return environment["LAVOIX_FACETIME_CAPTURE_AUTOTEST"] != nil && environment["LAVOIX_WEBKIT_STANDIN_BUNDLE"] == bundleIdentifier
+    }
+
+    /// True when the other side of the call is read with a Core Audio tap instead of the app's own ScreenCaptureKit audio.
+    static func callAudioIsTapped(bundleIdentifier: String?) -> Bool {
+        self.callAudioComesFromSystemHelper(bundleIdentifier: bundleIdentifier) || self.callAudioComesFromWebKitMedia(bundleIdentifier: bundleIdentifier)
+    }
+
     /// Bundle identifiers for browsers eligible for Tier 2 URL reading. Google Meet's "app" is a
     /// Chrome/Edge PWA, not a separate bundle — it is matched via `pwaBundlePrefixes` instead.
     static let browserBundleIdentifiers: Set<String> = [

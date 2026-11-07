@@ -41,6 +41,8 @@ final class NotchMeetingModel: ObservableObject {
     @Published var detectedIconInset: CGFloat = 0
     /// Progress of the automatic notes once the meeting is over.
     @Published var notes: MeetingAutoAnalysis.Status = .idle
+    /// Something to tell the person while the recording runs (a silent call track, a call that seems over, dictation refused).
+    @Published var notice: MeetingNotice?
 
     /// What the closed recording strip shows: the meeting's name, and its logo (Google Meet's own, or the call app's icon).
     @Published var recordingTitle = ""
@@ -51,8 +53,8 @@ final class NotchMeetingModel: ObservableObject {
     /// Width of the hardware notch, so the strip leaves it clear.
     @Published var notchWidth: CGFloat = 190
 
-    /// The closed one-row strip at the notch.
-    var isPill: Bool { self.phase == .recording && !self.expanded }
+    /// The closed one-row strip at the notch. A notice always opens the card: it is no use if it hides in the strip.
+    var isPill: Bool { self.phase == .recording && !self.expanded && self.notice == nil }
 
     var duration: TimeInterval { max(0, (self.endedAt ?? Date()).timeIntervalSince(self.startedAt)) }
 }
@@ -73,9 +75,52 @@ struct NotchMeetingCardView: View {
     var onDetectedHover: (Bool) -> Void = { _ in }
     var onToggleExpanded: () -> Void = {}
     var onCardHover: (Bool) -> Void = { _ in }
+    var onNoticeStop: () -> Void = {}
+    var onNoticeDismiss: () -> Void = {}
 
     var body: some View {
         if self.model.isPill { self.pill } else { self.card }
+    }
+
+    /// The notice under the captions: what is wrong (or being asked), then the buttons.
+    private func noticeRow(_ notice: MeetingNotice) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.orange)
+                    .padding(.top, 1)
+                Text(notice.text)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack(spacing: 8) {
+                if let stopTitle = notice.stopTitle {
+                    Button(action: self.onNoticeStop) {
+                        Text(stopTitle)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 12).padding(.vertical, 4)
+                            .background(Capsule().fill(Color.white))
+                    }
+                    .buttonStyle(.plain)
+                }
+                Button(action: self.onNoticeDismiss) {
+                    Text(notice.dismissTitle)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .padding(.horizontal, 12).padding(.vertical, 4)
+                        .background(Capsule().strokeBorder(Color.white.opacity(0.35)))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.top, 2)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(notice.text)
     }
 
     /// Closed recording strip: [logo  meeting name] [notch] [red dot].
@@ -124,7 +169,12 @@ struct NotchMeetingCardView: View {
     }
 
     private var card: some View {
-        let size = NotchGeometry.meetingCardSize(notchHeight: self.notchHeight, compact: self.model.phase.isCompact)
+        let showsNotice = self.model.phase == .recording && self.model.notice != nil
+        let size = NotchGeometry.meetingCardSize(
+            notchHeight: self.notchHeight,
+            compact: self.model.phase.isCompact,
+            noticeHeight: showsNotice ? NotchGeometry.meetingNoticeHeight : 0
+        )
         return ZStack(alignment: .top) {
             NotchHubShape(topCornerRadius: 10, bottomCornerRadius: 28)
                 .fill(Color.black)
@@ -267,6 +317,9 @@ struct NotchMeetingCardView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.plain)
+                if let notice = self.model.notice {
+                    self.noticeRow(notice)
+                }
             }
         case .processing:
             HStack(spacing: 10) {
@@ -544,6 +597,7 @@ final class NotchMeetingCardController {
             self.wantsVisible = false
             self.model.caption = ""
         }
+        self.updateWatch()
         self.syncPanel()
     }
 
@@ -594,7 +648,7 @@ final class NotchMeetingCardController {
         self.collapseTask?.cancel()
         self.collapseTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            guard !Task.isCancelled, let self, self.model.phase == .recording, self.model.expanded else { return }
+            guard !Task.isCancelled, let self, self.model.phase == .recording, self.model.expanded, self.model.notice == nil else { return }
             self.model.expanded = false
             self.syncPanel()
         }
@@ -623,6 +677,96 @@ final class NotchMeetingCardController {
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard !Task.isCancelled else { return }
             self?.dismiss()
+        }
+    }
+
+    // MARK: - Notices (silent call audio, unprotected microphone, call over, dictation refused)
+
+    /// What the live watch last said, and what the person already dismissed (not shown again until the problem clears and comes back).
+    private var liveWarningKind: MeetingCaptureWarning.Kind?
+    private var dismissedWarningKind: MeetingCaptureWarning.Kind?
+    private var watchTask: Task<Void, Never>?
+    private var unprotectedClock = MeetingUnprotectedMicrophoneClock()
+    static let watchIntervalSeconds: Double = 5
+
+    /// Puts a notice on the recording card. Only a live recording has a card to put it on; returns whether it was shown.
+    @discardableResult
+    func showNotice(_ notice: MeetingNotice) -> Bool {
+        guard self.model.phase == .recording, self.wantsVisible else { return false }
+        self.collapseTask?.cancel()
+        self.model.notice = notice
+        self.model.expanded = true
+        self.syncPanel()
+        return true
+    }
+
+    func dismissNotice() {
+        if case let .captureWarning(kind) = self.model.notice?.kind { self.dismissedWarningKind = kind }
+        self.clearNotice()
+    }
+
+    private func clearNotice() {
+        guard self.model.notice != nil else { return }
+        self.model.notice = nil
+        self.syncPanel()
+        if self.model.phase == .recording, self.model.expanded { self.scheduleCollapse(after: 6) }
+    }
+
+    func stopFromNotice() {
+        self.model.notice = nil
+        self.stop()
+    }
+
+    /// Whether a meeting is being recorded right now (the card is in its recording phase).
+    var isRecordingMeeting: Bool { self.model.phase == .recording && self.wantsVisible }
+
+    /// Starts or stops the once-every-few-seconds look at what is being captured, to match the card's phase.
+    private func updateWatch() {
+        if self.model.phase == .recording, self.wantsVisible {
+            guard self.watchTask == nil else { return }
+            self.unprotectedClock = MeetingUnprotectedMicrophoneClock()
+            self.watchTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: UInt64(Self.watchIntervalSeconds * 1_000_000_000))
+                    guard !Task.isCancelled, let self else { return }
+                    await self.watchOnce()
+                }
+            }
+        } else {
+            self.watchTask?.cancel()
+            self.watchTask = nil
+            self.liveWarningKind = nil
+            self.dismissedWarningKind = nil
+            if self.model.notice != nil, self.model.phase != .recording { self.model.notice = nil }
+        }
+    }
+
+    private func watchOnce() async {
+        guard self.model.phase == .recording, let coordinator = self.coordinator, let session = coordinator.activeSession else { return }
+        let protection = await coordinator.liveMicrophoneProtection()
+        guard self.model.phase == .recording else { return }
+        let unprotectedFor = self.unprotectedClock.observe(protection, at: Date())
+        let warning = MeetingCaptureWatch.evaluate(
+            mode: session.mode,
+            callAudioSilentFor: coordinator.trackHealth[.applicationAudio]?.silentForSeconds,
+            microphoneUnprotectedFor: unprotectedFor
+        )
+        guard let warning else {
+            // The problem is gone: take its card away and forget the dismissal so a later return is told again.
+            if case .captureWarning = self.model.notice?.kind { self.clearNotice() }
+            self.liveWarningKind = nil
+            self.dismissedWarningKind = nil
+            return
+        }
+        self.liveWarningKind = warning.kind
+        if warning.kind == self.dismissedWarningKind { return }
+        let notice = MeetingNotice.captureWarning(warning)
+        // Refresh the wording (the silence grows) without re-opening a card the person is reading.
+        if self.model.notice?.kind == notice.kind {
+            if self.model.notice?.text != notice.text { self.model.notice = notice }
+        } else {
+            DebugLogger.shared.info("Meeting capture warning shown: \(warning.kind)", source: "NotchMeetingCard")
+            self.showNotice(notice)
         }
     }
 
@@ -854,7 +998,12 @@ final class NotchMeetingCardController {
             return
         }
         self.model.notchWidth = NotchGeometry.closedSize(for: screen).width
-        let frame = NotchGeometry.meetingCardFrame(for: screen, compact: self.model.phase.isCompact, pill: self.model.isPill)
+        let frame = NotchGeometry.meetingCardFrame(
+            for: screen,
+            compact: self.model.phase.isCompact,
+            pill: self.model.isPill,
+            hasNotice: self.model.phase == .recording && self.model.notice != nil
+        )
         let panel = self.panel ?? self.makePanel(frame: frame, notchHeight: NotchGeometry.closedSize(for: screen).height)
         self.panel = panel
         panel.setFrame(frame, display: true)
@@ -877,7 +1026,9 @@ final class NotchMeetingCardController {
             onDetectedNeverAgain: { MeetingDetectionPromptController.shared.dontShowAgainTapped() },
             onDetectedHover: { MeetingDetectionPromptController.shared.notchCardHover($0) },
             onToggleExpanded: { [weak self] in self?.toggleExpanded() },
-            onCardHover: { [weak self] in self?.cardHover($0) }
+            onCardHover: { [weak self] in self?.cardHover($0) },
+            onNoticeStop: { [weak self] in self?.stopFromNotice() },
+            onNoticeDismiss: { [weak self] in self?.dismissNotice() }
         )
         let hosting = NSHostingView(rootView: view)
         hosting.sizingOptions = []
