@@ -51,7 +51,10 @@ enum WhatsAppSamples {
             chat(2, "Krish Bhatia", "15551230004", "Video", file: clip, minutesAgo: 41),
             chat(3, "Aryan Shah", "15551230005", "Are we still on for Thursday?", minutesAgo: 190),
         ]
-        let thread: [WhatsAppMessage] = gifs
+        // whatsapp-emoji: a short, words-only chat, so the emoji row and the smiley beside the reply box fit in the still's fixed height.
+        let thread: [WhatsAppMessage] = variant == "whatsapp-emoji"
+            ? [message(910, "are you coming tonight?", mine: false), message(911, "yes! 7pm works", mine: true), message(912, "see you there", mine: false)]
+            : gifs
             ? [message(910, "look at this", mine: false), message(911, "GIF", mine: false, [gif], bare: true), message(912, "GIF", mine: true, [gifTwo], bare: true), message(913, "GIF", mine: false)]
             : chips
             ? [message(910, "from the terrace", mine: false, [tall]), message(911, "Document", mine: true, [lease], bare: true), message(912, "Photo", mine: false)]

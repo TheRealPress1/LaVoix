@@ -8,6 +8,8 @@ struct WhatsAppWidgetView: View {
     var staticLayout = false
     /// A still preview can't hover, so it can ask for one file's enlarged view to be drawn.
     var previewEnlargedFileID: Int64? = nil
+    /// Previews can't click: this draws the emoji row open.
+    var previewEmojiOpen = false
     @Environment(\.notchWidgetActive) private var active
     @State private var query = ""
     @State private var draft = ""
@@ -15,6 +17,10 @@ struct WhatsAppWidgetView: View {
     @FocusState private var draftFocused: Bool
     /// The file the pointer has rested on, shown large over the chat until the pointer leaves it.
     @StateObject private var hovering = AttachmentHoverModel()
+    /// The emoji row above the reply box, opened by the smiley beside it (the recents are shared with Messages).
+    @State private var emojiOpen = false
+    @State private var recentEmojis = NotchEmojiSettings.recents
+    private var showsEmoji: Bool { self.emojiOpen || self.previewEmojiOpen }
 
     private var enlargedFile: MessageAttachment? {
         self.hovering.enlarged ?? self.previewEnlargedFileID.flatMap { id in self.store.thread.lazy.flatMap(\.attachments).first { $0.id == id } }
@@ -167,21 +173,32 @@ struct WhatsAppWidgetView: View {
                         }
                         .padding(.vertical, 2)
                     }
+                    .simultaneousGesture(TapGesture().onEnded { self.emojiOpen = false })
                     .onChange(of: self.store.thread) { _, thread in if let last = thread.last { proxy.scrollTo(last.id, anchor: .bottom) } }
                     .onChange(of: self.store.pending) { _, items in if let last = items.last { proxy.scrollTo(last.id, anchor: .bottom) } }
-                    .onChange(of: self.store.selected) { _, _ in self.draft = ""; self.hovering.clear() }
+                    .onChange(of: self.store.selected) { _, _ in self.draft = ""; self.hovering.clear(); self.emojiOpen = false }
                     .onAppear { if let last = self.store.thread.last { proxy.scrollTo(last.id, anchor: .bottom) } }
                 }
             }
             if let error = self.store.error {
                 Text(error).font(.system(size: 10.5)).foregroundStyle(.orange).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
             }
+            if self.showsEmoji { NotchEmojiStrip(recents: self.recentEmojis, staticLayout: self.staticLayout) { self.add($0) } }
             HStack(spacing: 8) {
                 self.replyField
                     .padding(.horizontal, 12).frame(height: 30)
                     .background(Capsule().fill(Color.white.opacity(0.1)))
                     .contentShape(Capsule())
-                    .onTapGesture { self.startTyping() }
+                    .onTapGesture { self.emojiOpen = false; self.startTyping() }
+                Button { self.emojiOpen.toggle(); if self.emojiOpen { self.startTyping() } } label: {
+                    Image(systemName: "face.smiling")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.white.opacity(self.showsEmoji ? 0.9 : 0.5))
+                        .frame(width: 30, height: 30)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("Emoji")
                 Button(action: self.send) {
                     Image(systemName: self.store.isSending ? "ellipsis" : "arrow.up")
                         .font(.system(size: 12, weight: .bold)).foregroundStyle(.black)
@@ -201,11 +218,20 @@ struct WhatsAppWidgetView: View {
         .animation(.easeOut(duration: 0.12), value: self.enlargedFile?.id)
         // The cursor was asked for (a chat picked by hand, or opened from a card): it goes to the reply box.
         .onChange(of: self.store.replyFocusRequest) { _, _ in
+            self.emojiOpen = false
             _ = self.store.consumePendingReplyFocus()
             if !self.staticLayout { self.startTyping() }
         }
         // A chat opened from a card: the request was made before this chat was on screen, so it takes it as it appears.
         .onAppear { if !self.staticLayout, self.store.consumePendingReplyFocus() { self.startTyping() } }
+    }
+
+    /// Adds the emoji to what is being typed, remembers it among the recents (shared with Messages) and leaves the cursor in the box.
+    private func add(_ emoji: String) {
+        self.draft += emoji
+        self.recentEmojis = EmojiPalette.recording(emoji, in: self.recentEmojis)
+        NotchEmojiSettings.recents = self.recentEmojis
+        self.startTyping()
     }
 
     /// Gives the notch the keyboard and puts the cursor in the reply box (looking again until it is really there).
