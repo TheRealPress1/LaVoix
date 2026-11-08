@@ -748,7 +748,12 @@ final class NotchMeetingCardController {
         let unprotectedFor = self.unprotectedClock.observe(protection, at: Date())
         let warning = MeetingCaptureWatch.evaluate(
             mode: session.mode,
-            callAudioSilentFor: coordinator.trackHealth[.applicationAudio]?.silentForSeconds,
+            callAudioSilentFor: MeetingCaptureWatch.callAudioSilence(
+                silentForSeconds: coordinator.trackHealth[.applicationAudio]?.silentForSeconds,
+                lastSampleAt: coordinator.trackHealth[.applicationAudio]?.lastSampleAt,
+                recordingStartedAt: session.startedAt,
+                now: Date()
+            ),
             microphoneUnprotectedFor: unprotectedFor
         )
         guard let warning else {

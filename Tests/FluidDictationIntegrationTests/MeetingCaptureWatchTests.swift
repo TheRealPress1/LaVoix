@@ -42,6 +42,20 @@ final class MeetingCaptureWatchTests: XCTestCase {
         XCTAssertNil(clock.observe(nil, at: t0.addingTimeInterval(70)), "an unknown reading ends the run")
     }
 
+    func testATapThatDeliversNothingIsSilenceFromTheStartOfTheRecording() {
+        let start = Date(timeIntervalSince1970: 1000)
+        // No sample ever: the silence is the time since the recording began.
+        XCTAssertEqual(MeetingCaptureWatch.callAudioSilence(silentForSeconds: nil, lastSampleAt: nil, recordingStartedAt: start, now: start.addingTimeInterval(75)), 75)
+        // Buffers of zeros (ScreenCaptureKit): its own count is larger than the time since the last sample.
+        XCTAssertEqual(MeetingCaptureWatch.callAudioSilence(silentForSeconds: 600, lastSampleAt: start.addingTimeInterval(999), recordingStartedAt: start, now: start.addingTimeInterval(1000)), 600)
+        // Sound just heard: no silence.
+        XCTAssertEqual(MeetingCaptureWatch.callAudioSilence(silentForSeconds: 0, lastSampleAt: start.addingTimeInterval(70), recordingStartedAt: start, now: start.addingTimeInterval(71)), 1)
+        // A clock that ran backwards never gives a negative silence.
+        XCTAssertEqual(MeetingCaptureWatch.callAudioSilence(silentForSeconds: nil, lastSampleAt: start.addingTimeInterval(50), recordingStartedAt: start, now: start), 0)
+        let warning = MeetingCaptureWatch.evaluate(mode: .onlineCall, callAudioSilentFor: 75, microphoneUnprotectedFor: nil)
+        XCTAssertEqual(warning?.kind, .callAudioSilent)
+    }
+
     func testCallEndedOffersToStopAndKeepRecording() {
         let notice = MeetingNotice.callEnded
         XCTAssertEqual(notice.stopTitle, "Stop recording")

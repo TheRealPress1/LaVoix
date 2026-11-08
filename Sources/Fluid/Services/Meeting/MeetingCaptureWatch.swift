@@ -51,6 +51,15 @@ nonisolated enum MeetingCaptureWatch {
         }
     }
 
+    /// How long the call-audio track has been silent. A ScreenCaptureKit track delivers buffers of zeros while nothing plays, so its own
+    /// `silentForSeconds` grows. A Core Audio tap delivers nothing at all while nothing plays (its callbacks only arrive while the Mac plays something), so
+    /// its health never updates and `silentForSeconds` stays at 0 or nil: the time since the last sample (or, with none yet, since the recording began)
+    /// is the silence. The longer of the two counts.
+    static func callAudioSilence(silentForSeconds: Double?, lastSampleAt: Date?, recordingStartedAt: Date, now: Date) -> TimeInterval {
+        let sinceLastSample = max(0, now.timeIntervalSince(lastSampleAt ?? recordingStartedAt))
+        return max(silentForSeconds ?? 0, sinceLastSample)
+    }
+
     /// "a minute", "3 minutes".
     static func spoken(_ seconds: TimeInterval) -> String {
         let minutes = Int((seconds / 60).rounded(.down))

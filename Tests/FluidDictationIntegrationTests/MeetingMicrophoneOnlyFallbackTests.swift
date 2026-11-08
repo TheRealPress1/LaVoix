@@ -126,6 +126,24 @@ final class MeetingMicrophoneOnlyFallbackTests: XCTestCase {
         XCTAssertTrue(MeetingMicrophoneOnlyFallback.applies(to: saved))
     }
 
+    func testACallTrackWithNoAudioAtAllIsSilentOnceTheMicrophoneHasRecordedLongEnough() {
+        var saved = self.session(recordedSeconds: 600, callAudio: self.health(silentFor: nil))
+        saved.audioTracks = saved.audioTracks.map { track in
+            var track = track
+            if track.kind == .applicationAudio { track.chunks = [] }
+            return track
+        }
+        XCTAssertTrue(MeetingMicrophoneOnlyFallback.callAudioWasSilent(in: saved), "a tap writes no chunks while nothing plays")
+        XCTAssertTrue(MeetingMicrophoneOnlyFallback.applies(to: saved))
+        var short = self.session(recordedSeconds: 20, callAudio: self.health(silentFor: nil))
+        short.audioTracks = short.audioTracks.map { track in
+            var track = track
+            if track.kind == .applicationAudio { track.chunks = [] }
+            return track
+        }
+        XCTAssertFalse(MeetingMicrophoneOnlyFallback.callAudioWasSilent(in: short), "a recording that only just began says nothing")
+    }
+
     func testAVeryShortSilentCallTrackSaysNothing() {
         let saved = self.session(recordedSeconds: 20, callAudio: self.health(silentFor: 20))
         XCTAssertFalse(MeetingMicrophoneOnlyFallback.callAudioWasSilent(in: saved))

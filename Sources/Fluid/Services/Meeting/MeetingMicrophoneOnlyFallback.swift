@@ -36,6 +36,11 @@ nonisolated enum MeetingMicrophoneOnlyFallback {
     /// its length. Unknown health is NOT silence (the fallback never fires on a guess).
     static func callAudioWasSilent(in session: MeetingSession) -> Bool {
         guard let application = session.audioTracks.first(where: { $0.kind == .applicationAudio }) else { return true }
+        // A Core Audio tap writes no chunks at all while nothing plays: a call track with no audio, beside a microphone recorded for long enough, is silent.
+        if !application.chunks.contains(where: { $0.byteCount > 0 }) {
+            let microphone = session.audioTracks.first(where: { $0.kind == .microphone })
+            return (microphone.map { self.recordedSeconds(of: $0) } ?? 0) >= self.minimumSilentSeconds
+        }
         let recorded = self.recordedSeconds(of: application)
         guard recorded >= self.minimumSilentSeconds else { return false }
         guard let silentFor = application.health.silentForSeconds else { return false }
