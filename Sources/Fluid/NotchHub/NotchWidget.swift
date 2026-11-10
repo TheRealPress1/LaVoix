@@ -28,7 +28,7 @@ extension NotchWidget {
         case "download": Color(red: 1.00, green: 0.30, blue: 0.30)
         case "people": Color(red: 0.69, green: 0.32, blue: 0.87)
         case "facetime": Color(red: 0.20, green: 0.78, blue: 0.35)
-        case "messages": Color(red: 0.04, green: 0.52, blue: 1.00)
+        case "messages": Color(red: 0.20, green: 0.78, blue: 0.35)
         case "french": Color(red: 1.00, green: 0.80, blue: 0.00)
         default: Color.white
         }
