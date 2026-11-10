@@ -85,7 +85,10 @@ struct FrenchWidgetView: View {
             label = "Detect language"
         }
         return HStack(spacing: 5) {
-            Image(systemName: self.store.detected == nil && !self.store.phaseIsDone ? "sparkles" : "globe").font(.system(size: 10, weight: .semibold)).foregroundStyle(.white.opacity(0.55))
+            // Nothing to show an icon for until the language is known.
+            if self.store.detected != nil || self.store.phaseIsDone {
+                Image(systemName: "globe").font(.system(size: 10, weight: .semibold)).foregroundStyle(.white.opacity(0.55))
+            }
             Text(label).font(.system(size: 12, weight: .medium)).lineLimit(1)
                 .foregroundStyle(self.store.detected == nil && !self.store.phaseIsDone ? Color.white.opacity(0.6) : Color.white)
             if auto { Text("detected").font(.system(size: 10)).foregroundStyle(.white.opacity(0.35)) }
@@ -297,12 +300,11 @@ struct FrenchWidgetView: View {
         )
     }
 
-    /// Nothing asked yet: what the right-hand card is for, and what happens to the text.
+    /// Nothing asked yet: what the right-hand card is for.
     private var emptyState: some View {
         VStack(spacing: 5) {
             Image(systemName: "globe").font(.system(size: 26, weight: .ultraLight)).foregroundStyle(.white.opacity(0.22))
             Text("The \(self.store.destination.name) text appears here").font(.system(size: 12.5, weight: .medium)).foregroundStyle(.white.opacity(0.45))
-            Text("Claude, through your own login. Nothing is kept.").font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.28))
         }
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
