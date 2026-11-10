@@ -205,12 +205,11 @@ struct NowPlayingWidgetView: View {
         .shadow(color: .black.opacity(0.5), radius: 4)
     }
 
-    /// "Channel · 1.2M views · YouTube", or the artist and source for music.
+    /// "Channel · 1.2M views", or the artist for music. The source (Spotify, YouTube...) is the logo beside this line, so its name is not repeated here.
     private func detailLine(_ track: NowPlayingStore.Track) -> String {
         var parts: [String] = []
         if let artist = track.artist, !artist.isEmpty { parts.append(artist) }
         if let views = track.viewCount { parts.append(NowPlayingArtwork.viewsText(views)) }
-        parts.append(track.site?.name ?? track.appName ?? "")
         return parts.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
