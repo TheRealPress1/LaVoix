@@ -249,24 +249,32 @@ enum NotchHubDebug {
                 ])
                 model.selectedWidgetID = "whatsapp"
             } else if widgetName.hasPrefix("french") {
-                // french / french-languages (the destination list open) / french-translated (English in, French out) / french-english (English, destination Spanish: the button says Translate) / french-copied (the result after a click) / french-done / french-clean / french-allow / french-working / french-failed: invented French with the mistakes a quick email has.
-                let store = FrenchStore(destination: widgetName == "french-english" ? .spanish : .french)
+                // french / french-recent (the recent results open) / french-changes (the corrections list) / french-tone (a formal tone chosen) / french-translated (English in, French out) / french-english (English, destination Spanish: the button says Translate) / french-copied (the result after a click) / french-done / french-clean / french-allow / french-working / french-failed: invented French with the mistakes a quick email has.
+                let store = FrenchStore(destination: widgetName == "french-english" ? .spanish : .french, tone: widgetName == "french-tone" ? .formal : .auto)
                 store.persist = { _ in }
-                let typed = widgetName == "french-translated" ? Self.frenchSampleEnglish : Self.frenchSampleTyped
+                store.persistTone = { _ in }
+                let typed = ["french-translated", "french-recent", "french-tone"].contains(widgetName) ? Self.frenchSampleEnglish : Self.frenchSampleTyped
                 store.input = widgetName == "french-clean" ? Self.frenchSampleCorrected : typed
                 switch widgetName {
-                case "french-translated": store.debugShow(.done(FrenchResult(corrected: Self.frenchSampleTranslated, changes: [], note: nil, translatedFrom: "English")), from: typed)
-                case "french-done", "french-copied": store.debugShow(.done(Self.frenchSampleResult), from: typed)
+                case "french-translated", "french-recent": store.debugShow(.done(FrenchResult(corrected: Self.frenchSampleTranslated, changes: [], note: nil, translatedFrom: "English")), from: typed, source: .english)
+                case "french-done", "french-copied", "french-changes": store.debugShow(.done(Self.frenchSampleResult), from: typed, source: .french)
                 case "french-clean": store.debugShow(.done(FrenchResult(corrected: Self.frenchSampleCorrected, changes: [], note: nil)), from: Self.frenchSampleCorrected)
                 case "french-allow": store.debugShow(.needsAllow, from: typed)
                 case "french-working": store.debugShow(.working, from: typed)
                 case "french-failed": store.debugShow(.failed("Claude Code isn't signed in. Open Claude Code and sign in."), from: typed)
-                case "french-english": break
+                case "french-english", "french-tone": break
                 default: store.input = ""
+                }
+                if widgetName == "french-recent" {
+                    store.debugRecent([
+                        FrenchRecent(input: Self.frenchSampleEnglish, result: FrenchResult(corrected: Self.frenchSampleTranslated, changes: [], note: nil, translatedFrom: "English"), target: .french, source: .english, at: Date()),
+                        FrenchRecent(input: "Merci pour votre retour, je vous réponds demain.", result: FrenchResult(corrected: "Thank you for your reply, I will get back to you tomorrow.", changes: [], note: nil, translatedFrom: "French"), target: .english, source: .french, at: Date()),
+                        FrenchRecent(input: "Quando possiamo vederci?", result: FrenchResult(corrected: "Quand pouvons-nous nous voir ?", changes: [], note: nil, translatedFrom: "Italian"), target: .french, source: .italian, at: Date()),
+                    ])
                 }
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
-                    NotchWidget(id: "french", title: "Translate", systemImage: "highlighter", headerAccessory: { AnyView(FrenchLanguagePicker(store: store, startOpen: widgetName == "french-languages")) }) { AnyView(FrenchWidgetView(store: store, staticLayout: true, previewCopied: widgetName == "french-copied")) },
+                    NotchWidget(id: "french", title: "Translate", systemImage: "globe") { AnyView(FrenchWidgetView(store: store, staticLayout: true, previewCopied: widgetName == "french-copied", previewRecent: widgetName == "french-recent", previewChanges: widgetName == "french-changes")) },
                 ])
                 model.selectedWidgetID = "french"
             } else if widgetName.hasPrefix("dropsplit") {
@@ -1060,6 +1068,49 @@ enum NotchHubDebug {
             store.correct()
             check("a translated answer that names no language still says it is a translation", store.receive(["id": sent.last?.id ?? -1, "corrected": "Bonjour.", "mode": "translated"]) && { if case let .done(r) = store.phase { return r.translatedFrom == "another language" } else { return false } }())
             store.clear()
+
+            // The hub: tone, turning a translation round, recent results.
+            var heard: [FrenchTone] = []
+            let hub = FrenchStore(destination: .french, tone: .auto)
+            hub.persist = { _ in }
+            hub.persistTone = { heard.append($0) }
+            var hubSent: [FrenchRequest] = []
+            hub.send = { hubSent.append($0) }
+            hub.isListening = { true }
+            check("the tone goes automatic, formal, casual and round again, and each choice is kept", { hub.cycleTone(); hub.cycleTone(); hub.cycleTone(); return heard == [.formal, .casual, .auto] && hub.tone == .auto }())
+            check("a request names its tone only when one is chosen", !FrenchRequest(id: 1, text: "a", allow: false).json.contains("tone") && FrenchRequest(id: 1, text: "a", allow: false, tone: "formal").json.contains("\"tone\":\"formal\""))
+            check("a language is found by the name Claude gives it", CorrectionLanguage.named(" english ") == .english && CorrectionLanguage.named("Portuguese") == .portuguese && CorrectionLanguage.named("Japanese") == nil && CorrectionLanguage.named(nil) == nil)
+            hub.cycleTone()
+            hub.input = "Hi Camille, I received your documents and passed them on to my colleagues."
+            hub.correct()
+            check("a translation is asked for in the tone chosen", hubSent.last?.tone == "formal")
+            check("nothing can be turned round before there is a translation", !hub.canSwap)
+            check("a translation is taken, remembered, and knows the language it came from", hub.receive(["id": hubSent.last?.id ?? -1, "corrected": "Bonjour Camille, j'ai bien reçu vos documents.", "mode": "translated", "source": "English"]) && hub.recent.count == 1 && hub.resultSource == .english && hub.canSwap)
+            let firstRecent = hub.recent[0]
+            hub.swapLanguages()
+            check("turning it round puts the translation in the box and the language it came from as the destination", hub.input.hasPrefix("Bonjour Camille") && hub.destination == .english && hub.phase == .idle && !hub.canSwap && hub.willTranslate)
+            hub.input = "Hola, ¿cómo estás hoy? Espero que todo vaya muy bien contigo."
+            hub.select(.spanish)
+            hub.correct()
+            check("a correction is asked for with no tone, and cannot be turned round", hubSent.last?.tone == "" && !hub.canSwap)
+            check("a correction does not know another language it came from", hub.receive(["id": hubSent.last?.id ?? -1, "corrected": "Hola, ¿cómo estás hoy? Espero que todo vaya muy bien contigo.", "mode": "corrected", "source": "Spanish"]) && hub.resultSource == .spanish && !hub.canSwap)
+            hub.select(.french)
+            hub.restore(firstRecent)
+            check("an earlier result comes back whole, with its text and its language", hub.input.hasPrefix("Hi Camille") && hub.destination == .french && hub.phaseIsDone && hub.resultSource == .english && hub.canSwap)
+            for n in 0..<(FrenchStore.maxRecent + 3) {
+                hub.input = "Text number \(n) that is long enough to count as written in English"
+                hub.select(.french)
+                hub.correct()
+                _ = hub.receive(["id": hubSent.last?.id ?? -1, "corrected": "Texte \(n)", "mode": "translated", "source": "English"])
+            }
+            check("only the newest eight are kept, newest first", hub.recent.count == FrenchStore.maxRecent && hub.recent.first?.result.corrected == "Texte \(FrenchStore.maxRecent + 2)")
+            hub.input = "Text number 5 that is long enough to count as written in English"
+            hub.correct()
+            _ = hub.receive(["id": hubSent.last?.id ?? -1, "corrected": "Texte cinq encore", "mode": "translated", "source": "English"])
+            check("the same text into the same language replaces its earlier entry", hub.recent.count == FrenchStore.maxRecent && hub.recent.first?.result.corrected == "Texte cinq encore" && hub.recent.filter { $0.input.contains("number 5 ") }.count == 1)
+            hub.clearRecent()
+            check("clearing forgets them all", hub.recent.isEmpty)
+            hub.clear()
 
             // myOS not running: the tab says so quickly.
             let alone = FrenchStore()

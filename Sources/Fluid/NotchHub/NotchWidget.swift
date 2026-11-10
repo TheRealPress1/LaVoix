@@ -29,7 +29,7 @@ extension NotchWidget {
         case "people": Color(red: 0.69, green: 0.32, blue: 0.87)
         case "facetime": Color(red: 0.20, green: 0.78, blue: 0.35)
         case "messages": Color(red: 0.20, green: 0.78, blue: 0.35)
-        case "french": Color(red: 1.00, green: 0.80, blue: 0.00)
+        case "french": Color(red: 0.40, green: 0.50, blue: 1.00)
         default: Color.white
         }
     }
@@ -101,9 +101,7 @@ enum NotchWidgetRegistry {
             })
         }
         if NotchFrenchSettings.isEnabled && PeopleDatabase.isAvailable {
-            widgets.append(NotchWidget(id: "french", title: "Translate", systemImage: "highlighter", headerAccessory: {
-                AnyView(FrenchLanguagePicker(store: FrenchStore.shared))
-            }) {
+            widgets.append(NotchWidget(id: "french", title: "Translate", systemImage: "globe") {
                 AnyView(FrenchWidgetView(store: FrenchStore.shared))
             })
         }

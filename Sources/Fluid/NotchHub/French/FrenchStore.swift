@@ -7,6 +7,7 @@ enum NotchFrenchSettings {
     private static let enabledKey = "LaVoixNotchFrenchEnabled"
 
     private static let targetKey = "LaVoixNotchProofreadTarget"
+    private static let toneKey = "LaVoixNotchTranslateTone"
 
     static var isEnabled: Bool {
         get { UserDefaults.standard.object(forKey: self.enabledKey) as? Bool ?? true }
@@ -18,6 +19,40 @@ enum NotchFrenchSettings {
         get { UserDefaults.standard.string(forKey: self.targetKey).flatMap(CorrectionLanguage.init(rawValue:)) ?? .french }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: self.targetKey) }
     }
+}
+
+extension NotchFrenchSettings {
+    /// How formal a translation should be, kept between launches. Automatic until another is chosen.
+    static var tone: FrenchTone {
+        get { UserDefaults.standard.string(forKey: self.toneKey).flatMap(FrenchTone.init(rawValue:)) ?? .auto }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: self.toneKey) }
+    }
+}
+
+/// How formal a translation is. Automatic keeps the level the text shows (and is polite when it shows none); the other two ask for the formal or the
+/// informal way of addressing someone (vous or tu, Sie or du, usted or tú). It only applies to a translation: a correction keeps the writer's own voice.
+enum FrenchTone: String, CaseIterable {
+    case auto, formal, casual
+
+    var label: String {
+        switch self {
+        case .auto: "Auto"
+        case .formal: "Formal"
+        case .casual: "Casual"
+        }
+    }
+
+    /// The next one when the tone button is pressed.
+    var next: FrenchTone {
+        switch self {
+        case .auto: .formal
+        case .formal: .casual
+        case .casual: .auto
+        }
+    }
+
+    /// What goes to myOS: nothing for automatic.
+    var wire: String { self == .auto ? "" : self.rawValue }
 }
 
 /// A language the tab writes in: the destination chosen at the top right. What is typed can be in any language (the tab detects it, and so does Claude);
@@ -33,6 +68,36 @@ enum CorrectionLanguage: String, CaseIterable, Identifiable {
 
     var id: String { self.rawValue }
     var name: String { self.rawValue }
+
+    /// Two letters, for the language bar.
+    var code: String {
+        switch self {
+        case .french: "FR"
+        case .english: "EN"
+        case .spanish: "ES"
+        case .german: "DE"
+        case .italian: "IT"
+        case .portuguese: "PT"
+        }
+    }
+
+    /// The voice that reads a text in this language aloud.
+    var voiceLanguage: String {
+        switch self {
+        case .french: "fr-FR"
+        case .english: "en-US"
+        case .spanish: "es-ES"
+        case .german: "de-DE"
+        case .italian: "it-IT"
+        case .portuguese: "pt-BR"
+        }
+    }
+
+    /// The language a name (as Claude writes it: "English", "french") stands for, when it is one of these.
+    static func named(_ name: String?) -> CorrectionLanguage? {
+        let clean = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return self.allCases.first { $0.name.caseInsensitiveCompare(clean) == .orderedSame }
+    }
 
     var recognizerLanguage: NLLanguage {
         switch self {
@@ -63,6 +128,17 @@ struct FrenchResult: Equatable {
     var translatedFrom: String? = nil
 }
 
+/// A finished translation or correction, kept in memory only (until the notch restarts) so it can be brought back.
+struct FrenchRecent: Identifiable, Equatable {
+    let id = UUID()
+    let input: String
+    let result: FrenchResult
+    let target: CorrectionLanguage
+    /// The language the text was in, when it is one of the six.
+    let source: CorrectionLanguage?
+    let at: Date
+}
+
 enum FrenchPhase: Equatable {
     case idle
     case working
@@ -80,9 +156,12 @@ struct FrenchRequest: Equatable {
     let allow: Bool
     /// The language it should come out in (a `CorrectionLanguage` name).
     var target: String = CorrectionLanguage.french.rawValue
+    /// "formal" or "casual" for a translation; empty leaves it to Claude (an older myOS ignores it).
+    var tone = ""
 
     var json: String {
-        let object: [String: Any] = ["id": self.id, "text": self.text, "allow": self.allow, "target": self.target]
+        var object: [String: Any] = ["id": self.id, "text": self.text, "allow": self.allow, "target": self.target]
+        if !self.tone.isEmpty { object["tone"] = self.tone }
         guard let data = try? JSONSerialization.data(withJSONObject: object), let text = String(data: data, encoding: .utf8) else { return "{}" }
         return text
     }
@@ -152,6 +231,13 @@ final class FrenchStore: ObservableObject {
     /// The language it will come out in.
     @Published private(set) var destination: CorrectionLanguage
     @Published private(set) var phase: FrenchPhase = .idle
+    @Published private(set) var tone: FrenchTone
+    /// The language the text in the shown result was in, when it is one of the six: what the swap button turns the destination into.
+    @Published private(set) var resultSource: CorrectionLanguage?
+    /// The last finished results, newest first. In memory only: nothing of what is typed is written anywhere.
+    @Published private(set) var recent: [FrenchRecent] = []
+    static let maxRecent = 8
+    private var detectedAtRequest: CorrectionLanguage?
     /// What the shown result was made from (so the words that changed can be marked).
     @Published private(set) var correctedFrom = ""
 
@@ -163,9 +249,11 @@ final class FrenchStore: ObservableObject {
 
     /// Keeps the chosen destination between launches. Tests replace this so they never touch the real setting.
     var persist: (CorrectionLanguage) -> Void = { NotchFrenchSettings.targetLanguage = $0 }
+    var persistTone: (FrenchTone) -> Void = { NotchFrenchSettings.tone = $0 }
 
-    init(destination: CorrectionLanguage = NotchFrenchSettings.targetLanguage) {
+    init(destination: CorrectionLanguage = NotchFrenchSettings.targetLanguage, tone: FrenchTone = NotchFrenchSettings.tone) {
         self.destination = destination
+        self.tone = tone
     }
 
     /// How a request reaches myOS. Tests replace this.
@@ -174,6 +262,11 @@ final class FrenchStore: ObservableObject {
     }
     /// Is myOS listening for requests? Tests replace this.
     var isListening: () async -> Bool = { await FrenchRequests.shared.isListening() }
+
+    var phaseIsDone: Bool {
+        if case .done = self.phase { return true }
+        return false
+    }
 
     /// Will pressing the button translate (the text looks like another language than the destination) rather than correct?
     var willTranslate: Bool {
@@ -204,8 +297,10 @@ final class FrenchStore: ObservableObject {
         self.requestID += 1
         let id = self.requestID
         self.correctedFrom = text
+        self.detectedAtRequest = self.detected
         self.phase = .working
-        self.send(FrenchRequest(id: id, text: text, allow: allow, target: self.destination.rawValue))
+        // The tone only matters when the text is turned into another language.
+        self.send(FrenchRequest(id: id, text: text, allow: allow, target: self.destination.rawValue, tone: self.willTranslate ? self.tone.wire : ""))
         self.timeout?.cancel()
         self.timeout = Task { [weak self] in
             // myOS not being there is the common reason for silence: say so quickly instead of after a minute and a half.
@@ -245,11 +340,65 @@ final class FrenchStore: ObservableObject {
                 return FrenchChange(id: index, before: String(before.prefix(200)), after: String(after.prefix(200)), why: String((c["why"] as? String ?? "").prefix(200)))
             }
             let note = (object["note"] as? String).flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : String($0.prefix(300)) }
-            self.finish(id: id, .done(FrenchResult(corrected: corrected, changes: changes, note: note, translatedFrom: translated ? (source ?? "another language") : nil)))
+            let result = FrenchResult(corrected: corrected, changes: changes, note: note, translatedFrom: translated ? (source ?? "another language") : nil)
+            // A correction is in the language it comes out in; a translation was in the language Claude named (else the one the typing looked like).
+            self.resultSource = translated ? (CorrectionLanguage.named(source) ?? self.detectedAtRequest) : self.destination
+            self.finish(id: id, .done(result))
+            self.remember(FrenchRecent(input: self.correctedFrom, result: result, target: self.destination, source: self.resultSource, at: Date()))
         } else {
             self.finish(id: id, .failed("myOS sent an answer this tab could not read."))
         }
         return true
+    }
+
+    private func remember(_ item: FrenchRecent) {
+        // The same text into the same language again replaces its earlier entry instead of stacking up.
+        self.recent.removeAll { $0.input == item.input && $0.target == item.target }
+        self.recent.insert(item, at: 0)
+        if self.recent.count > Self.maxRecent { self.recent.removeLast(self.recent.count - Self.maxRecent) }
+    }
+
+    /// Brings an earlier result back, with the text and the language it was made for.
+    func restore(_ item: FrenchRecent) {
+        if case .working = self.phase { return }
+        self.timeout?.cancel()
+        self.requestID += 1
+        if item.target != self.destination {
+            self.destination = item.target
+            self.persist(item.target)
+        }
+        self.input = item.input
+        self.correctedFrom = item.input
+        self.resultSource = item.source
+        self.phase = .done(item.result)
+    }
+
+    func clearRecent() { self.recent = [] }
+
+    /// Is there a translation that can be turned round: the text it was made from was in one of the languages, and not the one it came out in.
+    var canSwap: Bool {
+        guard case .done = self.phase, let source = self.resultSource else { return false }
+        return source != self.destination
+    }
+
+    /// Puts the translation in the box and makes the language it came from the destination, so the same text goes back the other way (and a reply to
+    /// it goes out in the language it arrived in).
+    func swapLanguages() {
+        guard self.canSwap, case let .done(result) = self.phase, let back = self.resultSource else { return }
+        self.timeout?.cancel()
+        self.requestID += 1
+        self.destination = back
+        self.persist(back)
+        self.input = result.corrected
+        self.correctedFrom = ""
+        self.resultSource = nil
+        self.phase = .idle
+    }
+
+    /// The tone button: automatic, then formal, then casual.
+    func cycleTone() {
+        self.tone = self.tone.next
+        self.persistTone(self.tone)
     }
 
     /// Puts the corrected text into the box, to go on editing it.
@@ -272,14 +421,19 @@ final class FrenchStore: ObservableObject {
         self.requestID += 1
         self.input = ""
         self.correctedFrom = ""
+        self.resultSource = nil
         self.phase = .idle
     }
 
     /// For previews and tests: shows a phase without sending anything.
-    func debugShow(_ phase: FrenchPhase, from text: String = "") {
+    func debugShow(_ phase: FrenchPhase, from text: String = "", source: CorrectionLanguage? = nil) {
         self.phase = phase
         self.correctedFrom = text
+        self.resultSource = source
     }
+
+    /// For previews: fills the recent list without sending anything.
+    func debugRecent(_ items: [FrenchRecent]) { self.recent = items }
 
     /// Back to the typed text, with whatever was shown put away (a result is for the text it was made from).
     func dismissResult() {
