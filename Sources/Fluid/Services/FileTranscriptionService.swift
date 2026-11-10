@@ -440,10 +440,13 @@ final class FileTranscriptionService: ObservableObject {
             }
 
             // Get the current transcription provider (works for both Parakeet and Whisper)
-            let provider = self.asrService.fileTranscriptionProvider
-            guard provider.isReady else {
+            let activeProvider = self.asrService.fileTranscriptionProvider
+            guard activeProvider.isReady else {
                 throw TranscriptionError.modelLoadFailed("Transcription provider not ready")
             }
+            // An English-only model turns any other language into English-looking nonsense: listen first, and use the multilingual one
+            // for this file when it is not English.
+            let provider = await self.providerForSpokenLanguage(of: fileURL, default: activeProvider)
 
             // Check file extension
             let fileExtension = fileURL.pathExtension.lowercased()
@@ -892,6 +895,54 @@ final class FileTranscriptionService: ObservableObject {
             samples.append(contentsOf: repeatElement(Float(0), count: minimumSamples - samples.count))
         }
         return samples
+    }
+
+    // MARK: - Spoken language
+
+    /// `base` unless the selected model only knows English and the file is spoken in another language, in which case the multilingual
+    /// Parakeet model (when it is installed) is used for this file. Never downloads anything; any trouble falls back to `base`.
+    private func providerForSpokenLanguage(of fileURL: URL, default base: TranscriptionProvider) async -> TranscriptionProvider {
+        #if arch(arm64)
+        guard SpokenLanguageDetector.isEnabled,
+              let descriptor = SettingsStore.shared.selectedSpeechModel.parakeetDescriptor,
+              descriptor.supportedLanguageCodes == ["en"]
+        else { return base }
+        self.currentStatus = "Checking which language is spoken..."
+        let windows = await Task.detached(priority: .userInitiated) { SpokenLanguageSampler.windows(ofAudioFile: fileURL) }.value
+        let outcome = await SpokenLanguageDetector.detect(windows: windows)
+        guard case let .detected(detection) = outcome else {
+            DebugLogger.shared.info("File language check: \(Self.describe(outcome)); using the selected model", source: "FileTranscriptionService")
+            return base
+        }
+        guard detection.languageCode != "en" else {
+            DebugLogger.shared.info("File language check: heard en (share \(String(format: "%.2f", detection.share)))", source: "FileTranscriptionService")
+            return base
+        }
+        let multilingual = FluidAudioProvider(modelOverride: .parakeetTDT, configureWordBoosting: false)
+        do {
+            try await multilingual.prepare(progressHandler: nil)
+            DebugLogger.shared.info(
+                "File language check: heard \(detection.languageCode) (share \(String(format: "%.2f", detection.share)), \(detection.wordCount) words); using the multilingual model",
+                source: "FileTranscriptionService"
+            )
+            return multilingual
+        } catch {
+            DebugLogger.shared.warning("File language check: heard \(detection.languageCode) but the multilingual model could not load (\(error.localizedDescription))", source: "FileTranscriptionService")
+            return base
+        }
+        #else
+        return base
+        #endif
+    }
+
+    private static func describe(_ outcome: SpokenLanguageOutcome) -> String {
+        switch outcome {
+        case let .detected(d): "heard \(d.languageCode)"
+        case let .undecided(words): "could not tell from \(words) words"
+        case .noSpeech: "no speech to listen to"
+        case .modelMissing: "the multilingual model is not installed, so the language was not checked"
+        case let .failed(why): "the check failed (\(why))"
+        }
     }
 
     // MARK: - Audio Resampling Helpers

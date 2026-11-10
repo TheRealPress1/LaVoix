@@ -63,6 +63,7 @@ import SQLite3
 ///   {"op":"dictionary.import","file","replace"?}          -> {"ok":true,"replacements":n,"words":n}   (merges unless replace is true)
 ///   {"op":"meetings.merge_speakers","id","source","into"} / {"op":"meetings.reassign","id","segment","speaker"} / {"op":"meetings.undo","id"}  -> {"ok":true}   (fixes to a finished meeting)
 ///   {"op":"meetings.export","id","format":"text|json"}    -> {"ok":true,"file":"..."}   (the transcript)
+///   {"op":"meetings.retranscribe","id","language"?}        -> {"ok":true}   (transcribes a finished meeting again from its audio; language "auto" listens and decides, a code like "fr" is your choice and sticks; starts and returns, the meeting shows as transcribing until done)
 ///   {"op":"model.status"}                                 -> {"ok":true,"model":{enabled,selected,state,progress?,error?,models:[{id,name,detail,bytes,downloaded}]}}   (the on-device cleanup model)
 ///   {"op":"model.enable","enabled"} / {"op":"model.select","id"} / {"op":"model.download"}  -> {"ok":true}   (download starts and returns; ask model.status for progress)
 ///   {"op":"bookshelf.status"}                              -> {"ok":true,"connected":false,"site":"https://bookshelf.music","pending"?:{user_code,verification_url}}
@@ -725,7 +726,7 @@ nonisolated enum EngineSocket {
             default:
                 await model.download(); _ = emit(["ok": true])
             }
-        case "meetings.merge_speakers", "meetings.reassign", "meetings.undo", "meetings.export":
+        case "meetings.merge_speakers", "meetings.reassign", "meetings.undo", "meetings.export", "meetings.retranscribe":
             guard let edits = services.meetingEdits else { return fail("meetings are not available") }
             guard let id = uuid() else { return fail("missing or bad id") }
             func other(_ key: String) -> UUID? { (object[key] as? String).flatMap(UUID.init(uuidString:)) }
@@ -739,6 +740,8 @@ nonisolated enum EngineSocket {
                     try await edits.reassign(id: id, segment: segment, to: speaker); _ = emit(["ok": true])
                 case "meetings.undo":
                     try await edits.undo(id: id); _ = emit(["ok": true])
+                case "meetings.retranscribe":
+                    try await edits.retranscribe(id: id, language: object["language"] as? String); _ = emit(["ok": true])
                 default:
                     _ = emit(["ok": true, "file": try await edits.export(id: id, format: object["format"] as? String ?? "text")])
                 }
@@ -1307,6 +1310,10 @@ private final class FakeMeetingEdits: EngineMeetingEditsProviding, @unchecked Se
     func mergeSpeakers(id: UUID, source: UUID, into target: UUID) async throws { if source == target { throw EngineMeetingsError.unavailable("Pick a different speaker to merge into.") }; self.note("merge") }
     func reassign(id: UUID, segment: UUID, to speaker: UUID) async throws { self.note("reassign") }
     func undo(id: UUID) async throws { self.note("undo") }
+    func retranscribe(id: UUID, language: String?) async throws {
+        if let language, language != "auto", language.count != 2 { throw EngineMeetingsError.unavailable("That language is not supported.") }
+        self.note("retranscribe:" + (language ?? "-"))
+    }
     func export(id: UUID, format: String) async throws -> String { if format != "text" && format != "json" { throw EngineMeetingsError.unavailable("Format must be text or json.") }; return "[00:00] Dana: hello (\(format))" }
 }
 
@@ -1849,7 +1856,10 @@ nonisolated enum EngineSocketAutotest {
                 check("meetings.reassign and meetings.undo work", ask(#"{"op":"meetings.reassign","id":"\#(m)","segment":"\#(a)","speaker":"\#(b)"}"#)?["ok"] as? Bool == true && ask(#"{"op":"meetings.undo","id":"\#(m)"}"#)?["ok"] as? Bool == true)
                 check("meetings.reassign needs a segment and speaker", ask(#"{"op":"meetings.reassign","id":"\#(m)"}"#)?["ok"] as? Bool == false)
                 check("meetings.export returns the transcript and refuses odd formats", (ask(#"{"op":"meetings.export","id":"\#(m)","format":"json"}"#)?["file"] as? String)?.contains("json") == true && ask(#"{"op":"meetings.export","id":"\#(m)","format":"pdf"}"#)?["ok"] as? Bool == false)
-                check("the edits reached the meeting service", fakeEdits.calls == ["merge", "reassign", "undo"])
+                check("meetings.retranscribe passes the language on", ask(#"{"op":"meetings.retranscribe","id":"\#(m)","language":"fr"}"#)?["ok"] as? Bool == true && ask(#"{"op":"meetings.retranscribe","id":"\#(m)"}"#)?["ok"] as? Bool == true)
+                check("meetings.retranscribe refuses a language that is not one", ask(#"{"op":"meetings.retranscribe","id":"\#(m)","language":"klingon"}"#)?["ok"] as? Bool == false)
+                check("meetings.retranscribe needs a meeting id", ask(#"{"op":"meetings.retranscribe"}"#)?["ok"] as? Bool == false)
+                check("the edits reached the meeting service", fakeEdits.calls == ["merge", "reassign", "undo", "retranscribe:fr", "retranscribe:-"])
             }
             // a stuck check gives up instead of hanging
             do {

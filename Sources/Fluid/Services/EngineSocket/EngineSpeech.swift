@@ -24,9 +24,11 @@ nonisolated enum EngineSpeechError: LocalizedError, Equatable {
 }
 
 nonisolated struct LiveEngineSpeech: EngineSpeechProviding {
-    @MainActor private static var model: VoiceEngineSettingsViewModel {
-        VoiceEngineSettingsViewModel(settings: SettingsStore.shared, appServices: AppServices.shared)
-    }
+    /// One view model for the life of the engine. It used to be made fresh for every request, so `download` and `activate` started their work
+    /// in a task that holds the model weakly and the model was gone before the task ran: the call answered ok and nothing happened
+    /// (found 2026-11-10 asking for the multilingual speech model). It also keeps the download's progress where `list` can see it.
+    @MainActor private static let sharedModel = VoiceEngineSettingsViewModel(settings: SettingsStore.shared, appServices: AppServices.shared)
+    @MainActor private static var model: VoiceEngineSettingsViewModel { self.sharedModel }
 
     @MainActor private static var lastCheck = Date.distantPast
 

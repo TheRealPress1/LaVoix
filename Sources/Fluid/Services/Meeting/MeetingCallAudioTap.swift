@@ -97,6 +97,8 @@ final nonisolated class MeetingCallAudioTap: @unchecked Sendable {
     private var running = false
     private var generation: UInt64 = 0
     private var lastBufferAt = Date()
+    /// Rebuilds in a row that found nothing playing; the log says what the audio processes were doing on the first and then once in a while.
+    private var silentRebuilds = 0
 
     // Touched on `ioQueue` only (and reset by `reset()` on the same queue).
     private var resampler: AVAudioConverter?
@@ -154,6 +156,15 @@ final nonisolated class MeetingCallAudioTap: @unchecked Sendable {
                 reason = "the device sample rate changed from \(Int(rig.sampleRate)) to \(Int(rate)) Hz"
             } else if Date().timeIntervalSince(last) > Self.stallSeconds {
                 reason = "no audio buffers for \(Int(Self.stallSeconds)) s"
+                let count = self.lock.withLock { () -> Int in
+                    self.silentRebuilds += 1
+                    return self.silentRebuilds
+                }
+                // A 50-minute Safari call on 2026-11-10 never delivered a buffer, and the log could not say whether Safari's audio process was
+                // playing at all. Say what the audio processes were doing, on the first stall and then every minute.
+                if count == 1 || count % 20 == 0 { reason = "no audio buffers for \(Int(Self.stallSeconds)) s (\(self.audioProcessSummary()))" }
+            } else {
+                self.lock.withLock { self.silentRebuilds = 0 }
             }
         } else {
             reason = "an earlier rebuild failed"
@@ -252,6 +263,45 @@ final nonisolated class MeetingCallAudioTap: @unchecked Sendable {
         }
         if !keep { Self.teardown(rig) }
         return source
+    }
+
+    /// For the log: every audio process of the target app (and any WebKit media process), with whether it is playing or listening now.
+    /// Names and numbers only; nothing that was said or played.
+    private func audioProcessSummary() -> String {
+        var appNames: Set<String> = []
+        switch self.target {
+        case let .webKitMedia(bundle):
+            NSRunningApplication.runningApplications(withBundleIdentifier: bundle).compactMap(\.localizedName).forEach { appNames.insert($0) }
+        case let .helperPath(path):
+            appNames.insert(URL(fileURLWithPath: path).lastPathComponent)
+        }
+        var parts: [String] = []
+        for object in Self.processObjects(where: { _ in true }) {
+            guard let pid = Self.processPID(of: object) else { continue }
+            let name = NSRunningApplication(processIdentifier: pid)?.localizedName ?? ""
+            guard appNames.contains(where: { name.hasPrefix($0) }) || name.hasSuffix("Graphics and Media") || name.contains("Web Content") else { continue }
+            let output = Self.processFlag(object, kAudioProcessPropertyIsRunningOutput)
+            let input = Self.processFlag(object, kAudioProcessPropertyIsRunningInput)
+            parts.append("\(name.isEmpty ? "?" : name) pid=\(pid) playing=\(output) listening=\(input)")
+        }
+        let tapped = self.targetObjects().count
+        return "tapping \(tapped) process object(s); audio processes: " + (parts.isEmpty ? "none of this app's" : parts.joined(separator: "; "))
+    }
+
+    private static func processPID(of object: AudioObjectID) -> pid_t? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyPID, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain
+        )
+        var pid: pid_t = 0
+        var size = UInt32(MemoryLayout<pid_t>.size)
+        return AudioObjectGetPropertyData(object, &address, 0, nil, &size, &pid) == noErr ? pid : nil
+    }
+
+    private static func processFlag(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> Int {
+        var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(object, &address, 0, nil, &size, &value) == noErr ? Int(value) : -1
     }
 
     /// The Core Audio process objects to tap for this target, looked up afresh each time the tap is built (a WebKit media process can be replaced).

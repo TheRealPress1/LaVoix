@@ -81,6 +81,7 @@
 		E5EC00000000000000000082 /* MeetingMicrophoneCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000081 /* MeetingMicrophoneCaptureTests.swift */; };
 		5A3B00000000000000000002 /* MeetingVoiceProcessingCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A3B00000000000000000001 /* MeetingVoiceProcessingCaptureTests.swift */; };
 		C11A00000000000000000202 /* CalendarDayStepTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11A00000000000000000201 /* CalendarDayStepTests.swift */; };
+		C11A00000000000000000302 /* SpokenLanguageDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11A00000000000000000301 /* SpokenLanguageDetectorTests.swift */; };
 		C11A00000000000000000102 /* MeetingMicrophoneOnlyFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11A00000000000000000101 /* MeetingMicrophoneOnlyFallbackTests.swift */; };
 		C11A00000000000000000104 /* MeetingCaptureWatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11A00000000000000000103 /* MeetingCaptureWatchTests.swift */; };
 		C11A00000000000000000106 /* MeetingCaptureDecisionLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11A00000000000000000105 /* MeetingCaptureDecisionLogTests.swift */; };
@@ -235,6 +236,7 @@
 		E5EC00000000000000000081 /* MeetingMicrophoneCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingMicrophoneCaptureTests.swift; sourceTree = "<group>"; };
 		5A3B00000000000000000001 /* MeetingVoiceProcessingCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingVoiceProcessingCaptureTests.swift; sourceTree = "<group>"; };
 		C11A00000000000000000201 /* CalendarDayStepTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDayStepTests.swift; sourceTree = "<group>"; };
+		C11A00000000000000000301 /* SpokenLanguageDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpokenLanguageDetectorTests.swift; sourceTree = "<group>"; };
 		C11A00000000000000000101 /* MeetingMicrophoneOnlyFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingMicrophoneOnlyFallbackTests.swift; sourceTree = "<group>"; };
 		C11A00000000000000000103 /* MeetingCaptureWatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingCaptureWatchTests.swift; sourceTree = "<group>"; };
 		C11A00000000000000000105 /* MeetingCaptureDecisionLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingCaptureDecisionLogTests.swift; sourceTree = "<group>"; };
@@ -475,6 +477,7 @@
 				E5EC00000000000000000081 /* MeetingMicrophoneCaptureTests.swift */,
 				5A3B00000000000000000001 /* MeetingVoiceProcessingCaptureTests.swift */,
 				C11A00000000000000000201 /* CalendarDayStepTests.swift */,
+				C11A00000000000000000301 /* SpokenLanguageDetectorTests.swift */,
 				C11A00000000000000000101 /* MeetingMicrophoneOnlyFallbackTests.swift */,
 				C11A00000000000000000103 /* MeetingCaptureWatchTests.swift */,
 				C11A00000000000000000105 /* MeetingCaptureDecisionLogTests.swift */,
@@ -857,6 +860,7 @@
 				E5EC00000000000000000082 /* MeetingMicrophoneCaptureTests.swift in Sources */,
 				5A3B00000000000000000002 /* MeetingVoiceProcessingCaptureTests.swift in Sources */,
 				C11A00000000000000000202 /* CalendarDayStepTests.swift in Sources */,
+				C11A00000000000000000302 /* SpokenLanguageDetectorTests.swift in Sources */,
 				C11A00000000000000000102 /* MeetingMicrophoneOnlyFallbackTests.swift in Sources */,
 				C11A00000000000000000104 /* MeetingCaptureWatchTests.swift in Sources */,
 				C11A00000000000000000106 /* MeetingCaptureDecisionLogTests.swift in Sources */,

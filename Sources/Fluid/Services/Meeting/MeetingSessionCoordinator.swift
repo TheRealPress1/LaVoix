@@ -194,6 +194,10 @@ final class MeetingSessionCoordinator: ObservableObject {
     private var correctionUndoStacks: [MeetingSessionID: [TranscriptCorrection]] = [:]
     private let validateRecordingModels: @MainActor () async throws -> Void
     private let processingLogger: @MainActor (String) -> Void
+    /// Checks which language a finished meeting is spoken in before it is transcribed (replaced in tests).
+    var languageResolver: (MeetingSession, URL) async -> (resolution: MeetingLanguageResolution?, note: String) = {
+        await MeetingLanguageResolver.resolve(session: $0, directory: $1)
+    }
     private static let correctionUndoStackCap = 50
 
     init(
@@ -653,12 +657,17 @@ final class MeetingSessionCoordinator: ObservableObject {
         return try await self.retryProcessing(sessionID: activeSession.id)
     }
 
+    /// Transcribes a finished meeting again. `language` is nil to keep what the meeting has (the automatic check still runs unless the
+    /// person chose it before), "auto" to let the automatic check decide, or a language code the person chose, which sticks.
     @discardableResult
-    func retryProcessing(sessionID: MeetingSessionID) async throws -> MeetingSession {
+    func retryProcessing(sessionID: MeetingSessionID, language: String? = nil) async throws -> MeetingSession {
         guard self.retryTask == nil else { throw MeetingCoordinatorError.activityInProgress }
+        if let language, language != "auto", !VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(language) {
+            throw MeetingProcessingError.unsupportedLanguage
+        }
         let task = Task { @MainActor [weak self] () throws -> MeetingSession in
             guard let self else { throw MeetingCoordinatorError.noActiveMeeting }
-            return try await self.performRetryProcessing(sessionID: sessionID)
+            return try await self.performRetryProcessing(sessionID: sessionID, language: language)
         }
         self.retryTask = task
         do {
@@ -671,7 +680,20 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
     }
 
-    private func performRetryProcessing(sessionID: MeetingSessionID) async throws -> MeetingSession {
+    /// The meeting with the language the person asked for: "auto" hands the choice back to the automatic check, a code is kept for good.
+    nonisolated static func applyingLanguageChoice(_ language: String?, to session: MeetingSession) -> MeetingSession {
+        guard let language else { return session }
+        var updated = session
+        if language == "auto" {
+            updated.languageChosenByUser = nil
+        } else {
+            updated.languageCode = language
+            updated.languageChosenByUser = true
+        }
+        return updated
+    }
+
+    private func performRetryProcessing(sessionID: MeetingSessionID, language: String? = nil) async throws -> MeetingSession {
         await self.ensureRestored()
         guard self.stopTask == nil,
               self.interruptionTask == nil,
@@ -687,7 +709,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             guard let session = self.activeSession, session.hasRetryableAudio else {
                 throw MeetingCoordinatorError.noRecoverableAudio
             }
-            return try await self.beginProcessingRetry(session)
+            return try await self.beginProcessingRetry(Self.applyingLanguageChoice(language, to: session))
         }
 
         if let offer = self.activeSession {
@@ -731,9 +753,10 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.state = .idle
         }
 
-        self.activeSession = session
-        self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
-        return try await self.beginProcessingRetry(session)
+        let chosen = Self.applyingLanguageChoice(language, to: session)
+        self.activeSession = chosen
+        self.trackHealth = Dictionary(uniqueKeysWithValues: chosen.audioTracks.map { ($0.kind, $0.health) })
+        return try await self.beginProcessingRetry(chosen)
     }
 
     private func beginProcessingRetry(_ inputSession: MeetingSession) async throws -> MeetingSession {
@@ -1605,6 +1628,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         var session = inputSession
         do {
             let sessionDirectory = try await self.store.sessionDirectory(for: session.id)
+            // What is spoken wins over what the setup said: a French meeting left on English would otherwise come out as English nonsense.
+            let languageCheck = await self.languageResolver(session, sessionDirectory)
+            self.processingLogger("Meeting language check: session=\(session.id.uuidString.prefix(8)) \(languageCheck.note)")
+            if let found = languageCheck.resolution { session.languageCode = found.languageCode }
             let result = try await self.processing.process(
                 session: session,
                 sessionDirectory: sessionDirectory

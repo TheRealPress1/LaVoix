@@ -874,6 +874,9 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     /// Present only for automatically named recordings; cleared when the user renames one.
     var defaultTitleBase: String? = nil
     var languageCode: String
+    /// True when the person picked this meeting's language by hand ("Transcribe again in ..."): the automatic language check leaves it alone.
+    /// Optional so sessions written before the check existed still decode.
+    var languageChosenByUser: Bool? = nil
     var mode: MeetingCaptureMode
     var platform: MeetingPlatformProfile?
     var capturedApplication: MeetingApplicationIdentity?
@@ -1157,12 +1160,12 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
                 throw MeetingModelValidationError.missingSegmentSpeaker
             }
         }
-        for attempt in self.processingAttempts {
-            if let languageCode = attempt.languageCode,
-               languageCode != self.languageCode
-            {
-                throw MeetingModelValidationError.unsupportedLanguage
-            }
+        // Only the newest attempt has to agree with the meeting's language: transcribing again in another language (a meeting recorded
+        // with the wrong language, then corrected) leaves the earlier attempts, honestly labelled with the language they used.
+        if let languageCode = self.processingAttempts.last(where: { $0.languageCode != nil })?.languageCode,
+           languageCode != self.languageCode
+        {
+            throw MeetingModelValidationError.unsupportedLanguage
         }
     }
 
