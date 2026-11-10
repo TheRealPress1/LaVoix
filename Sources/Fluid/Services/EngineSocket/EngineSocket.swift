@@ -23,6 +23,7 @@ import SQLite3
 ///   {"op":"meetings.notes_feedback","id","kind","rating":"good|bad|edited","text"?}  -> {"ok":true}   (your verdict on the notes; "edited" carries your corrected version)
 ///   {"op":"training.status"} -> {"ok":true,"training":{good,bad,edited,usable,unrated_inputs,folder}}  /  {"op":"training.export"} -> {"ok":true,"export":{train,valid,folder}}  /  {"op":"training.clear"}
 ///   {"op":"training.rate_ask","system","user","output","rating":"good|bad|edited","corrected"?}  -> {"ok":true}   (an answer from Ask, with the exact input it was given)
+///   {"op":"meetings.transcribe_file","path","title"?}     -> streams {"event":"progress"|"done"|"error"} (see EngineFileTranscription: any audio or video file, saved under private/Transcripts)
 ///   {"op":"meetings.notes_save","id","text"}              -> {"ok":true}   (your own jot pad, notes.md)
 ///   {"op":"meetings.notes_set","id","kind","text","model"} -> {"ok":true}   (notes written elsewhere for one style, marked with the model; replaces that style; not your jot pad)
 ///   {"op":"meetings.notes_generate","id","kind","auto"}   -> {"event":"progress","message"} ... {"event":"done","text"}
@@ -523,6 +524,9 @@ nonisolated enum EngineSocket {
             } else {
                 fail("Reading the screen took too long.")
             }
+        case "meetings.transcribe_file":
+            guard let path = object["path"] as? String else { return fail("missing path") }
+            await EngineFileTranscription.run(path: path, title: object["title"] as? String, emit: emit)
         case "permissions.status":
             guard let permissions = services.permissions else { return fail("permissions are not available") }
             _ = emit(["ok": true, "permissions": await permissions.status()])
