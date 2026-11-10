@@ -174,6 +174,19 @@ final class CalendarStore: ObservableObject {
         return store
     }
 
+    /// `sample()` with two meetings that already took place today (one has a Meet link and a recording, one does not), for render previews.
+    static func samplePast() -> CalendarStore {
+        let store = sample()
+        let now = Date()
+        func at(_ minutes: Double) -> Date { now.addingTimeInterval(minutes * 60) }
+        let past = [
+            Event(id: "p1", title: "Standup", start: at(-300), end: at(-270), isAllDay: false, color: .purple, location: nil, joinURL: URL(string: "https://meet.google.com/abc-defg-hij"), attendeeCount: 4),
+            Event(id: "p2", title: "Coffee with Maya", start: at(-200), end: at(-140), isAllDay: false, color: .green, location: "Café Berlin", joinURL: nil, attendeeCount: 2),
+        ]
+        store.monthEvents = past + store.monthEvents
+        return store
+    }
+
     // MARK: - Lifecycle
 
     func start() {

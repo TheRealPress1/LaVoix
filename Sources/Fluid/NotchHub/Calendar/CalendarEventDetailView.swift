@@ -10,6 +10,8 @@ struct CalendarEventDetailView: View {
     enum Screen: Equatable { case detail, guests }
 
     @ObservedObject var store: CalendarStore
+    /// The recordings that exist: a meeting that was recorded offers its notes instead of Record.
+    @ObservedObject var recorded: RecordedMeetingsStore
     var staticLayout = false
     let onClose: () -> Void
 
@@ -29,10 +31,11 @@ struct CalendarEventDetailView: View {
     }
 
     init(
-        store: CalendarStore, event: CalendarStore.Event, staticLayout: Bool = false, screen: Screen = .detail, confirmingDelete: Bool = false,
+        store: CalendarStore, event: CalendarStore.Event, recorded: RecordedMeetingsStore = .shared, staticLayout: Bool = false, screen: Screen = .detail, confirmingDelete: Bool = false,
         newGuests: [CalendarGuest] = [], previewQuery: String = "", previewSuggestions: [CalendarGuest] = [], onClose: @escaping () -> Void
     ) {
         self._store = ObservedObject(wrappedValue: store)
+        self._recorded = ObservedObject(wrappedValue: recorded)
         self.staticLayout = staticLayout
         self.onClose = onClose
         self._event = State(initialValue: event)
@@ -131,7 +134,20 @@ struct CalendarEventDetailView: View {
     private var buttons: some View {
         HStack(spacing: 6) {
             if let url = self.meetURL { self.pill("Join", systemImage: "video.fill", prominent: true) { NSWorkspace.shared.open(url) } }
-            if self.event.looksLikeMeeting || self.meetURL != nil {
+            if let recording = self.recorded.recording(for: self.event) {
+                Button { if !self.staticLayout { MyOSLink.openMeeting(recording.id) } } label: {
+                    HStack(spacing: 5) {
+                        MeetingNotesIcon(size: 16)
+                        Text("Notes").font(.system(size: 11.5, weight: .semibold))
+                    }
+                    .foregroundStyle(Color.white)
+                    .padding(.leading, 5).padding(.trailing, 10).frame(height: 24)
+                    .background(Capsule().fill(Color.white.opacity(0.16)))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("Open the notes and transcript in myOS")
+            } else if self.event.looksLikeMeeting || self.meetURL != nil {
                 self.pill("Record", systemImage: "record.circle", prominent: false) { NotchMeetingCardController.shared.record(self.event) }
             }
             Spacer(minLength: 0)

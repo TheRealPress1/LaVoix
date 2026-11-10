@@ -25,6 +25,12 @@ enum NotchHubDebug {
         }
     }
 
+    /// One recording, of the sample day's "Standup" (an hour and a half ago), so a preview shows the notes icon.
+    @MainActor static func samplePastRecordings() -> RecordedMeetingsStore {
+        let start = Date().addingTimeInterval(-300 * 60)
+        return RecordedMeetingsStore.fixed([RecordedMeetings.Entry(id: UUID(), title: "Standup", start: start, end: start.addingTimeInterval(28 * 60), state: "completed")])
+    }
+
     /// What the meeting details show in a preview picture: the first sample meeting, its invite search, or its delete question.
     @MainActor static func eventPreview(_ widgetName: String) -> CalendarEventPreview? {
         switch widgetName {
@@ -172,6 +178,7 @@ enum NotchHubDebug {
                 let store: CalendarStore
                 switch widgetName {
                 case "calendar-new", "calendar-new-guests", "calendar-new-accounts", "calendar-new-withguests", "calendar-event", "calendar-event-guests", "calendar-event-delete": store = .sample()
+                case "calendar-past": store = .samplePast()
                 case "calendar-empty": store = .sample(empty: true)
                 case "calendar-denied": store = .sample(access: .denied)
                 case "calendar-unknown": store = .sample(access: .unknown)
@@ -179,7 +186,7 @@ enum NotchHubDebug {
                 }
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
-                    NotchWidget(id: "calendar", title: "Calendar", systemImage: "calendar") { AnyView(CalendarWidgetView(store: store, staticLayout: true, startCreating: widgetName.hasPrefix("calendar-new"), preview: Self.newEventPreview(widgetName), eventPreview: Self.eventPreview(widgetName))) },
+                    NotchWidget(id: "calendar", title: "Calendar", systemImage: "calendar") { AnyView(CalendarWidgetView(store: store, recorded: Self.samplePastRecordings(), staticLayout: true, startCreating: widgetName.hasPrefix("calendar-new"), preview: Self.newEventPreview(widgetName), eventPreview: Self.eventPreview(widgetName))) },
                 ])
                 model.selectedWidgetID = "calendar"
             } else if widgetName.hasPrefix("clipboard") || widgetName.hasPrefix("shelf") {
@@ -1693,6 +1700,43 @@ enum NotchHubDebug {
                   && NotchBannerContent.MeetingSet(title: "t", start: noon, end: noon, meetLink: nil, invited: [], viaGoogle: false).detailLine == "Added to your calendar")
             let setCard = NotchBannerContent(chatID: 0, chatGUID: "", title: "t", subtitle: nil, text: "", date: now, meetingSet: NotchBannerContent.MeetingSet(title: "t", start: noon, end: noon, meetLink: setLink, invited: [], viaGoogle: true))
             check("the card has room for its buttons", setCard.contentHeight(expanded: false) > NotchBannerContent(chatID: 1, chatGUID: "g", title: "t", subtitle: nil, text: "hi", date: now).contentHeight(expanded: false))
+
+            // Which meetings were recorded (made-up folders in a temporary place; only titles and times are read)
+            let tmpRoot = FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-recorded-\(UUID().uuidString)", isDirectory: true)
+            func session(_ name: String, state: String, start: String, end: String?, title: String, modified: Date? = nil, raw: String? = nil) -> UUID {
+                let id = UUID()
+                let folder = tmpRoot.appendingPathComponent(name, isDirectory: true)
+                try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                let body = raw ?? "{\"id\":\"\(id.uuidString)\",\"title\":\"\(title)\",\"startedAt\":\"\(start)\",\"endedAt\":\(end.map { "\"\($0)\"" } ?? "null"),\"state\":\"\(state)\",\"transcriptSegments\":[{\"text\":\"words that are never read\"}]}"
+                let file = folder.appendingPathComponent("session.json")
+                try? body.write(to: file, atomically: true, encoding: .utf8)
+                if let modified { try? FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: file.path) }
+                return id
+            }
+            let standupID = session("a", state: "completed", start: "2026-11-10T15:00:00Z", end: "2026-11-10T15:30:00Z", title: "Standup")
+            _ = session("b", state: "failed", start: "2026-11-10T16:00:00Z", end: "2026-11-10T16:30:00Z", title: "Broken")
+            _ = session("c", state: "completed", start: "2026-01-02T10:00:00Z", end: "2026-01-02T10:30:00Z", title: "Old", modified: Date(timeIntervalSince1970: 1_767_000_000))
+            _ = session("d", state: "completed", start: "", end: nil, title: "", raw: "{ this is not json")
+            let since = Date(timeIntervalSince1970: 1_790_000_000)
+            let first = RecordedMeetings.scan(root: tmpRoot, modifiedSince: since)
+            check("recordings are listed from their folders, without the old and the unreadable ones", first.entries.map(\.title).sorted() == ["Broken", "Standup"] && first.entries.first { $0.title == "Standup" }?.id == standupID)
+            let again = RecordedMeetings.scan(root: tmpRoot, modifiedSince: since, cache: first.cache)
+            check("a file that did not change is not read again (its cached answer is used)", again.entries == first.entries && again.cache == first.cache)
+            let utcDay = { (h: Int, m: Int) -> Date in DateComponents(calendar: { var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "UTC")!; return c }(), year: 2026, month: 11, day: 10, hour: h, minute: m).date! }
+            let recs = first.entries
+            check("a meeting is matched to the recording that overlaps it", RecordedMeetings.match(title: "Standup", start: utcDay(15, 0), end: utcDay(15, 30), in: recs)?.title == "Standup")
+            check("a recording that failed is not a recording", RecordedMeetings.match(title: "Broken", start: utcDay(16, 0), end: utcDay(16, 30), in: recs) == nil)
+            check("a meeting at another time has none", RecordedMeetings.match(title: "Standup", start: utcDay(9, 0), end: utcDay(9, 30), in: recs) == nil)
+            check("a recording that only touches the end of a meeting does not count", RecordedMeetings.match(title: "Long", start: utcDay(14, 0), end: utcDay(15, 0).addingTimeInterval(30), in: recs) == nil)
+            check("one that started a few minutes before the meeting does", RecordedMeetings.match(title: "Call", start: utcDay(15, 8), end: utcDay(15, 38), in: recs)?.title == "Standup")
+            let tiny = RecordedMeetings.Entry(id: UUID(), title: "Standup", start: utcDay(15, 0), end: utcDay(15, 0).addingTimeInterval(40), state: "completed")
+            check("a recording under a minute is an accident", RecordedMeetings.match(title: "Standup", start: utcDay(15, 0), end: utcDay(15, 30), in: [tiny]) == nil)
+            let other = RecordedMeetings.Entry(id: UUID(), title: "Something else", start: utcDay(15, 0), end: utcDay(15, 30), state: "completed")
+            check("with two recordings of the same stretch, the one named like the meeting wins", RecordedMeetings.match(title: "standup", start: utcDay(15, 0), end: utcDay(15, 30), in: [other, recs.first { $0.title == "Standup" }!])?.title == "Standup")
+            try? FileManager.default.removeItem(at: tmpRoot)
+
+            let request = (try? JSONSerialization.jsonObject(with: MyOSLink.requestBody(path: "/meetings", query: "id=abc", now: Date(timeIntervalSince1970: 1_800_000_000)))) as? [String: Any]
+            check("the request myOS is given names the page, the meeting and the time", request?["path"] as? String == "/meetings" && request?["query"] as? String == "id=abc" && request?["requested_at"] as? Int == 1_800_000_000)
 
             print(failures == 0 ? "CALENDAR AUTOTEST ALL PASSED" : "CALENDAR AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)

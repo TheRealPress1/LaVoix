@@ -4,6 +4,8 @@ import SwiftUI
 /// A month grid on the left (today in red, dots on days with events) and the chosen day's events on the right.
 struct CalendarWidgetView: View {
     @ObservedObject var store: CalendarStore
+    /// The recordings that exist, so a meeting that was recorded shows its notes instead of a Record button.
+    @ObservedObject var recorded: RecordedMeetingsStore
     var staticLayout = false
     /// True while the new-event form is showing in place of the day's list.
     @State private var creating: Bool
@@ -13,8 +15,9 @@ struct CalendarWidgetView: View {
     private let preview: CalendarNewEventPreview?
     private let eventPreview: CalendarEventPreview?
 
-    init(store: CalendarStore, staticLayout: Bool = false, startCreating: Bool = false, preview: CalendarNewEventPreview? = nil, eventPreview: CalendarEventPreview? = nil) {
+    init(store: CalendarStore, recorded: RecordedMeetingsStore = .shared, staticLayout: Bool = false, startCreating: Bool = false, preview: CalendarNewEventPreview? = nil, eventPreview: CalendarEventPreview? = nil) {
         self._store = ObservedObject(wrappedValue: store)
+        self._recorded = ObservedObject(wrappedValue: recorded)
         self.staticLayout = staticLayout
         self.preview = preview
         self.eventPreview = eventPreview
@@ -38,9 +41,19 @@ struct CalendarWidgetView: View {
             self.takePendingDetail()
         }
         .onChange(of: self.store.pendingDetail) { _, _ in self.takePendingDetail() }
+        // Which meetings were recorded, looked at again while the tab is on screen (and for the day chosen).
+        .task(id: self.store.selectedDay) { await self.watchRecordings() }
         // Another day chosen: its list, not the details of a meeting on the day before.
         .onChange(of: self.store.selectedDay) { _, day in
             if let open = self.detail, !Calendar.current.isDate(open.start, inSameDayAs: day) { self.detail = nil }
+        }
+    }
+
+    private func watchRecordings() async {
+        guard !self.staticLayout else { return }
+        while !Task.isCancelled {
+            await self.recorded.refresh(since: self.store.selectedDay)
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
         }
     }
 
@@ -135,7 +148,7 @@ struct CalendarWidgetView: View {
             }
             if let detail = self.detail {
                 CalendarEventDetailView(
-                    store: self.store, event: detail, staticLayout: self.staticLayout,
+                    store: self.store, event: detail, recorded: self.recorded, staticLayout: self.staticLayout,
                     screen: self.eventPreview?.screen ?? .detail, confirmingDelete: self.eventPreview?.confirmingDelete ?? false,
                     newGuests: self.eventPreview?.newGuests ?? [], previewQuery: self.eventPreview?.query ?? "",
                     previewSuggestions: self.eventPreview?.suggestions ?? []
@@ -169,7 +182,11 @@ struct CalendarWidgetView: View {
     private func rows(_ events: [CalendarStore.Event]) -> some View {
         VStack(spacing: 6) {
             ForEach(events) { event in
-                EventRow(event: event, now: self.store.now, day: self.store.selectedDay) { self.detail = event }
+                let recording = self.recorded.recording(for: event)
+                EventRow(
+                    event: event, now: self.store.now, day: self.store.selectedDay, recording: recording,
+                    onOpenRecording: { if let recording, !self.staticLayout { MyOSLink.openMeeting(recording.id) } }
+                ) { self.detail = event }
             }
         }
     }
@@ -259,31 +276,49 @@ private struct EventRow: View {
     let event: CalendarStore.Event
     let now: Date
     let day: Date
-    /// Pressing the row (anywhere but its Join and Record buttons) opens the meeting's details.
+    /// The recording of this meeting, when there is one: its notes icon takes the place of the Record button.
+    var recording: RecordedMeetings.Entry?
+    var onOpenRecording: () -> Void = {}
+    /// Pressing the row (anywhere but its buttons) opens the meeting's details.
     var onOpen: () -> Void = {}
     @State private var hovering = false
 
+    /// The meeting is over: the row is faded, but its Join button still works (a call can be rejoined).
+    private var past: Bool { self.event.end <= self.now }
+
     var body: some View {
         let live = self.event.start <= self.now && self.event.end > self.now
+        let showsActions = self.hovering && (self.event.joinURL != nil || self.event.looksLikeMeeting)
         HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 2).fill(self.event.color).frame(width: 3, height: 28)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(self.event.title).font(.system(size: 13.5, weight: .medium)).lineLimit(1)
-                Text(self.timeText).font(.system(size: 11)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+            HStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 2).fill(self.event.color).frame(width: 3, height: 28)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(self.event.title).font(.system(size: 13.5, weight: .medium)).lineLimit(1)
+                    Text(self.timeText).font(.system(size: 11)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+                }
             }
+            // A meeting that has passed is dimmed so the day reads at a glance; resting the pointer on it brings it back.
+            .opacity(self.past ? (self.hovering ? 0.8 : 0.4) : 1)
             Spacer(minLength: 6)
-            if self.hovering, self.event.joinURL != nil || self.event.looksLikeMeeting {
+            if showsActions || self.recording != nil {
                 HStack(spacing: 6) {
-                    if let url = self.event.joinURL { self.pill("Join", prominent: false) { NSWorkspace.shared.open(url) } }
-                    Button { NotchMeetingCardController.shared.record(self.event) } label: {
-                        // A plain red record dot, like a camera's record light.
-                        ZStack {
-                            Circle().strokeBorder(Color.white.opacity(0.55), lineWidth: 1.5).frame(width: 22, height: 22)
-                            Circle().fill(Color(red: 1, green: 0.27, blue: 0.23)).frame(width: 12, height: 12)
+                    if showsActions, let url = self.event.joinURL { self.pill("Join", prominent: false) { NSWorkspace.shared.open(url) } }
+                    if self.recording != nil {
+                        Button { self.onOpenRecording() } label: { MeetingNotesIcon(size: 24) }
+                            .buttonStyle(.plain)
+                            .help("Open the notes and transcript in myOS")
+                            .accessibilityLabel("Open this meeting's notes in myOS")
+                    } else if showsActions {
+                        Button { NotchMeetingCardController.shared.record(self.event) } label: {
+                            // A plain red record dot, like a camera's record light.
+                            ZStack {
+                                Circle().strokeBorder(Color.white.opacity(0.55), lineWidth: 1.5).frame(width: 22, height: 22)
+                                Circle().fill(Color(red: 1, green: 0.27, blue: 0.23)).frame(width: 12, height: 12)
+                            }
                         }
+                        .buttonStyle(.plain)
+                        .help("Record this meeting")
                     }
-                    .buttonStyle(.plain)
-                    .help("Record this meeting")
                 }
             } else if live {
                 Text("Now").font(.system(size: 11, weight: .semibold)).foregroundStyle(.green)
@@ -291,8 +326,8 @@ private struct EventRow: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 40)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(self.hovering ? 0.1 : 0.06)))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(self.hovering ? 0.1 : (self.past ? 0.035 : 0.06))))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.white.opacity(self.past && !self.hovering ? 0.05 : 0.1), lineWidth: 1))
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onTapGesture { self.onOpen() }
         .onHover { self.hovering = $0 }
