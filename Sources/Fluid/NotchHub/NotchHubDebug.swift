@@ -196,7 +196,7 @@ enum NotchHubDebug {
                 }
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
-                    NotchWidget(id: "whatsapp", title: "WhatsApp", systemImage: "bubble.left.fill", brandImage: ConnectorIcon.whatsApp) {
+                    NotchWidget(id: "whatsapp", title: "WhatsApp", systemImage: "bubble.left.fill", brandImage: ConnectorIcon.whatsApp, brandImageIdle: ConnectorIcon.whatsAppGrey) {
                         AnyView(WhatsAppWidgetView(store: sample.store, staticLayout: true, previewEnlargedFileID: sample.enlargedFileID, previewEmojiOpen: widgetName == "whatsapp-emoji"))
                     },
                 ])

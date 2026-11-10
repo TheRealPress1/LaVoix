@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage
 import SwiftUI
 
 /// The small logo shown beside each connector in the Connections tab: Bump's app icon (embedded, 96 px), Gmail's envelope drawn from its
@@ -23,7 +24,20 @@ enum ConnectorIcon {
         let path = "/Applications/WhatsApp.app"
         return FileManager.default.fileExists(atPath: path) ? NSWorkspace.shared.icon(forFile: path) : nil
     }()
+    /// The same icon without its colour, for a tab that is not the open one (a real greyscale image: a SwiftUI saturation filter is not applied everywhere).
+    static let whatsAppGrey: NSImage? = ConnectorIcon.whatsApp.flatMap { ConnectorIcon.greyscale($0) }
     static let bump: NSImage? = Data(base64Encoded: ConnectorIcon.bumpPNG).flatMap { NSImage(data: $0) }
+
+    /// `image` with the colour taken out (transparency kept), or nil if it cannot be redrawn.
+    static func greyscale(_ image: NSImage) -> NSImage? {
+        var rect = CGRect(origin: .zero, size: CGSize(width: 128, height: 128))
+        guard let source = image.cgImage(forProposedRect: &rect, context: nil, hints: nil),
+              let filter = CIFilter(name: "CIColorControls") else { return nil }
+        filter.setValue(CIImage(cgImage: source), forKey: kCIInputImageKey)
+        filter.setValue(0.0, forKey: kCIInputSaturationKey)
+        guard let output = filter.outputImage, let drawn = CIContext().createCGImage(output, from: output.extent) else { return nil }
+        return NSImage(cgImage: drawn, size: image.size)
+    }
 }
 
 struct ConnectorIconView: View {

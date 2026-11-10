@@ -8,9 +8,31 @@ struct NotchWidget: Identifiable {
     let systemImage: String
     /// A brand's own icon for the tab (WhatsApp's), drawn instead of the symbol when set.
     var brandImage: NSImage? = nil
+    /// The brand icon without its colour, shown while the tab is not the open one.
+    var brandImageIdle: NSImage? = nil
     /// Something the tab puts on the right of the title band while it is the open tab (French's language choice).
     var headerAccessory: (@MainActor () -> AnyView)? = nil
     let content: @MainActor () -> AnyView
+}
+
+extension NotchWidget {
+    /// The colour of this tab's icon while it is the open tab (every other tab's icon is grey). WhatsApp draws its own brand icon instead.
+    var tint: Color {
+        switch self.id {
+        case "system": Color(red: 0.20, green: 0.78, blue: 0.35)
+        case "nowplaying": Color(red: 1.00, green: 0.27, blue: 0.42)
+        case "links": Color(red: 0.04, green: 0.52, blue: 1.00)
+        case "calendar": Color(red: 0.96, green: 0.32, blue: 0.29)
+        case "clipboard": Color(red: 1.00, green: 0.62, blue: 0.04)
+        case "shelf": Color(red: 0.19, green: 0.69, blue: 0.78)
+        case "download": Color(red: 1.00, green: 0.30, blue: 0.30)
+        case "people": Color(red: 0.69, green: 0.32, blue: 0.87)
+        case "facetime": Color(red: 0.20, green: 0.78, blue: 0.35)
+        case "messages": Color(red: 0.04, green: 0.52, blue: 1.00)
+        case "french": Color(red: 1.00, green: 0.80, blue: 0.00)
+        default: Color.white
+        }
+    }
 }
 
 private struct NotchWidgetActiveKey: EnvironmentKey { static let defaultValue = true }
@@ -74,7 +96,7 @@ enum NotchWidgetRegistry {
             })
         }
         if PeopleDatabase.isAvailable && WhatsAppSender.isAvailable {
-            widgets.append(NotchWidget(id: "whatsapp", title: "WhatsApp", systemImage: "bubble.left.fill", brandImage: ConnectorIcon.whatsApp) {
+            widgets.append(NotchWidget(id: "whatsapp", title: "WhatsApp", systemImage: "bubble.left.fill", brandImage: ConnectorIcon.whatsApp, brandImageIdle: ConnectorIcon.whatsAppGrey) {
                 AnyView(WhatsAppWidgetView(store: WhatsAppStore.shared))
             })
         }

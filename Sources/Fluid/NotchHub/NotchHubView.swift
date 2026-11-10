@@ -170,17 +170,19 @@ struct NotchHubView: View {
                     NotchHubController.shared.verifyTabSwitch(to: widget.id)
                     self.model.selectedWidgetID = widget.id
                 } label: {
+                    // No pill behind the open tab: it is the one in colour, every other tab is plain grey (a brand icon is greyed out too).
                     Group {
                         if let image = widget.brandImage {
-                            Image(nsImage: image).resizable().interpolation(.high).scaledToFit().frame(width: 17, height: 17).opacity(selected ? 1 : 0.6)
+                            Image(nsImage: selected ? image : (widget.brandImageIdle ?? image)).resizable().interpolation(.high).scaledToFit().frame(width: 17, height: 17)
+                                .opacity(selected ? 1 : 0.6)
                         } else {
                             Image(systemName: widget.systemImage)
                                 .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(selected ? Color.white : Color.white.opacity(0.45))
+                                .foregroundStyle(selected ? widget.tint : Color.white.opacity(0.45))
                         }
                     }
                         .frame(width: 30, height: 24)
-                        .background(Capsule().fill(selected ? Color.white.opacity(0.14) : .clear))
+                        .animation(.easeInOut(duration: 0.15), value: selected)
                         .overlay(alignment: .topTrailing) {
                             if let count = self.model.badges[widget.id], count > 0 {
                                 // Inside the icon's own frame: the tab row is a scroll view that clips at its edges, so a dot hung outside the corner was cut off.
