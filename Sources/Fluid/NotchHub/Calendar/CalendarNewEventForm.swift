@@ -112,7 +112,7 @@ struct CalendarNewEventForm: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(problem).font(.system(size: 11)).foregroundStyle(.orange).lineLimit(3).fixedSize(horizontal: false, vertical: true)
                         if self.googleFailed && !self.saved {
-                            Button("Save on this Mac only") { self.saveOnThisMac() }.buttonStyle(.plain)
+                            Button(self.guests.isEmpty ? "Save on this Mac only" : "Save on this Mac without guests") { self.saveOnThisMac() }.buttonStyle(.plain)
                                 .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.8))
                         }
                     }
@@ -487,6 +487,12 @@ struct CalendarNewEventForm: View {
             self.saveToGoogle(token: token)
             return
         }
+        // The Calendar app does not take guests on this Mac, so guests need the Google route: say so rather than save without them.
+        if !self.staticLayout, !self.guests.isEmpty {
+            self.problem = "Guests need Google. Allow calendar events for this account in myOS (Mail, or Connections in the notch), then try again."
+            self.googleFailed = true
+            return
+        }
         self.saveOnThisMac()
     }
 
@@ -504,8 +510,7 @@ struct CalendarNewEventForm: View {
             self.problem = error.localizedDescription
             return
         }
-        guard !self.guests.isEmpty, !self.staticLayout else { self.finish(); return }
-        self.invite()
+        self.finish()
     }
 
     /// The event is saved; now the guests (the Calendar app adds them and the account sends the invitations).

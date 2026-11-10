@@ -65,6 +65,16 @@ struct ConnectorIconView: View {
                 Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
             } else if self.id == "whatsapp", let image = ConnectorIcon.whatsApp {
                 Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
+            } else if self.id.hasPrefix("gcal") {
+                ZStack {
+                    RoundedRectangle(cornerRadius: self.size * 0.24, style: .continuous).fill(Color.white)
+                    VStack(spacing: 0) {
+                        Rectangle().fill(Color(red: 0.26, green: 0.52, blue: 0.96)).frame(height: self.size * 0.16)
+                        Text("31").font(.system(size: self.size * 0.34, weight: .bold)).foregroundStyle(Color(red: 0.26, green: 0.52, blue: 0.96)).frame(maxHeight: .infinity)
+                    }
+                    .frame(width: self.size * 0.7, height: self.size * 0.7)
+                    .clipShape(RoundedRectangle(cornerRadius: self.size * 0.1, style: .continuous))
+                }
             } else if self.id.hasPrefix("gmail:") {
                 ZStack {
                     RoundedRectangle(cornerRadius: self.size * 0.24, style: .continuous).fill(Color.white)
