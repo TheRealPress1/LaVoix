@@ -5,6 +5,14 @@ import SwiftUI
 struct CalendarWidgetView: View {
     @ObservedObject var store: CalendarStore
     var staticLayout = false
+    /// True while the new-event form is showing in place of the day's list.
+    @State private var creating: Bool
+
+    init(store: CalendarStore, staticLayout: Bool = false, startCreating: Bool = false) {
+        self._store = ObservedObject(wrappedValue: store)
+        self.staticLayout = staticLayout
+        self._creating = State(initialValue: startCreating)
+    }
 
     private static let accent = Color(red: 0.96, green: 0.32, blue: 0.29)
 
@@ -82,10 +90,28 @@ struct CalendarWidgetView: View {
     private var dayList: some View {
         let events = CalendarStore.events(on: self.store.selectedDay, in: self.store.monthEvents)
         return VStack(alignment: .leading, spacing: 8) {
-            Text(self.dayTitle(self.store.selectedDay))
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.75))
-            if events.isEmpty {
+            HStack {
+                Text(self.creating ? "New event" : self.dayTitle(self.store.selectedDay))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.75))
+                Spacer(minLength: 0)
+                if !self.creating, self.store.writableCalendars.isEmpty == false || self.store.isSample {
+                    Button { self.creating = true } label: {
+                        Image(systemName: "plus").font(.system(size: 11, weight: .bold)).foregroundStyle(.white.opacity(0.8))
+                            .frame(width: 24, height: 24)
+                            .background(Circle().fill(Color.white.opacity(0.12)))
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("New event")
+                    .accessibilityLabel("New event")
+                }
+            }
+            if self.creating {
+                CalendarNewEventForm(store: self.store, day: self.store.selectedDay, staticLayout: self.staticLayout, initialTitle: self.staticLayout ? "Call with Martin" : "") {
+                    self.creating = false
+                }
+            } else if events.isEmpty {
                 VStack(spacing: 6) {
                     Image(systemName: "calendar").font(.system(size: 22, weight: .light)).foregroundStyle(.white.opacity(0.3))
                     Text("Nothing scheduled").font(.system(size: 12.5)).foregroundStyle(.white.opacity(0.45))

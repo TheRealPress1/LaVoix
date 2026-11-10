@@ -132,6 +132,7 @@ enum NotchHubDebug {
             } else if widgetName.hasPrefix("calendar") {
                 let store: CalendarStore
                 switch widgetName {
+                case "calendar-new": store = .sample()
                 case "calendar-empty": store = .sample(empty: true)
                 case "calendar-denied": store = .sample(access: .denied)
                 case "calendar-unknown": store = .sample(access: .unknown)
@@ -139,7 +140,7 @@ enum NotchHubDebug {
                 }
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
-                    NotchWidget(id: "calendar", title: "Calendar", systemImage: "calendar") { AnyView(CalendarWidgetView(store: store, staticLayout: true)) },
+                    NotchWidget(id: "calendar", title: "Calendar", systemImage: "calendar") { AnyView(CalendarWidgetView(store: store, staticLayout: true, startCreating: widgetName == "calendar-new")) },
                 ])
                 model.selectedWidgetID = "calendar"
             } else if widgetName.hasPrefix("clipboard") || widgetName.hasPrefix("shelf") {

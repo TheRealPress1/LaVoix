@@ -35,6 +35,8 @@ final class CalendarStore: ObservableObject {
         let title: String
         let account: String
         let color: Color
+        /// False for calendars that cannot take new events (holidays, subscribed feeds, shared read-only calendars).
+        var writable = true
     }
 
     struct Event: Identifiable, Equatable {
@@ -89,6 +91,10 @@ final class CalendarStore: ObservableObject {
         let now = Date()
         store.now = now
         guard access == .granted, !empty else { return store }
+        store.calendars = [
+            CalendarInfo(id: "sample-work", title: "Work", account: "Google", color: .purple),
+            CalendarInfo(id: "sample-home", title: "Home", account: "iCloud", color: .green),
+        ]
         func at(_ minutes: Double) -> Date { now.addingTimeInterval(minutes * 60) }
         func day(_ offset: Int, hour: Int, hours: Double = 1) -> (Date, Date) {
             let start = Calendar.current.date(byAdding: .day, value: offset, to: Calendar.current.startOfDay(for: now))!.addingTimeInterval(Double(hour) * 3600)
@@ -266,7 +272,7 @@ final class CalendarStore: ObservableObject {
     func loadCalendars() {
         guard self.access == .granted else { self.calendars = []; return }
         self.calendars = self.store.calendars(for: .event)
-            .map { CalendarInfo(id: $0.calendarIdentifier, title: $0.title, account: $0.source.title, color: Color(nsColor: $0.color)) }
+            .map { CalendarInfo(id: $0.calendarIdentifier, title: $0.title, account: $0.source.title, color: Color(nsColor: $0.color), writable: $0.allowsContentModifications) }
             .sorted { ($0.account, $0.title) < ($1.account, $1.title) }
         // Which accounts and how many calendars each (never event titles), so a missing account can be spotted in the log.
         let summary = Dictionary(grouping: self.calendars, by: \.account).map { "\($0.key)=\($0.value.count)" }.sorted().joined(separator: ", ")
@@ -391,5 +397,120 @@ final class CalendarStore: ObservableObject {
             },
             calendarTitle: event.calendar?.title ?? ""
         )
+    }
+}
+
+// MARK: - New events
+
+/// Why an event could not be saved, in words.
+enum CalendarWriteError: LocalizedError {
+    case noAccess, noCalendar
+
+    var errorDescription: String? {
+        switch self {
+        case .noAccess: "Calendar access is not allowed, so the event could not be saved."
+        case .noCalendar: "No calendar on this Mac takes new events. Add one in the Calendar app."
+        }
+    }
+}
+
+extension CalendarStore {
+    /// The lengths offered for a new event, in minutes.
+    static let newEventLengths = [15, 30, 45, 60, 120]
+    static let newEventDefaultMinutes = 30
+    private static let newEventCalendarKey = "LaVoixNotchCalendarNewEventCalendar"
+    /// The first and last start a day offers (the form steps in quarter hours).
+    private static let latestQuarter = 23 * 60 + 45
+
+    /// Where a new event on `day` starts unless told otherwise: today, the next quarter hour at least five minutes away; any other day, 9:00.
+    static func defaultStart(on day: Date, now: Date, calendar: Calendar = .current) -> Date {
+        let dayStart = calendar.startOfDay(for: day)
+        guard calendar.isDate(day, inSameDayAs: now) else {
+            return calendar.date(byAdding: .hour, value: 9, to: dayStart) ?? dayStart
+        }
+        let minutesIntoDay = Int(now.addingTimeInterval(5 * 60).timeIntervalSince(dayStart) / 60)
+        let quarter = min(latestQuarter, (minutesIntoDay + 14) / 15 * 15)
+        return calendar.date(byAdding: .minute, value: quarter, to: dayStart) ?? now
+    }
+
+    /// `start` moved by `minutes`, kept inside its own day (00:00 to 23:45).
+    static func shifted(_ start: Date, byMinutes minutes: Int, calendar: Calendar = .current) -> Date {
+        let dayStart = calendar.startOfDay(for: start)
+        let current = Int(start.timeIntervalSince(dayStart) / 60)
+        let moved = max(0, min(latestQuarter, current + minutes))
+        return calendar.date(byAdding: .minute, value: moved, to: dayStart) ?? start
+    }
+
+    /// `start` on the day `days` away, at the same time of day.
+    static func shifted(_ start: Date, byDays days: Int, calendar: Calendar = .current) -> Date {
+        calendar.date(byAdding: .day, value: days, to: start) ?? start
+    }
+
+    /// What goes into the calendar for a typed title: trimmed and kept to one line; empty becomes "New event" (as the Calendar app does).
+    static func cleanTitle(_ typed: String) -> String {
+        let line = typed.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        return line.isEmpty ? "New event" : String(line.prefix(200))
+    }
+
+    /// Calendars a new event can be saved to, in the order the Calendar app lists them.
+    var writableCalendars: [CalendarInfo] { self.calendars.filter(\.writable) }
+
+    /// The calendar a new event goes to unless chosen: the one chosen last time, else the Calendar app's own default, else the first that takes events.
+    func preferredNewEventCalendarID() -> String? {
+        let writable = self.writableCalendars
+        if let saved = UserDefaults.standard.string(forKey: Self.newEventCalendarKey), writable.contains(where: { $0.id == saved }) { return saved }
+        if !self.isSample, let id = self.store.defaultCalendarForNewEvents?.calendarIdentifier, writable.contains(where: { $0.id == id }) { return id }
+        return writable.first?.id
+    }
+
+    func rememberNewEventCalendar(_ id: String) {
+        UserDefaults.standard.set(id, forKey: Self.newEventCalendarKey)
+    }
+
+    /// Saves a new event in the Mac's Calendar (which syncs it to the account the calendar belongs to: iCloud, Google, ...), shows it in the
+    /// notch at once, and returns it.
+    @discardableResult
+    func createEvent(title: String, start: Date, minutes: Int, calendarID: String?) throws -> Event {
+        let clean = Self.cleanTitle(title)
+        let end = start.addingTimeInterval(Double(max(5, minutes)) * 60)
+        if self.isSample {
+            let info = self.writableCalendars.first { $0.id == calendarID } ?? self.writableCalendars.first
+            let event = Event(
+                id: "new|\(start.timeIntervalSince1970)", title: clean, start: start, end: end, isAllDay: false,
+                color: info?.color ?? .blue, location: nil, joinURL: nil, attendeeCount: 0, calendarTitle: info?.title ?? ""
+            )
+            self.monthEvents.append(event)
+            if end > self.now { self.events.append(event) }
+            return event
+        }
+        guard self.access == .granted else { throw CalendarWriteError.noAccess }
+        let chosen = calendarID.flatMap { id in self.store.calendars(for: .event).first { $0.calendarIdentifier == id && $0.allowsContentModifications } }
+        guard let calendar = chosen ?? self.store.defaultCalendarForNewEvents else { throw CalendarWriteError.noCalendar }
+        let event = EKEvent(eventStore: self.store)
+        event.title = clean
+        event.startDate = start
+        event.endDate = end
+        event.calendar = calendar
+        try self.store.save(event, span: .thisEvent, commit: true)
+        DebugLogger.shared.info("Calendar: a new event was saved in \"\(calendar.title)\" (\(calendar.source.title))", source: "Calendar")
+        self.reload()
+        return Self.makeEvent(event)
+    }
+
+    /// Selects `day` and makes sure the month grid shows it (and has its events loaded).
+    func reveal(day: Date) {
+        let target = Calendar.current.startOfDay(for: day)
+        self.selectedDay = target
+        if !Calendar.current.isDate(target, equalTo: self.displayedMonth, toGranularity: .month) {
+            self.displayedMonth = Self.startOfMonth(target)
+            self.reloadMonth()
+        }
+    }
+
+    /// Removes an event this app just saved (only the self-test uses it, to leave the calendar as it found it).
+    func deleteEvent(identifier: String) throws {
+        guard let event = self.store.event(withIdentifier: identifier) else { return }
+        try self.store.remove(event, span: .thisEvent, commit: true)
+        self.reload()
     }
 }
