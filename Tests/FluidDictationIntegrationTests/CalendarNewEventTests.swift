@@ -92,7 +92,7 @@ final class CalendarNewEventTests: XCTestCase {
 
     @MainActor func testOnlyCalendarsThatTakeEventsAreOffered() {
         let store = CalendarStore.sample()
-        XCTAssertEqual(store.writableCalendars.map(\.id), ["sample-work", "sample-home"])
+        XCTAssertEqual(store.writableCalendars.map(\.id), ["sample-work", "sample-home", "sample-team"])
         UserDefaults.standard.removeObject(forKey: "LaVoixNotchCalendarNewEventCalendar")
         XCTAssertEqual(store.preferredNewEventCalendarID(), "sample-work")
         store.rememberNewEventCalendar("sample-home")
@@ -106,5 +106,91 @@ final class CalendarNewEventTests: XCTestCase {
         store.reveal(day: target)
         XCTAssertTrue(Calendar.current.isDate(store.selectedDay, inSameDayAs: target))
         XCTAssertTrue(Calendar.current.isDate(store.displayedMonth, equalTo: target, toGranularity: .month))
+    }
+
+    // MARK: Guests
+
+    func testOnlyWholeAddressesAreTakenAsTyped() {
+        XCTAssertTrue(CalendarGuestDirectory.looksLikeEmail("martin@example.com"))
+        XCTAssertTrue(CalendarGuestDirectory.looksLikeEmail(" martin.d@sub.example.co.uk "))
+        XCTAssertFalse(CalendarGuestDirectory.looksLikeEmail("martin"))
+        XCTAssertFalse(CalendarGuestDirectory.looksLikeEmail("martin@"))
+        XCTAssertFalse(CalendarGuestDirectory.looksLikeEmail("martin@example"))
+        XCTAssertFalse(CalendarGuestDirectory.looksLikeEmail("@example.com"))
+        XCTAssertFalse(CalendarGuestDirectory.looksLikeEmail("a b@example.com"))
+        XCTAssertFalse(CalendarGuestDirectory.looksLikeEmail("a@b@example.com"))
+        XCTAssertFalse(CalendarGuestDirectory.looksLikeEmail("martin@example."))
+    }
+
+    func testTheSearchWordsAreLowercaseFewAndSafeForSQL() {
+        XCTAssertEqual(CalendarGuestDirectory.words("  Martin  Bas%d_ "), ["martin", "basd"])
+        XCTAssertEqual(CalendarGuestDirectory.words("a b c d e"), ["a", "b", "c"])
+        XCTAssertEqual(CalendarGuestDirectory.words("   "), [])
+    }
+
+    func testSuggestionsAreMergedOnePerAddressWithoutBotsOrPeopleAlreadyInvited() {
+        let people = [CalendarGuest(name: "Martin Dupont", email: "Martin@Example.com"), CalendarGuest(name: "News", email: "noreply@news.example.com")]
+        let contacts = [CalendarGuest(name: "Martin D.", email: "martin@example.com"), CalendarGuest(name: "Léa", email: "lea@example.com"), CalendarGuest(name: "Manu", email: "manu@example.org")]
+        let merged = CalendarGuestDirectory.merge([people, contacts], excluding: ["MANU@example.org"], limit: 5)
+        XCTAssertEqual(merged.map(\.email), ["martin@example.com", "lea@example.com"])
+        XCTAssertEqual(merged.first?.name, "Martin Dupont", "the first list wins for a repeated address")
+        XCTAssertEqual(CalendarGuestDirectory.merge([contacts], excluding: [], limit: 1).count, 1)
+    }
+
+    func testAGuestIsShownByNameElseByAddressAndSummarised() {
+        XCTAssertEqual(CalendarGuest(name: "Léa Moreau", email: "lea@example.com").display, "Léa Moreau")
+        XCTAssertEqual(CalendarGuest(name: "", email: "lea@example.com").display, "lea@example.com")
+        XCTAssertEqual(CalendarGuest(name: "lea@example.com", email: "lea@example.com").display, "lea@example.com")
+        XCTAssertEqual(CalendarGuest(name: "Léa Moreau", email: "lea@example.com").initials, "LM")
+        XCTAssertEqual(CalendarOwner.initials(for: "geneva@example.com"), "G")
+        let three = [CalendarGuest(name: "A One", email: "a@x.io"), CalendarGuest(name: "B Two", email: "b@x.io"), CalendarGuest(name: "C Three", email: "c@x.io")]
+        XCTAssertEqual(CalendarNewEventForm.summary(of: []), "Add guests")
+        XCTAssertEqual(CalendarNewEventForm.summary(of: Array(three.prefix(1))), "A One")
+        XCTAssertEqual(CalendarNewEventForm.summary(of: three), "A One, B Two +1")
+    }
+
+    // MARK: The Calendar app script
+
+    func testTheScriptFindsTheEventByCalendarTitleAndStartAndAddsEachGuest() {
+        let start = date(12, 14, 30)
+        let script = CalendarInvites.script(
+            calendarIdentifier: "CAL-1", title: "Call with \"Martin\"", start: start,
+            guests: [CalendarGuest(name: "Martin", email: "martin@example.com"), CalendarGuest(name: "", email: "lea@example.com")], calendar: calendar
+        )
+        XCTAssertTrue(script.contains("set year of theStart to 2026"))
+        XCTAssertTrue(script.contains("set month of theStart to 11"))
+        XCTAssertTrue(script.contains("set day of theStart to 12"))
+        XCTAssertTrue(script.contains("set hours of theStart to 14"))
+        XCTAssertTrue(script.contains("set minutes of theStart to 30"))
+        XCTAssertTrue(script.contains("calendarIdentifier is \"CAL-1\""))
+        XCTAssertTrue(script.contains("summary is \"Call with \\\"Martin\\\"\""), "quotes in a title are escaped")
+        XCTAssertEqual(script.components(separatedBy: "make new attendee").count - 1, 2)
+        XCTAssertTrue(script.contains("{email:\"martin@example.com\"}"))
+    }
+
+    func testTextIsEscapedForAnAppleScriptString() {
+        XCTAssertEqual(CalendarInvites.literal("a\\b\"c\nd"), "\"a\\\\b\\\"c d\"")
+    }
+
+    func testAPermissionRefusalSaysWhereToAllowIt() {
+        let denied = CalendarInvites.failure(fromStandardError: "execution error: Not authorized to send Apple events to Calendar. (-1743)")
+        XCTAssertTrue(denied.message.contains("Automation"))
+        XCTAssertEqual(CalendarInvites.failure(fromStandardError: "  boom \n").message, "boom")
+        XCTAssertEqual(CalendarInvites.failure(fromStandardError: "").message, "Calendar did not accept the guests.")
+    }
+
+    // MARK: Whose calendar
+
+    func testTheOwnerAddressColumnIsFoundByItsKnownNameOrAnyEmailColumn() {
+        XCTAssertEqual(CalendarOwner.emailColumn(in: ["ROWID", "title", "owner_identity_email", "other_email"]), "owner_identity_email")
+        XCTAssertEqual(CalendarOwner.emailColumn(in: ["ROWID", "title", "shared_owner_email"]), "shared_owner_email")
+        XCTAssertNil(CalendarOwner.emailColumn(in: ["ROWID", "title"]))
+    }
+
+    @MainActor func testSaveTargetsShowTheOwnerAddressWhenKnownElseTheCalendarName() {
+        let targets = CalendarStore.sample().saveTargets()
+        XCTAssertEqual(targets.map(\.primary), ["you@example.com", "Home", "you@work.example.com"])
+        XCTAssertEqual(targets[0].secondary, "Work · Google")
+        XCTAssertEqual(targets[1].secondary, "iCloud")
     }
 }

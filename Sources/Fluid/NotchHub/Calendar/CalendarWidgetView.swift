@@ -7,10 +7,13 @@ struct CalendarWidgetView: View {
     var staticLayout = false
     /// True while the new-event form is showing in place of the day's list.
     @State private var creating: Bool
+    /// What a render preview shows of the new-event form (nil for the real thing).
+    private let preview: CalendarNewEventPreview?
 
-    init(store: CalendarStore, staticLayout: Bool = false, startCreating: Bool = false) {
+    init(store: CalendarStore, staticLayout: Bool = false, startCreating: Bool = false, preview: CalendarNewEventPreview? = nil) {
         self._store = ObservedObject(wrappedValue: store)
         self.staticLayout = staticLayout
+        self.preview = preview
         self._creating = State(initialValue: startCreating)
     }
 
@@ -90,25 +93,32 @@ struct CalendarWidgetView: View {
     private var dayList: some View {
         let events = CalendarStore.events(on: self.store.selectedDay, in: self.store.monthEvents)
         return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(self.creating ? "New event" : self.dayTitle(self.store.selectedDay))
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.75))
-                Spacer(minLength: 0)
-                if !self.creating, self.store.writableCalendars.isEmpty == false || self.store.isSample {
-                    Button { self.creating = true } label: {
-                        Image(systemName: "plus").font(.system(size: 11, weight: .bold)).foregroundStyle(.white.opacity(0.8))
-                            .frame(width: 24, height: 24)
-                            .background(Circle().fill(Color.white.opacity(0.12)))
-                            .contentShape(Circle())
+            if !self.creating {
+                HStack {
+                    Text(self.dayTitle(self.store.selectedDay))
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.75))
+                    Spacer(minLength: 0)
+                    if self.store.writableCalendars.isEmpty == false || self.store.isSample {
+                        Button { self.creating = true } label: {
+                            Image(systemName: "plus").font(.system(size: 11, weight: .bold)).foregroundStyle(.white.opacity(0.8))
+                                .frame(width: 24, height: 24)
+                                .background(Circle().fill(Color.white.opacity(0.12)))
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("New event")
+                        .accessibilityLabel("New event")
                     }
-                    .buttonStyle(.plain)
-                    .help("New event")
-                    .accessibilityLabel("New event")
                 }
             }
             if self.creating {
-                CalendarNewEventForm(store: self.store, day: self.store.selectedDay, staticLayout: self.staticLayout, initialTitle: self.staticLayout ? "Call with Martin" : "") {
+                CalendarNewEventForm(
+                    store: self.store, day: self.store.selectedDay, staticLayout: self.staticLayout,
+                    initialTitle: self.staticLayout ? "Call with Martin" : "",
+                    screen: self.preview?.screen ?? .form, guests: self.preview?.guests ?? [],
+                    guestQuery: self.preview?.query ?? "", previewSuggestions: self.preview?.suggestions ?? []
+                ) {
                     self.creating = false
                 }
             } else if events.isEmpty {
@@ -266,4 +276,12 @@ private struct EventRow: View {
         }
         .buttonStyle(.plain)
     }
+}
+
+/// What a render preview shows of the new-event form: which screen, the guests already chosen, what is typed and what the search offers.
+struct CalendarNewEventPreview {
+    var screen: CalendarNewEventForm.Screen = .form
+    var guests: [CalendarGuest] = []
+    var query = ""
+    var suggestions: [CalendarGuest] = []
 }

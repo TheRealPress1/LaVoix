@@ -69,6 +69,11 @@ final class CalendarStore: ObservableObject {
     @Published var selectedDay = Calendar.current.startOfDay(for: Date())
     /// Every calendar on this Mac across all accounts, so you can choose which ones the notch shows.
     @Published private(set) var calendars: [CalendarInfo] = []
+    /// Which address each calendar belongs to, read once from Calendar's own database (empty when that is not possible).
+    @Published private(set) var ownerEmails: [String: String] = [:]
+    /// Your photo and initials from the "Me" card in Contacts, for the avatar in the new-event form.
+    @Published private(set) var me: CalendarMe?
+    private var identityLoaded = false
     @Published private(set) var hiddenCalendarIDs: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "LaVoixNotchCalendarHidden") ?? [])
 
     /// Called once per meeting when it is time to offer recording.
@@ -94,7 +99,10 @@ final class CalendarStore: ObservableObject {
         store.calendars = [
             CalendarInfo(id: "sample-work", title: "Work", account: "Google", color: .purple),
             CalendarInfo(id: "sample-home", title: "Home", account: "iCloud", color: .green),
+            CalendarInfo(id: "sample-team", title: "Team", account: "Google", color: .orange),
         ]
+        store.ownerEmails = ["sample-work": "you@example.com", "sample-team": "you@work.example.com"]
+        store.me = CalendarMe(photo: nil, initials: "GS")
         func at(_ minutes: Double) -> Date { now.addingTimeInterval(minutes * 60) }
         func day(_ offset: Int, hour: Int, hours: Double = 1) -> (Date, Date) {
             let start = Calendar.current.date(byAdding: .day, value: offset, to: Calendar.current.startOfDay(for: now))!.addingTimeInterval(Double(hour) * 3600)
@@ -402,6 +410,12 @@ final class CalendarStore: ObservableObject {
 
 // MARK: - New events
 
+/// You, as the new-event form shows you: the photo on your "Me" card (if there is one) and your initials.
+struct CalendarMe {
+    let photo: NSImage?
+    let initials: String
+}
+
 /// Why an event could not be saved, in words.
 enum CalendarWriteError: LocalizedError {
     case noAccess, noCalendar
@@ -461,6 +475,30 @@ extension CalendarStore {
         if let saved = UserDefaults.standard.string(forKey: Self.newEventCalendarKey), writable.contains(where: { $0.id == saved }) { return saved }
         if !self.isSample, let id = self.store.defaultCalendarForNewEvents?.calendarIdentifier, writable.contains(where: { $0.id == id }) { return id }
         return writable.first?.id
+    }
+
+    /// The places a new event can go, as the account picker lists them (with the address each belongs to when it is known).
+    func saveTargets() -> [CalendarSaveTarget] {
+        self.writableCalendars.map { info in
+            let email = self.ownerEmails[info.id] ?? (info.account.contains("@") ? info.account.lowercased() : nil)
+            return CalendarSaveTarget(id: info.id, calendarTitle: info.title, accountTitle: info.account, email: email)
+        }
+    }
+
+    func color(ofCalendar id: String?) -> Color {
+        self.calendars.first { $0.id == id }?.color ?? .gray
+    }
+
+    /// Reads your photo and the owner address of each calendar, once, off the main thread (it is only needed when the form is opened).
+    func loadIdentityIfNeeded() {
+        guard !self.identityLoaded, !self.isSample else { return }
+        self.identityLoaded = true
+        Task {
+            let loaded = await Task.detached(priority: .utility) { (CalendarOwner.ownerEmails(), CalendarOwner.me()) }.value
+            self.ownerEmails = loaded.0.emails
+            self.me = loaded.1.map { CalendarMe(photo: $0.thumbnail.flatMap { NSImage(data: $0) }, initials: $0.initials) }
+            DebugLogger.shared.info("Calendar owners: \(loaded.0.summary); Me card: \(loaded.1 == nil ? "not available" : (loaded.1?.thumbnail == nil ? "no photo" : "photo"))", source: "Calendar")
+        }
     }
 
     func rememberNewEventCalendar(_ id: String) {

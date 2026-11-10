@@ -8,6 +8,23 @@ import UniformTypeIdentifiers
 /// `LAVOIX_NOTCH_RENDER=<file.png>` renders the open notch to an image and exits. Used to check the design
 /// without needing screen-capture permission.
 enum NotchHubDebug {
+    /// Invented people for the new-event previews.
+    private static let sampleGuests = [
+        CalendarGuest(name: "Martin Dupont", email: "martin@example.com"),
+        CalendarGuest(name: "Léa Moreau", email: "lea@example.com"),
+        CalendarGuest(name: "Manu Girard", email: "manu@example.org"),
+    ]
+
+    @MainActor static func newEventPreview(_ widgetName: String) -> CalendarNewEventPreview? {
+        switch widgetName {
+        case "calendar-new-guests":
+            return CalendarNewEventPreview(screen: .guests, guests: [self.sampleGuests[0]], query: "ma", suggestions: [self.sampleGuests[2], CalendarGuest(name: "", email: "ma@example.com")])
+        case "calendar-new-accounts": return CalendarNewEventPreview(screen: .accounts)
+        case "calendar-new-withguests": return CalendarNewEventPreview(guests: Array(self.sampleGuests.prefix(3)))
+        default: return nil
+        }
+    }
+
     @MainActor static func renderIfRequested() {
         guard let path = ProcessInfo.processInfo.environment["LAVOIX_NOTCH_RENDER"] else { return }
         Task { @MainActor in
@@ -132,7 +149,7 @@ enum NotchHubDebug {
             } else if widgetName.hasPrefix("calendar") {
                 let store: CalendarStore
                 switch widgetName {
-                case "calendar-new": store = .sample()
+                case "calendar-new", "calendar-new-guests", "calendar-new-accounts", "calendar-new-withguests": store = .sample()
                 case "calendar-empty": store = .sample(empty: true)
                 case "calendar-denied": store = .sample(access: .denied)
                 case "calendar-unknown": store = .sample(access: .unknown)
@@ -140,7 +157,7 @@ enum NotchHubDebug {
                 }
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
-                    NotchWidget(id: "calendar", title: "Calendar", systemImage: "calendar") { AnyView(CalendarWidgetView(store: store, staticLayout: true, startCreating: widgetName == "calendar-new")) },
+                    NotchWidget(id: "calendar", title: "Calendar", systemImage: "calendar") { AnyView(CalendarWidgetView(store: store, staticLayout: true, startCreating: widgetName.hasPrefix("calendar-new"), preview: Self.newEventPreview(widgetName))) },
                 ])
                 model.selectedWidgetID = "calendar"
             } else if widgetName.hasPrefix("clipboard") || widgetName.hasPrefix("shelf") {
