@@ -74,6 +74,8 @@ final class CalendarStore: ObservableObject {
     /// Your photo and initials from the "Me" card in Contacts, for the avatar in the new-event form.
     @Published private(set) var me: CalendarMe?
     private var identityLoaded = false
+    /// Events made through Google that the Mac's Calendar has not synced down yet: kept in view for a few minutes so the notch does not forget them.
+    private var recentlyCreated: [(event: Event, at: Date)] = []
     @Published private(set) var hiddenCalendarIDs: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "LaVoixNotchCalendarHidden") ?? [])
 
     /// Called once per meeting when it is time to offer recording.
@@ -199,6 +201,7 @@ final class CalendarStore: ObservableObject {
             .sorted { ($0.isAllDay ? 0 : 1, $0.startDate) < ($1.isAllDay ? 0 : 1, $1.startDate) }
             .map(Self.makeEvent))
             .prefix(12).map { $0 }
+        self.mergeRecent()
         self.reloadMonth()
     }
 
@@ -251,6 +254,7 @@ final class CalendarStore: ObservableObject {
             .sorted { ($0.isAllDay ? 0 : 1, $0.startDate) < ($1.isAllDay ? 0 : 1, $1.startDate) }
             .prefix(600)
             .map(Self.makeEvent))
+        self.mergeRecent()
         let perAccount = Dictionary(grouping: fetched, by: { $0.calendar?.source.title ?? "?" }).map { "\($0.key)=\($0.value.count)" }.sorted().joined(separator: ", ")
         let summary = "\(fetched.count) events in the grid (\(perAccount)); showing \(self.monthEvents.count) after merging duplicates"
         if summary != self.lastMonthSummary {
@@ -533,6 +537,27 @@ extension CalendarStore {
         DebugLogger.shared.info("Calendar: a new event was saved in \"\(calendar.title)\" (\(calendar.source.title))", source: "Calendar")
         self.reload()
         return Self.makeEvent(event)
+    }
+
+    /// Shows an event that was created in Google (not yet in the Mac's Calendar) until the Calendar has it.
+    func noteCreatedElsewhere(title: String, start: Date, end: Date, calendarID: String?, joinURL: URL?) {
+        let info = self.writableCalendars.first { $0.id == calendarID }
+        let event = Event(
+            id: "google|\(start.timeIntervalSince1970)|\(title)", title: Self.cleanTitle(title), start: start, end: end, isAllDay: false,
+            color: info?.color ?? .blue, location: nil, joinURL: joinURL, attendeeCount: 0, calendarTitle: info?.title ?? ""
+        )
+        self.recentlyCreated.append((event, Date()))
+        self.mergeRecent()
+    }
+
+    /// Adds the recently created events that the Calendar does not show yet.
+    func mergeRecent() {
+        self.recentlyCreated.removeAll { Date().timeIntervalSince($0.at) > 600 }
+        for (event, _) in self.recentlyCreated {
+            func has(_ list: [Event]) -> Bool { list.contains { $0.title == event.title && $0.start == event.start } }
+            if !has(self.monthEvents) { self.monthEvents.append(event) }
+            if event.end > self.now, !has(self.events) { self.events.append(event) }
+        }
     }
 
     /// Selects `day` and makes sure the month grid shows it (and has its events loaded).

@@ -28,6 +28,10 @@ struct CalendarNewEventForm: View {
     /// True once the event is saved: a failure after that (the guests) must not make Save create it a second time.
     @State private var saved = false
     @State private var working = false
+    /// A Google Meet link is made when the event is created through Google (on unless switched off).
+    @State private var meet = true
+    /// Google refused: the form then offers to save on this Mac only.
+    @State private var googleFailed = false
     @FocusState private var focus: Field?
 
     private enum Field { case title, guest }
@@ -90,7 +94,10 @@ struct CalendarNewEventForm: View {
                 self.stepper(value: self.start.formatted(date: .omitted, time: .shortened), width: 58, help: "15 minutes earlier or later", back: { self.start = CalendarStore.shifted(self.start, byMinutes: -15) }, forward: { self.start = CalendarStore.shifted(self.start, byMinutes: 15) })
             }
             self.lengths
-            self.guestsRow
+            HStack(spacing: 6) {
+                self.guestsRow
+                if self.googleEmail != nil { self.meetToggle }
+            }
             HStack(spacing: 10) {
                 Button(self.saved ? "Close" : (self.working ? "Saving…" : "Save")) { self.save() }.buttonStyle(.plain)
                     .font(.system(size: 12, weight: .semibold)).foregroundStyle(.black)
@@ -102,10 +109,16 @@ struct CalendarNewEventForm: View {
                         .font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
                 }
                 if let problem = self.problem {
-                    Text(problem).font(.system(size: 11)).foregroundStyle(.orange).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(problem).font(.system(size: 11)).foregroundStyle(.orange).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                        if self.googleFailed && !self.saved {
+                            Button("Save on this Mac only") { self.saveOnThisMac() }.buttonStyle(.plain)
+                                .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.8))
+                        }
+                    }
                 } else {
-                    Text("until \(self.start.addingTimeInterval(Double(self.minutes) * 60).formatted(date: .omitted, time: .shortened))")
-                        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.45)).lineLimit(1)
+                    Text(self.caption).font(.system(size: 11)).foregroundStyle(.white.opacity(0.45)).lineLimit(1)
+                        .help(self.googleEmail == nil && self.calendarLooksGoogle ? "This Google account has not allowed calendar events in myOS (Mail, Allow calendar events), so the event is saved on this Mac and syncs without a Meet link or invitations." : "")
                 }
             }
         }
@@ -201,6 +214,61 @@ struct CalendarNewEventForm: View {
         guard !guests.isEmpty else { return "Add guests" }
         let names = guests.prefix(2).map(\.display)
         return names.joined(separator: ", ") + (guests.count > 2 ? " +\(guests.count - 2)" : "")
+    }
+
+    // MARK: - Google
+
+    /// The Google account to create this event in: the one the chosen calendar belongs to, when myOS handed over a token for it.
+    private var googleEmail: String? {
+        guard let id = self.effectiveCalendarID, let email = self.store.ownerEmails[id] else { return nil }
+        return GoogleTokenVault.shared.has(email) ? email : nil
+    }
+
+    private var calendarLooksGoogle: Bool {
+        self.store.saveTargets().first { $0.id == self.effectiveCalendarID }?.accountTitle.localizedCaseInsensitiveContains("google") ?? false
+    }
+
+    private var caption: String {
+        if self.googleEmail == nil, self.calendarLooksGoogle { return "no Meet link yet" }
+        return "until \(self.start.addingTimeInterval(Double(self.minutes) * 60).formatted(date: .omitted, time: .shortened))"
+    }
+
+    private var meetToggle: some View {
+        Button { self.meet.toggle() } label: {
+            Image(systemName: "video.fill").font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(self.meet ? Color.white : Color.white.opacity(0.4))
+                .frame(width: 34, height: 28)
+                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(self.meet ? Color(red: 0.2, green: 0.5, blue: 0.95).opacity(0.85) : Color.white.opacity(0.08)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(self.meet ? "A Google Meet link is added. Click to leave it out." : "No Meet link. Click to add one.")
+    }
+
+    /// Creates the event in Google itself: a Meet link when asked, and Google sends the invitations.
+    private func saveToGoogle(token: String) {
+        working = true
+        problem = nil
+        googleFailed = false
+        let clean = CalendarStore.cleanTitle(title)
+        let end = start.addingTimeInterval(Double(minutes) * 60)
+        let request = GoogleEventRequest(title: clean, start: start, end: end, guests: guests.map(\.email), withMeet: meet)
+        let calendarID = effectiveCalendarID, start = self.start
+        Task {
+            let result = await GoogleCalendarClient.create(request, token: token)
+            self.working = false
+            switch result {
+            case let .success(created):
+                self.store.noteCreatedElsewhere(title: clean, start: start, end: end, calendarID: calendarID, joinURL: created.meetLink.flatMap(URL.init(string:)))
+                if let calendarID { self.store.rememberNewEventCalendar(calendarID) }
+                self.store.reveal(day: start)
+                self.saved = true
+                self.finish()
+            case let .failure(failure):
+                self.problem = failure.message
+                self.googleFailed = true
+            }
+        }
     }
 
     // MARK: - Accounts
@@ -415,6 +483,17 @@ struct CalendarNewEventForm: View {
     private func save() {
         if self.saved { self.finish(); return }
         guard !self.working else { return }
+        if !self.staticLayout, let email = self.googleEmail, let token = GoogleTokenVault.shared.token(for: email) {
+            self.saveToGoogle(token: token)
+            return
+        }
+        self.saveOnThisMac()
+    }
+
+    /// The Mac's own Calendar: no Meet link, and guests only if the Calendar app takes them.
+    private func saveOnThisMac() {
+        guard !self.working else { return }
+        self.googleFailed = false
         do {
             try self.store.createEvent(title: self.title, start: self.start, minutes: self.minutes, calendarID: self.effectiveCalendarID)
             if let id = self.effectiveCalendarID { self.store.rememberNewEventCalendar(id) }

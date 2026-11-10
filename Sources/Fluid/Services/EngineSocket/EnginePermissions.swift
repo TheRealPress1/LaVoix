@@ -1,6 +1,7 @@
 import ApplicationServices
 import AVFoundation
 import Contacts
+import EventKit
 import CoreGraphics
 import Foundation
 
@@ -40,7 +41,7 @@ nonisolated enum EnginePermissionState {
 }
 
 nonisolated enum EnginePermissionNames {
-    static let all = ["microphone", "accessibility", "input_monitoring", "contacts", "full_disk_access"]
+    static let all = ["microphone", "accessibility", "input_monitoring", "contacts", "calendar_write", "full_disk_access"]
 }
 
 nonisolated struct LiveEnginePermissions: EnginePermissionsProviding {
@@ -50,6 +51,7 @@ nonisolated struct LiveEnginePermissions: EnginePermissionsProviding {
             "accessibility": EnginePermissionState.map(trusted: AXIsProcessTrusted()),
             "input_monitoring": EnginePermissionState.map(trusted: CGPreflightListenEventAccess()),
             "contacts": EnginePermissionState.map(CNContactStore.authorizationStatus(for: .contacts)),
+            "calendar_write": Self.calendarState(),
             "full_disk_access": Self.canReadMessages() ? EnginePermissionState.granted : EnginePermissionState.denied,
         ]
     }
@@ -58,10 +60,20 @@ nonisolated struct LiveEnginePermissions: EnginePermissionsProviding {
         switch name {
         case "microphone": _ = await AVCaptureDevice.requestAccess(for: .audio)
         case "contacts": _ = try? await CNContactStore().requestAccess(for: .contacts)
+        case "calendar_write": _ = try? await EKEventStore().requestFullAccessToEvents()
         case "accessibility": _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
         case "input_monitoring": _ = CGRequestListenEventAccess()
         case "full_disk_access": throw EnginePermissionsError.notPromptable
         default: throw EnginePermissionsError.unknown
+        }
+    }
+
+    /// Full access to Calendar (read and write): what the notch needs to show events and to create them.
+    static func calendarState() -> String {
+        switch EKEventStore.authorizationStatus(for: .event) {
+        case .fullAccess: EnginePermissionState.granted
+        case .notDetermined: EnginePermissionState.notAsked
+        default: EnginePermissionState.denied
         }
     }
 

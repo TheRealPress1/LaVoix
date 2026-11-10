@@ -47,6 +47,7 @@ import SQLite3
 ///   {"op":"speech.activate","id"} / speech.download / speech.delete / {"op":"speech.cancel"}  -> {"ok":true}   (start the work and return; ask speech.list for progress)
 ///   {"op":"activity"}                                     -> {"ok":true,"activity":{recording,meeting_processing,dictating,busy}}   (so background work can wait its turn)
 ///   {"op":"contacts.lookup","emails":[...],"phones":[...]} -> {"ok":true,"contact":{found,full_name,nickname,organization,job_title,emails,phones,photo?,birthday?{month,day},dates?[{label,month,day}],addresses?[{label,city,state,country}],relations?[{label,name}],urls?[...]}}   (found by those addresses only; no birth year, no street)
+///   {"op":"google.tokens","accounts":[{"email","access_token","expires_at"}]}  -> {"ok":true,"accounts":n}   (myOS gives the engine short-lived Google access tokens, kept in memory only, so the notch can create calendar events with a Meet link and invitations; an empty list forgets them)
 ///   {"op":"permissions.status"}                          -> {"ok":true,"permissions":{microphone,accessibility,input_monitoring,contacts,full_disk_access}}   (each "granted" | "denied" | "not_asked"; read-only)
 ///   {"op":"permissions.request","name"}                   -> {"ok":true}   (shows macOS's own question where there is one; Full Disk Access is refused, the user switches it on in System Settings)
 ///   {"op":"shortcuts.get"}                                -> {"ok":true,"shortcuts":{dictation:[...],edit,command,cancel,paste_last}}   (labels such as "Fn"; read-only)
@@ -535,6 +536,11 @@ nonisolated enum EngineSocket {
             guard let permissions = services.permissions else { return fail("permissions are not available") }
             guard let name = object["name"] as? String, EnginePermissionNames.all.contains(name) else { return fail("name must be one of: \(EnginePermissionNames.all.joined(separator: ", "))") }
             do { try await permissions.request(name); _ = emit(["ok": true]) } catch EnginePermissionsError.notPromptable { fail("macOS can't ask for this one: switch it on in System Settings") } catch { fail(message(error)) }
+        case "google.tokens":
+            // myOS hands over short-lived Google access tokens (kept in memory only) so the notch can create events with a Meet link.
+            guard let accounts = GoogleTokenVault.accounts(in: object) else { return fail("missing accounts") }
+            GoogleTokenVault.shared.replace(with: accounts)
+            _ = emit(["ok": true, "accounts": accounts.count])
         case "activity":
             guard let activity = services.activity else { return fail("activity is not available") }
             // An answer that can't be given in time is an error, never a guess: callers use this to avoid interrupting a recording.

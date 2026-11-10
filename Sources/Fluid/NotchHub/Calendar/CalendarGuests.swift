@@ -154,7 +154,7 @@ nonisolated enum CalendarInvites {
         for guest in guests {
             lines.append("make new attendee at end of attendees with properties {email:\(self.literal(guest.email))}")
         }
-        lines += ["end tell", "end tell"]
+        lines += ["end tell", "set theCount to count of attendees of theEvent", "end tell", "return theCount"]
         return lines.joined(separator: "\n")
     }
 
@@ -168,8 +168,8 @@ nonisolated enum CalendarInvites {
     }
 
     /// Runs `script` with osascript off the main thread (the first call may wait while Calendar opens and while macOS asks for permission).
-    static func run(_ script: String, timeout: TimeInterval = 60) async -> Result<Void, CalendarInviteFailure> {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Result<Void, CalendarInviteFailure>, Never>) in
+    static func run(_ script: String, timeout: TimeInterval = 60) async -> Result<Int, CalendarInviteFailure> {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Result<Int, CalendarInviteFailure>, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
@@ -177,7 +177,8 @@ nonisolated enum CalendarInvites {
                 let input = Pipe(), errors = Pipe()
                 process.standardInput = input
                 process.standardError = errors
-                process.standardOutput = FileHandle.nullDevice
+                let output = Pipe()
+                process.standardOutput = output
                 let finished = DispatchSemaphore(value: 0)
                 process.terminationHandler = { _ in finished.signal() }
                 do { try process.run() } catch {
@@ -192,7 +193,8 @@ nonisolated enum CalendarInvites {
                     return
                 }
                 let text = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                continuation.resume(returning: process.terminationStatus == 0 ? .success(()) : .failure(Self.failure(fromStandardError: text)))
+                let kept = Int(String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+                continuation.resume(returning: process.terminationStatus == 0 ? .success(kept) : .failure(Self.failure(fromStandardError: text)))
             }
         }
     }
@@ -200,6 +202,14 @@ nonisolated enum CalendarInvites {
     /// Adds `guests` to the event that was just saved.
     static func addGuests(_ guests: [CalendarGuest], calendarIdentifier: String, title: String, start: Date) async -> Result<Void, CalendarInviteFailure> {
         guard !guests.isEmpty else { return .success(()) }
-        return await self.run(self.script(calendarIdentifier: calendarIdentifier, title: title, start: start, guests: guests))
+        switch await self.run(self.script(calendarIdentifier: calendarIdentifier, title: title, start: start, guests: guests)) {
+        case let .failure(failure): return .failure(failure)
+        case let .success(kept): return self.verdict(kept: kept, wanted: guests.count)
+        }
+    }
+
+    /// Calendar said yes; the event must really hold the guests (an earlier version trusted the yes and nothing was invited).
+    static func verdict(kept: Int, wanted: Int) -> Result<Void, CalendarInviteFailure> {
+        kept >= wanted ? .success(()) : .failure(CalendarInviteFailure(message: "Calendar kept \(kept) of \(wanted) guests, so no invitation was sent. For Google accounts, press Allow calendar events in myOS (Mail) to invite people from here."))
     }
 }

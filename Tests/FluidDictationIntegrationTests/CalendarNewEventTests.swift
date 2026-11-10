@@ -193,4 +193,54 @@ final class CalendarNewEventTests: XCTestCase {
         XCTAssertEqual(targets[0].secondary, "Work · Google")
         XCTAssertEqual(targets[1].secondary, "iCloud")
     }
+
+    // MARK: Google
+
+    func testTheGoogleEventCarriesTheGuestsTheTimesAndAMeetRequest() throws {
+        let start = date(12, 14, 30)
+        let zone = TimeZone(identifier: "America/New_York")!
+        let request = GoogleEventRequest(title: "Call with Martin", start: start, end: start.addingTimeInterval(1800), guests: ["martin@example.com"], withMeet: true, timeZone: zone)
+        let body = GoogleCalendarClient.body(for: request, requestID: "req-1")
+        XCTAssertEqual(body["summary"] as? String, "Call with Martin")
+        XCTAssertEqual((body["start"] as? [String: String])?["timeZone"], "America/New_York")
+        XCTAssertEqual((body["start"] as? [String: String])?["dateTime"], "2026-11-12T09:30:00-05:00")
+        XCTAssertEqual(((body["attendees"] as? [[String: String]])?.first)?["email"], "martin@example.com")
+        let create = (body["conferenceData"] as? [String: Any])?["createRequest"] as? [String: Any]
+        XCTAssertEqual(create?["requestId"] as? String, "req-1")
+        XCTAssertEqual((create?["conferenceSolutionKey"] as? [String: String])?["type"], "hangoutsMeet")
+        var plain = request; plain.guests = []; plain.withMeet = false
+        let bare = GoogleCalendarClient.body(for: plain)
+        XCTAssertNil(bare["attendees"]); XCTAssertNil(bare["conferenceData"])
+        XCTAssertTrue(GoogleCalendarClient.endpoint.contains("conferenceDataVersion=1") && GoogleCalendarClient.endpoint.contains("sendUpdates=all"))
+    }
+
+    func testGoogleAnswersAreReadInWords() {
+        let ok = Data(#"{"id":"abc","htmlLink":"https://calendar.google.com/e","hangoutLink":"https://meet.google.com/xyz-abcd-efg"}"#.utf8)
+        XCTAssertEqual(GoogleCalendarClient.parse(status: 200, data: ok), .success(GoogleEventResult(id: "abc", htmlLink: "https://calendar.google.com/e", meetLink: "https://meet.google.com/xyz-abcd-efg")))
+        let viaEntry = Data(#"{"id":"abc","conferenceData":{"entryPoints":[{"entryPointType":"phone","uri":"tel:1"},{"entryPointType":"video","uri":"https://meet.google.com/q"}]}}"#.utf8)
+        XCTAssertEqual(try? GoogleCalendarClient.parse(status: 200, data: viaEntry).get().meetLink, "https://meet.google.com/q")
+        let scope = Data(#"{"error":{"message":"Request had insufficient authentication scopes."}}"#.utf8)
+        if case let .failure(f) = GoogleCalendarClient.parse(status: 403, data: scope) { XCTAssertTrue(f.message.contains("Allow calendar events")) } else { XCTFail() }
+        if case let .failure(f) = GoogleCalendarClient.parse(status: 401, data: Data()) { XCTAssertTrue(f.message.contains("ran out")) } else { XCTFail() }
+        if case let .failure(f) = GoogleCalendarClient.parse(status: 400, data: Data(#"{"error":{"message":"Bad guest"}}"#.utf8)) { XCTAssertEqual(f.message, "Bad guest") } else { XCTFail() }
+    }
+
+    func testTokensHandedOverAreKeptByAddressAndRunOut() {
+        let now = Date()
+        let list = GoogleTokenVault.accounts(in: ["accounts": [["email": "A@Gmail.com", "access_token": "t1", "expires_at": now.timeIntervalSince1970 + 3000], ["email": "bad", "access_token": "t2", "expires_at": 1.0]]])
+        XCTAssertEqual(list?.count, 1)
+        let vault = GoogleTokenVault()
+        vault.replace(with: list ?? [])
+        XCTAssertEqual(vault.token(for: "a@gmail.com", now: now), "t1")
+        XCTAssertNil(vault.token(for: "a@gmail.com", now: now.addingTimeInterval(2990)), "less than a minute left is not enough")
+        XCTAssertNil(vault.token(for: "b@gmail.com", now: now))
+        vault.replace(with: [])
+        XCTAssertFalse(vault.has("a@gmail.com", now: now))
+        XCTAssertNil(GoogleTokenVault.accounts(in: [:]))
+    }
+
+    func testGuestsThatCalendarDidNotKeepAreAFailureNotASuccess() {
+        XCTAssertNoThrow(try CalendarInvites.verdict(kept: 2, wanted: 2).get())
+        if case let .failure(f) = CalendarInvites.verdict(kept: 0, wanted: 1) { XCTAssertTrue(f.message.contains("0 of 1")) } else { XCTFail() }
+    }
 }
