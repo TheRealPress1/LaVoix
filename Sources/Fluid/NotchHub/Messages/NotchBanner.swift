@@ -38,6 +38,43 @@ struct NotchBannerContent: Equatable, Identifiable {
     var files: [MessageAttachment] = []
     /// `text` is only the stand-in for the files ("Photo"), so the tiles are shown instead of it.
     var textIsPlaceholder = false
+    /// Set for the card that confirms a new calendar meeting (its time, the Meet link, who was invited), instead of a message.
+    var meetingSet: MeetingSet? = nil
+
+    /// A meeting that was just set, as the card tells it.
+    struct MeetingSet: Equatable {
+        var title: String
+        var start: Date
+        var end: Date
+        var meetLink: URL?
+        /// Who was invited, by name.
+        var invited: [String]
+        /// Made through Google (which sends the invitations); false for a meeting saved in the Mac's Calendar only.
+        var viaGoogle: Bool
+
+        /// "Today · 3:45 – 4:15 PM", "Tomorrow · ...", or the weekday and date for another day.
+        static func whenLine(start: Date, end: Date, now: Date = Date(), calendar: Calendar = .current, locale: Locale = .current) -> String {
+            let day: String
+            if calendar.isDate(start, inSameDayAs: now) { day = "Today" }
+            else if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(start, inSameDayAs: tomorrow) { day = "Tomorrow" }
+            else { day = start.formatted(Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone).weekday(.abbreviated).month(.abbreviated).day()) }
+            let time = Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, calendar: calendar, timeZone: calendar.timeZone)
+            return "\(day) · \(start.formatted(time)) – \(end.formatted(time))"
+        }
+
+        var whenLine: String { Self.whenLine(start: self.start, end: self.end) }
+
+        /// "Google Meet link ready · Invited Léa D., Martin B. +1", or what is true when there is neither.
+        var detailLine: String {
+            var parts: [String] = []
+            if self.meetLink != nil { parts.append("Google Meet link ready") }
+            if !self.invited.isEmpty {
+                let names = self.invited.prefix(2).joined(separator: ", ") + (self.invited.count > 2 ? " +\(self.invited.count - 2)" : "")
+                parts.append("Invited \(names)")
+            }
+            return parts.isEmpty ? "Added to your calendar" : parts.joined(separator: " · ")
+        }
+    }
 
     /// Whether the words are drawn (not when they are only the stand-in for tiles that are).
     var showsText: Bool { self.files.isEmpty || !self.textIsPlaceholder }
@@ -67,6 +104,8 @@ struct NotchBannerContent: Equatable, Identifiable {
 
     /// Everything in the card that sits under the notch band, with the reply row only when expanded, and room for the enlarged file while one is.
     func contentHeight(expanded: Bool, enlarged: Bool = false) -> CGFloat {
+        // Title row, the time, one more line, then the buttons.
+        if self.meetingSet != nil { return 8 + 19 + 2 + 17 + 2 + 15 + 12 + 30 + 18 }
         if self.lookStyle { return NotchLookCardView.contentHeight(text: self.text, hasButtons: self.actionLabel != nil, cardWidth: NotchGeometry.bannerWidth) }
         // With no words under the name, the row is as tall as the avatar (40) rather than the name, so the tile does not sit on the card's edge.
         let top: CGFloat = self.showsText
@@ -90,6 +129,7 @@ struct NotchBannerView: View {
     @StateObject private var hovering = AttachmentHoverModel()
     @State private var draft = ""
     @State private var sent = false
+    @State private var copied = false
     @FocusState private var focused: Bool
 
     private var blue: Color { self.content.whatsAppPhone == nil ? Color(red: 0.04, green: 0.52, blue: 1.0) : Color(red: 0.145, green: 0.827, blue: 0.4) }
@@ -98,7 +138,10 @@ struct NotchBannerView: View {
     private var enlargedFile: MessageAttachment? { self.hovering.enlarged ?? Self.previewEnlarged }
 
     var body: some View {
-        if self.content.lookStyle {
+        if let set = self.content.meetingSet {
+            self.meetingBody(set)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        } else if self.content.lookStyle {
             self.lookBody
         } else {
             self.standardBody
@@ -122,6 +165,60 @@ struct NotchBannerView: View {
                     self.hovering.clear()
                 }
         }
+    }
+
+    /// The card that says a meeting was set: who and when, whether it has a Meet link or invitations, and two buttons.
+    private func meetingBody(_ set: NotchBannerContent.MeetingSet) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                ZStack {
+                    Circle().fill(Color.white.opacity(0.14))
+                    if set.meetLink != nil {
+                        GoogleMeetLogo().frame(width: 24, height: 24)
+                    } else {
+                        Image(systemName: "calendar.badge.checkmark").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+                    }
+                }
+                .frame(width: 40, height: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(set.title).font(.system(size: 14.5, weight: .semibold)).lineLimit(1)
+                        Spacer(minLength: 6)
+                        Text("Meeting set").font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.4))
+                    }
+                    Text(set.whenLine).font(.system(size: 13.5)).foregroundStyle(.white.opacity(0.9)).lineLimit(1)
+                    Text(set.detailLine).font(.system(size: 12)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { NotchHubController.shared.openConversationFromBanner() }
+            HStack(spacing: 8) {
+                if let link = set.meetLink {
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(link.absoluteString, forType: .string)
+                        self.copied = true
+                    } label: {
+                        Label(self.copied ? "Copied" : "Copy Meet link", systemImage: self.copied ? "checkmark" : "link")
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(maxWidth: .infinity).frame(height: 30)
+                            .background(Capsule().fill(Color.white.opacity(0.16)))
+                            .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Button { NotchHubController.shared.openConversationFromBanner() } label: {
+                    Text("Open").font(.system(size: 13, weight: .semibold))
+                        .frame(maxWidth: .infinity).frame(height: 30)
+                        .background(Capsule().fill(Color.white))
+                        .foregroundStyle(.black)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 22)
+        .padding(.top, 8)
     }
 
     private var lookBody: some View {

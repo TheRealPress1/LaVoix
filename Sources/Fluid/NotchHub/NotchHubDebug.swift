@@ -25,6 +25,17 @@ enum NotchHubDebug {
         }
     }
 
+    /// What the meeting details show in a preview picture: the first sample meeting, its invite search, or its delete question.
+    @MainActor static func eventPreview(_ widgetName: String) -> CalendarEventPreview? {
+        switch widgetName {
+        case "calendar-event": return CalendarEventPreview()
+        case "calendar-event-guests":
+            return CalendarEventPreview(screen: .guests, newGuests: [self.sampleGuests[0]], query: "ma", suggestions: [self.sampleGuests[2], CalendarGuest(name: "", email: "ma@example.com")])
+        case "calendar-event-delete": return CalendarEventPreview(confirmingDelete: true)
+        default: return nil
+        }
+    }
+
     @MainActor static func renderIfRequested() {
         guard let path = ProcessInfo.processInfo.environment["LAVOIX_NOTCH_RENDER"] else { return }
         Task { @MainActor in
@@ -118,6 +129,16 @@ enum NotchHubDebug {
                 if widgetName == "banner-sticker" || widgetName == "banner-sticker-plain" {
                     files = [MessagesSampleFiles.makeBannerSticker(flagged: widgetName == "banner-sticker")]
                 }
+                // banner-meeting / banner-meeting-nolink: the card that says a meeting was set (invented).
+                if widgetName.hasPrefix("banner-meeting") {
+                    let start = Calendar.current.date(bySettingHour: 15, minute: 45, second: 0, of: Date()) ?? Date()
+                    model.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: "Call with Martin", subtitle: nil, text: "", date: Date(), meetingSet: NotchBannerContent.MeetingSet(
+                        title: "Call with Martin", start: start, end: start.addingTimeInterval(1800),
+                        meetLink: widgetName.hasSuffix("nolink") ? nil : URL(string: "https://meet.google.com/abc-defg-hij"),
+                        invited: widgetName.hasSuffix("nolink") ? [] : ["Martin D.", "Léa M.", "Manu G."], viaGoogle: !widgetName.hasSuffix("nolink")
+                    )))
+                    model.setBannerExpanded(false)
+                } else {
                 model.showBanner(NotchBannerContent(
                     chatID: 1, chatGUID: "g", title: long ? "Krish, Aryan +1" : "Maya Chen", avatarHandle: long ? nil : "+15551230001",
                     groupHandles: long ? ["+15551230004", "+15551230005", "+15551230006"] : [],
@@ -126,6 +147,7 @@ enum NotchHubDebug {
                 ))
                 model.setBannerExpanded(widgetName.hasSuffix("expanded") || widgetName.hasSuffix("enlarged"))
                 if widgetName.hasSuffix("enlarged") { model.setBannerEnlarged(true) }
+                }
             } else if widgetName.hasPrefix("nowplaying") {
                 // nowplaying-bookshelf: Bookshelf's song takes the card (the system names nothing that plays), with a made-up cover.
                 if widgetName == "nowplaying-bookshelf" {
@@ -149,7 +171,7 @@ enum NotchHubDebug {
             } else if widgetName.hasPrefix("calendar") {
                 let store: CalendarStore
                 switch widgetName {
-                case "calendar-new", "calendar-new-guests", "calendar-new-accounts", "calendar-new-withguests": store = .sample()
+                case "calendar-new", "calendar-new-guests", "calendar-new-accounts", "calendar-new-withguests", "calendar-event", "calendar-event-guests", "calendar-event-delete": store = .sample()
                 case "calendar-empty": store = .sample(empty: true)
                 case "calendar-denied": store = .sample(access: .denied)
                 case "calendar-unknown": store = .sample(access: .unknown)
@@ -157,7 +179,7 @@ enum NotchHubDebug {
                 }
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
-                    NotchWidget(id: "calendar", title: "Calendar", systemImage: "calendar") { AnyView(CalendarWidgetView(store: store, staticLayout: true, startCreating: widgetName.hasPrefix("calendar-new"), preview: Self.newEventPreview(widgetName))) },
+                    NotchWidget(id: "calendar", title: "Calendar", systemImage: "calendar") { AnyView(CalendarWidgetView(store: store, staticLayout: true, startCreating: widgetName.hasPrefix("calendar-new"), preview: Self.newEventPreview(widgetName), eventPreview: Self.eventPreview(widgetName))) },
                 ])
                 model.selectedWidgetID = "calendar"
             } else if widgetName.hasPrefix("clipboard") || widgetName.hasPrefix("shelf") {
@@ -1625,6 +1647,53 @@ enum NotchHubDebug {
             check("a day lists its own events, multi-day and overnight ones, but not the next day's", onDay == ["morning", "trip", "overnight"])
             check("an event ending exactly at midnight does not leak into the next day", !onDay.contains("ends at midnight"))
             check("label: hours", CalendarStore.whenLabel(start: now.addingTimeInterval(130 * 60), end: now.addingTimeInterval(900 * 60), now: now) == "in 2h 10m")
+
+            // Meetings that exist: finding one in Google, inviting people, deleting
+            check("an address with a plus reaches Google as typed", GoogleCalendarClient.encoded("a+b@x.com") == "a%2Bb@x.com")
+            check("the iCalendar id lookup is by iCalUID", GoogleCalendarClient.findURL(iCalUID: "abc_1@google.com")?.absoluteString.contains("iCalUID=abc_1@google.com") == true)
+            let window = GoogleCalendarClient.windowURL(start: Date(timeIntervalSince1970: 1_800_000_000), end: Date(timeIntervalSince1970: 1_800_003_600))?.absoluteString ?? ""
+            check("the time-window lookup asks for single occurrences in UTC", window.contains("timeMin=2027-01-15T08%3A00%3A00Z") && window.contains("singleEvents=true"))
+            check("a change to one meeting names it and tells the guests; a delete does not ask for conference data",
+                  GoogleCalendarClient.eventURL(id: "e1", query: "sendUpdates=all")?.absoluteString.hasSuffix("/events/e1?sendUpdates=all") == true && GoogleCalendarClient.eventURL(id: "e1")?.absoluteString.hasSuffix("/events/e1") == true)
+            let listJSON = Data(#"{"items":[{"id":"e1","summary":"Sync","start":{"dateTime":"2027-01-15T09:00:00+01:00"},"hangoutLink":"https://meet.google.com/a-b-c","htmlLink":"https://g/e1","organizer":{"self":true},"attendees":[{"email":"Lea@X.com","displayName":"Léa","responseStatus":"accepted","organizer":true},{"email":"me@x.com","self":true,"responseStatus":"accepted"}]},{"id":"gone","status":"cancelled","summary":"Old"},{"id":"series","summary":"Weekly","recurrence":["RRULE:FREQ=WEEKLY"],"start":{"dateTime":"2027-01-15T09:00:00+01:00"}},{"id":"theirs","summary":"Theirs","organizer":{"email":"o@x.com"},"guestsCanInviteOthers":false,"start":{"dateTime":"2027-01-16T09:00:00Z"}}]}"#.utf8)
+            let listed = (try? GoogleCalendarClient.parseList(status: 200, data: listJSON).get()) ?? []
+            check("a list drops cancelled meetings and keeps the rest", listed.map(\.id) == ["e1", "series", "theirs"])
+            check("a meeting's guests, answers and Meet link are read", listed.first?.attendees.map(\.email) == ["lea@x.com", "me@x.com"] && listed.first?.attendees.first?.status == "accepted" && listed.first?.attendees.first?.isOrganizer == true && listed.first?.attendees.last?.isMe == true && listed.first?.meetLink == "https://meet.google.com/a-b-c")
+            check("a repeating meeting is known as the whole series", listed.first { $0.id == "series" }?.isSeries == true && listed.first?.isSeries == false)
+            check("the organizer may invite; a guest only when allowed", listed.first?.canInviteOthers == true && listed.first { $0.id == "theirs" }?.isOrganizer == false && listed.first { $0.id == "theirs" }?.canInviteOthers == false)
+            let sync = listed[0]
+            check("the notch's meeting is matched by title and start, an untitled one as Untitled", GoogleCalendarClient.match(listed, title: " sync ", start: sync.start!.addingTimeInterval(30))?.id == "e1" && GoogleCalendarClient.match(listed, title: "Sync", start: sync.start!.addingTimeInterval(300)) == nil
+                  && GoogleCalendarClient.match([GoogleEventDetails(id: "u", title: "", start: now, attendees: [], meetLink: nil, htmlLink: nil, isOrganizer: true, guestsCanInvite: true)], title: "Untitled", start: now)?.id == "u")
+            let everyone = GoogleCalendarClient.adding([GoogleAttendee(email: "New@x.com", name: "New"), GoogleAttendee(email: "lea@x.com")], to: sync.attendees)
+            check("inviting adds only people not already invited", everyone.map(\.email) == ["lea@x.com", "me@x.com", "New@x.com"])
+            let sent = (GoogleCalendarClient.guestListBody(everyone)["attendees"] as? [[String: Any]]) ?? []
+            check("the whole list is sent again with the answers already given", sent.count == 3 && sent[0]["responseStatus"] as? String == "accepted" && sent[0]["displayName"] as? String == "Léa" && sent[2]["responseStatus"] == nil && sent[2]["displayName"] as? String == "New")
+            if case let .failure(f) = GoogleCalendarClient.parseEvent(status: 403, data: Data(#"{"error":{"message":"You need to be the organizer"}}"#.utf8)) { check("a refusal says Google's own words", f.message == "You need to be the organizer") } else { check("a refusal is a failure", false) }
+            if case let .failure(f) = GoogleCalendarClient.parseEvent(status: 404, data: Data()) { check("a missing meeting says so", f.message.contains("no longer find")) } else { check("a missing meeting is a failure", false) }
+
+            let shown = CalendarStore.sample()
+            let design = shown.events[0]
+            check("a meeting's guests come from the Calendar app, without you", design.attendees.count == 4 && design.attendees[0].isOrganizer && design.attendees[3].initials == "A")
+            let invitedNow = shown.markInvited([CalendarStore.EventAttendee(name: "Zoé", email: "zoe@example.com"), CalendarStore.EventAttendee(name: "Léa Again", email: "LEA@example.com")], to: design)
+            check("people just invited show at once, nobody twice", invitedNow.attendees.count == 5 && shown.events[0].attendees.count == 5 && shown.monthEvents.first { $0.id == design.id }?.attendees.count == 5)
+            shown.markDeleted(design)
+            check("a deleted meeting leaves the day and the month at once", !shown.events.contains { $0.id == design.id } && !shown.monthEvents.contains { $0.id == design.id })
+            shown.noteCreatedElsewhere(title: design.title, start: design.start, end: design.end, calendarID: nil, joinURL: nil)
+            check("a meeting made again at the same time is not hidden by the earlier delete", shown.events.contains { $0.title == design.title })
+
+            var utc = Calendar(identifier: .gregorian); utc.timeZone = TimeZone(identifier: "UTC")!
+            let us = Locale(identifier: "en_US")
+            let noon = DateComponents(calendar: utc, year: 2026, month: 11, day: 10, hour: 15, minute: 45).date!
+            check("the card names today's meeting by its time", NotchBannerContent.MeetingSet.whenLine(start: noon, end: noon.addingTimeInterval(1800), now: noon, calendar: utc, locale: us).replacingOccurrences(of: "\u{202F}", with: " ") == "Today · 3:45 PM – 4:15 PM")
+            check("tomorrow's by Tomorrow", NotchBannerContent.MeetingSet.whenLine(start: noon.addingTimeInterval(86400), end: noon.addingTimeInterval(88200), now: noon, calendar: utc, locale: us).hasPrefix("Tomorrow · "))
+            check("a later day by weekday and date", NotchBannerContent.MeetingSet.whenLine(start: noon.addingTimeInterval(3 * 86400), end: noon.addingTimeInterval(3 * 86400 + 1800), now: noon, calendar: utc, locale: us).hasPrefix("Fri, Nov 13 · "))
+            let setLink = URL(string: "https://meet.google.com/abc-defg-hij")
+            check("the card says what was done: link, invitations, or neither",
+                  NotchBannerContent.MeetingSet(title: "t", start: noon, end: noon, meetLink: setLink, invited: ["Martin D.", "Léa M.", "Manu G."], viaGoogle: true).detailLine == "Google Meet link ready · Invited Martin D., Léa M. +1"
+                  && NotchBannerContent.MeetingSet(title: "t", start: noon, end: noon, meetLink: nil, invited: [], viaGoogle: false).detailLine == "Added to your calendar")
+            let setCard = NotchBannerContent(chatID: 0, chatGUID: "", title: "t", subtitle: nil, text: "", date: now, meetingSet: NotchBannerContent.MeetingSet(title: "t", start: noon, end: noon, meetLink: setLink, invited: [], viaGoogle: true))
+            check("the card has room for its buttons", setCard.contentHeight(expanded: false) > NotchBannerContent(chatID: 1, chatGUID: "g", title: "t", subtitle: nil, text: "hi", date: now).contentHeight(expanded: false))
+
             print(failures == 0 ? "CALENDAR AUTOTEST ALL PASSED" : "CALENDAR AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)
         }

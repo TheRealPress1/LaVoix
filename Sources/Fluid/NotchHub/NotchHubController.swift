@@ -27,6 +27,7 @@ final class NotchHubController {
     private var releaseTask: Task<Void, Never>?
     private var peekTask: Task<Void, Never>?
     private var bannerTask: Task<Void, Never>?
+    private var meetingCardTask: Task<Void, Never>?
     private var bannerHovered = false
     /// True while the card's reply box has text in it, so leaving the card doesn't throw the draft away.
     var bannerHasDraft = false
@@ -190,6 +191,7 @@ final class NotchHubController {
         self.becomeKeyObserver = nil
         self.peekTask?.cancel()
         self.bannerTask?.cancel()
+        self.meetingCardTask?.cancel()
         self.model.hideBanner()
         self.endTextEntry()
         MessagesStore.shared.stop()
@@ -473,7 +475,33 @@ final class NotchHubController {
         self.window?.ignoresMouseEvents = false
         self.bannerHovered = false
         self.model.showBanner(content)
-        self.scheduleBannerDismiss(after: content.alertSymbol == nil ? 6 : (content.actionID == nil ? 12 : 30))
+        self.scheduleBannerDismiss(after: content.meetingSet != nil ? 9 : (content.alertSymbol == nil ? 6 : (content.actionID == nil ? 12 : 30)))
+    }
+
+    /// A card that says a meeting was just set (its time, the Meet link, who was invited). It drops out of a closed notch, so an open one folds away first.
+    func announceMeetingSet(_ set: NotchBannerContent.MeetingSet) {
+        guard NotchCalendarSettings.confirmsNewMeetings, self.isRunning else { return }
+        let content = NotchBannerContent(chatID: 0, chatGUID: "", title: set.title, subtitle: nil, text: "", date: Date(), meetingSet: set)
+        self.meetingCardTask?.cancel()
+        guard self.model.isOpen else { self.showBanner(content); return }
+        self.close()
+        self.meetingCardTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled, let self, !self.model.isOpen else { return }
+            self.showBanner(content)
+        }
+    }
+
+    /// Pressing the "meeting set" card opens the notch on the Calendar tab, on that meeting's details.
+    private func openLastMeeting() {
+        guard self.model.widgets.contains(where: { $0.id == "calendar" }) else { return }
+        let store = CalendarStore.shared
+        if let event = store.lastCreated {
+            store.reveal(day: event.start)
+            store.pendingDetail = event
+        }
+        self.model.selectedWidgetID = "calendar"
+        self.open()
     }
 
     /// A card about a connection that broke (from the engine socket's `notch.alert`, sent by myOS). Clicking it opens myOS.
@@ -502,6 +530,10 @@ final class NotchHubController {
         self.bannerHovered = false
         self.endTextEntry()
         self.model.hideBanner()
+        if banner.meetingSet != nil {
+            self.openLastMeeting()
+            return
+        }
         if let actionID = banner.actionID {
             // Pressing the card itself does what its button does.
             ConnectionsWidgetView.press(actionID)

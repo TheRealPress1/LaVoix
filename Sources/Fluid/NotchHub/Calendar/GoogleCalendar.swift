@@ -96,17 +96,26 @@ nonisolated enum GoogleCalendarClient {
             }
             return .success(GoogleEventResult(id: id, htmlLink: object["htmlLink"] as? String, meetLink: meet))
         }
+        return .failure(self.failure(status: status, object: object))
+    }
+
+    /// Google's refusal in words (a refused permission says where to give it).
+    static func failure(status: Int, object: [String: Any]) -> GoogleCalendarFailure {
         let error = object["error"] as? [String: Any]
         let text = (error?["message"] as? String) ?? ""
         switch status {
         case 401:
-            return .failure(GoogleCalendarFailure(message: "Google's sign-in for this account ran out. Open myOS, Mail, and press Allow calendar events."))
+            return GoogleCalendarFailure(message: "Google's sign-in for this account ran out. Open myOS, Mail, and press Allow calendar events.")
         case 403 where text.localizedCaseInsensitiveContains("insufficient") || text.localizedCaseInsensitiveContains("scope"):
-            return .failure(GoogleCalendarFailure(message: "This Google account has not allowed calendar events yet. Open myOS, Mail, and press Allow calendar events."))
+            return GoogleCalendarFailure(message: "This Google account has not allowed calendar events yet. Open myOS, Mail, and press Allow calendar events.")
         case 403 where text.localizedCaseInsensitiveContains("not been used") || text.localizedCaseInsensitiveContains("disabled"):
-            return .failure(GoogleCalendarFailure(message: "The Google Calendar API is not switched on in your Google Cloud project."))
+            return GoogleCalendarFailure(message: "The Google Calendar API is not switched on in your Google Cloud project.")
+        case 403:
+            return GoogleCalendarFailure(message: text.isEmpty ? "Google says this account may not change that meeting." : text)
+        case 404, 410:
+            return GoogleCalendarFailure(message: "Google can no longer find that meeting.")
         default:
-            return .failure(GoogleCalendarFailure(message: text.isEmpty ? "Google did not accept the event (error \(status))." : text))
+            return GoogleCalendarFailure(message: text.isEmpty ? "Google did not accept the change (error \(status))." : text)
         }
     }
 

@@ -7,12 +7,20 @@ import SwiftUI
 enum NotchCalendarSettings {
     private static let enabledKey = "LaVoixNotchCalendarEnabled"
     private static let promptKey = "LaVoixNotchCalendarPromptToRecord"
+    private static let confirmKey = "LaVoixNotchCalendarConfirmNewMeetings"
 
     /// On by default so the tab is easy to find. It reads nothing until you tap "Allow access" in the tab (or turn the
     /// setting on), because macOS asks for Calendar access then.
     static var isEnabled: Bool {
         get { UserDefaults.standard.object(forKey: self.enabledKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: self.enabledKey) }
+    }
+
+    /// A card drops out of the notch when a new meeting has been set (its time, the Meet link, who was invited). On unless
+    /// `defaults write com.myos.engine LaVoixNotchCalendarConfirmNewMeetings -bool false`.
+    static var confirmsNewMeetings: Bool {
+        get { UserDefaults.standard.object(forKey: self.confirmKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: self.confirmKey) }
     }
 
     /// Offer to record when a meeting with a call link or other attendees starts.
@@ -39,6 +47,18 @@ final class CalendarStore: ObservableObject {
         var writable = true
     }
 
+    /// One person on a meeting.
+    struct EventAttendee: Equatable, Identifiable {
+        enum Status: Equatable { case accepted, declined, tentative, pending }
+        var name: String
+        var email: String
+        var status: Status = .pending
+        var isOrganizer = false
+        var id: String { self.email }
+        var display: String { self.name.isEmpty || self.name.lowercased() == self.email.lowercased() ? self.email : self.name }
+        var initials: String { CalendarOwner.initials(for: self.display) }
+    }
+
     struct Event: Identifiable, Equatable {
         let id: String
         var title: String
@@ -53,6 +73,19 @@ final class CalendarStore: ObservableObject {
         var attendeeEmails: [String] = []
         /// The calendar it lives in (e.g. "Work"), for telling accounts apart.
         var calendarTitle: String = ""
+        /// The Mac's id for that calendar (the key of `ownerEmails`), so the notch knows which account a meeting belongs to.
+        var calendarID: String = ""
+        /// The Mac's own id for the meeting, to delete it from the Calendar app.
+        var ekIdentifier: String?
+        /// The iCalendar id the Mac keeps; for a Google meeting it is the id Google knows it by.
+        var externalID: String?
+        /// False for a meeting in a calendar that takes no changes (holidays, subscribed or read-only shared calendars).
+        var canModify = true
+        /// Who is invited, as the Mac's Calendar lists them (you are left out).
+        var attendees: [EventAttendee] = []
+        /// Google's id for the meeting and the account address it lives in, once known (a meeting made in the notch knows them at once).
+        var googleID: String?
+        var googleEmail: String?
 
         /// Worth offering to record: a call link, or other people invited.
         var looksLikeMeeting: Bool { !self.isAllDay && (self.joinURL != nil || self.attendeeCount >= 2) }
@@ -76,6 +109,14 @@ final class CalendarStore: ObservableObject {
     private var identityLoaded = false
     /// Events made through Google that the Mac's Calendar has not synced down yet: kept in view for a few minutes so the notch does not forget them.
     private var recentlyCreated: [(event: Event, at: Date)] = []
+    /// Meetings just deleted and people just invited that the Mac's Calendar has not caught up with (it syncs with the account in its own time): the
+    /// notch keeps showing the change for a while so a deleted meeting does not come back and an invited person does not vanish.
+    private var recentlyDeleted: [(key: String, at: Date)] = []
+    private var recentlyInvited: [(key: String, guests: [EventAttendee], at: Date)] = []
+    /// The meeting made last, so a tap on the "meeting set" card can open its details.
+    private(set) var lastCreated: Event?
+    /// A meeting the detail screen should open on (set when a "meeting set" card is tapped; the calendar tab takes it).
+    @Published var pendingDetail: Event?
     @Published private(set) var hiddenCalendarIDs: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "LaVoixNotchCalendarHidden") ?? [])
 
     /// Called once per meeting when it is time to offer recording.
@@ -115,7 +156,12 @@ final class CalendarStore: ObservableObject {
         let (reviewStart, reviewEnd) = day(-2, hour: 15)
         let (boardStart, boardEnd) = day(9, hour: 11)
         store.events = [
-            Event(id: "1", title: "Design sync", start: at(12), end: at(42), isAllDay: false, color: .blue, location: "Zoom", joinURL: URL(string: "https://zoom.us/j/123456789"), attendeeCount: 4),
+            Event(id: "1", title: "Design sync", start: at(12), end: at(42), isAllDay: false, color: .blue, location: "Zoom", joinURL: URL(string: "https://zoom.us/j/123456789"), attendeeCount: 4, calendarTitle: "Work", calendarID: "sample-work", attendees: [
+                EventAttendee(name: "Léa Moreau", email: "lea@example.com", status: .accepted, isOrganizer: true),
+                EventAttendee(name: "Martin Dupont", email: "martin@example.com", status: .pending),
+                EventAttendee(name: "Manu Girard", email: "manu@example.org", status: .declined),
+                EventAttendee(name: "", email: "ana@example.net", status: .tentative),
+            ]),
             Event(id: "2", title: "Lunch with Maya", start: at(150), end: at(210), isAllDay: false, color: .green, location: "Café Berlin", joinURL: nil, attendeeCount: 2),
             Event(id: "3", title: "Investor update", start: at(330), end: at(360), isAllDay: false, color: .orange, location: nil, joinURL: URL(string: "https://meet.google.com/abc-defg-hij"), attendeeCount: 5),
         ]
@@ -209,7 +255,7 @@ final class CalendarStore: ObservableObject {
 
     /// The day the arrows land on, and the month the grid should show for it. A step that crosses into another month takes the grid with it, so
     /// the chosen day is never drawn as one of the faded days of a neighbouring month.
-    static func step(selected: Date, displayedMonth: Date, byDays offset: Int, calendar: Calendar = .current) -> (day: Date, month: Date)? {
+    nonisolated static func step(selected: Date, displayedMonth: Date, byDays offset: Int, calendar: Calendar = .current) -> (day: Date, month: Date)? {
         guard let moved = calendar.date(byAdding: .day, value: offset, to: selected) else { return nil }
         let day = calendar.startOfDay(for: moved)
         let sameMonth = calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month)
@@ -323,7 +369,7 @@ final class CalendarStore: ObservableObject {
         return result
     }
 
-    static func startOfMonth(_ date: Date, calendar: Calendar = .current) -> Date {
+    nonisolated static func startOfMonth(_ date: Date, calendar: Calendar = .current) -> Date {
         calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? calendar.startOfDay(for: date)
     }
 
@@ -392,8 +438,24 @@ final class CalendarStore: ObservableObject {
         event.attendees?.first(where: \.isCurrentUser)?.participantStatus == .declined
     }
 
+    private static func status(_ participant: EKParticipant) -> EventAttendee.Status {
+        switch participant.participantStatus {
+        case .accepted: .accepted
+        case .declined: .declined
+        case .tentative: .tentative
+        default: .pending
+        }
+    }
+
     private static func makeEvent(_ event: EKEvent) -> Event {
-        Event(
+        let everyone = event.attendees ?? []
+        let organizerURL = event.organizer?.url.absoluteString.lowercased()
+        var others: [EventAttendee] = []
+        if let organizer = event.organizer, !CalendarLinks.isMe(organizer), let person = Self.attendee(organizer, organizer: true) { others.append(person) }
+        for participant in everyone where !CalendarLinks.isMe(participant) && participant.url.absoluteString.lowercased() != organizerURL {
+            if let person = Self.attendee(participant, organizer: false) { others.append(person) }
+        }
+        return Event(
             id: "\(event.eventIdentifier ?? event.title ?? "event")|\(event.startDate.timeIntervalSince1970)",
             title: (event.title?.isEmpty == false ? event.title : nil) ?? "Untitled",
             start: event.startDate,
@@ -407,8 +469,20 @@ final class CalendarStore: ObservableObject {
                 let raw = participant.url.absoluteString
                 return raw.lowercased().hasPrefix("mailto:") ? String(raw.dropFirst(7)).lowercased() : nil
             },
-            calendarTitle: event.calendar?.title ?? ""
+            calendarTitle: event.calendar?.title ?? "",
+            calendarID: event.calendar?.calendarIdentifier ?? "",
+            ekIdentifier: event.eventIdentifier,
+            externalID: event.calendarItemExternalIdentifier,
+            canModify: event.calendar?.allowsContentModifications ?? false,
+            attendees: others
         )
+    }
+
+    private static func attendee(_ participant: EKParticipant, organizer: Bool) -> EventAttendee? {
+        let raw = participant.url.absoluteString
+        guard raw.lowercased().hasPrefix("mailto:") else { return nil }
+        let email = String(raw.dropFirst(7)).lowercased()
+        return EventAttendee(name: participant.name ?? "", email: email, status: Self.status(participant), isOrganizer: organizer)
     }
 }
 
@@ -432,16 +506,28 @@ enum CalendarWriteError: LocalizedError {
     }
 }
 
+/// Why an existing meeting could not be changed, in words.
+enum CalendarChangeError: LocalizedError {
+    case notOnThisMac, readOnly
+
+    var errorDescription: String? {
+        switch self {
+        case .notOnThisMac: "This meeting is not in the Calendar app on this Mac yet. Try again in a minute."
+        case .readOnly: "This calendar does not take changes."
+        }
+    }
+}
+
 extension CalendarStore {
     /// The lengths offered for a new event, in minutes.
     static let newEventLengths = [15, 30, 45, 60, 120]
     static let newEventDefaultMinutes = 30
     private static let newEventCalendarKey = "LaVoixNotchCalendarNewEventCalendar"
     /// The first and last start a day offers (the form steps in quarter hours).
-    private static let latestQuarter = 23 * 60 + 45
+    nonisolated private static let latestQuarter = 23 * 60 + 45
 
     /// Where a new event on `day` starts unless told otherwise: today, the next quarter hour at least five minutes away; any other day, 9:00.
-    static func defaultStart(on day: Date, now: Date, calendar: Calendar = .current) -> Date {
+    nonisolated static func defaultStart(on day: Date, now: Date, calendar: Calendar = .current) -> Date {
         let dayStart = calendar.startOfDay(for: day)
         guard calendar.isDate(day, inSameDayAs: now) else {
             return calendar.date(byAdding: .hour, value: 9, to: dayStart) ?? dayStart
@@ -452,7 +538,7 @@ extension CalendarStore {
     }
 
     /// `start` moved by `minutes`, kept inside its own day (00:00 to 23:45).
-    static func shifted(_ start: Date, byMinutes minutes: Int, calendar: Calendar = .current) -> Date {
+    nonisolated static func shifted(_ start: Date, byMinutes minutes: Int, calendar: Calendar = .current) -> Date {
         let dayStart = calendar.startOfDay(for: start)
         let current = Int(start.timeIntervalSince(dayStart) / 60)
         let moved = max(0, min(latestQuarter, current + minutes))
@@ -460,12 +546,12 @@ extension CalendarStore {
     }
 
     /// `start` on the day `days` away, at the same time of day.
-    static func shifted(_ start: Date, byDays days: Int, calendar: Calendar = .current) -> Date {
+    nonisolated static func shifted(_ start: Date, byDays days: Int, calendar: Calendar = .current) -> Date {
         calendar.date(byAdding: .day, value: days, to: start) ?? start
     }
 
     /// What goes into the calendar for a typed title: trimmed and kept to one line; empty becomes "New event" (as the Calendar app does).
-    static func cleanTitle(_ typed: String) -> String {
+    nonisolated static func cleanTitle(_ typed: String) -> String {
         let line = typed.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         return line.isEmpty ? "New event" : String(line.prefix(200))
     }
@@ -523,6 +609,7 @@ extension CalendarStore {
             )
             self.monthEvents.append(event)
             if end > self.now { self.events.append(event) }
+            self.lastCreated = event
             return event
         }
         guard self.access == .granted else { throw CalendarWriteError.noAccess }
@@ -535,29 +622,119 @@ extension CalendarStore {
         event.calendar = calendar
         try self.store.save(event, span: .thisEvent, commit: true)
         DebugLogger.shared.info("Calendar: a new event was saved in \"\(calendar.title)\" (\(calendar.source.title))", source: "Calendar")
+        self.recentlyDeleted.removeAll { $0.key == Self.key(title: clean, start: start) }
         self.reload()
-        return Self.makeEvent(event)
+        let made = Self.makeEvent(event)
+        self.lastCreated = made
+        return made
     }
 
-    /// Shows an event that was created in Google (not yet in the Mac's Calendar) until the Calendar has it.
-    func noteCreatedElsewhere(title: String, start: Date, end: Date, calendarID: String?, joinURL: URL?) {
+    /// Shows an event that was created in Google (not yet in the Mac's Calendar) until the Calendar has it, and returns it.
+    @discardableResult
+    func noteCreatedElsewhere(title: String, start: Date, end: Date, calendarID: String?, joinURL: URL?, googleID: String? = nil, googleEmail: String? = nil, guests: [CalendarGuest] = []) -> Event {
         let info = self.writableCalendars.first { $0.id == calendarID }
+        let clean = Self.cleanTitle(title)
         let event = Event(
-            id: "google|\(start.timeIntervalSince1970)|\(title)", title: Self.cleanTitle(title), start: start, end: end, isAllDay: false,
-            color: info?.color ?? .blue, location: nil, joinURL: joinURL, attendeeCount: 0, calendarTitle: info?.title ?? ""
+            id: "google|\(start.timeIntervalSince1970)|\(title)", title: clean, start: start, end: end, isAllDay: false,
+            color: info?.color ?? .blue, location: nil, joinURL: joinURL, attendeeCount: guests.count, calendarTitle: info?.title ?? "",
+            calendarID: calendarID ?? "", canModify: true,
+            attendees: guests.map { EventAttendee(name: $0.name, email: $0.email) }, googleID: googleID, googleEmail: googleEmail
         )
+        self.recentlyDeleted.removeAll { $0.key == Self.key(title: clean, start: start) }
         self.recentlyCreated.append((event, Date()))
+        self.lastCreated = event
         self.mergeRecent()
+        return event
     }
 
-    /// Adds the recently created events that the Calendar does not show yet.
+    /// What the notch remembers for a few minutes on top of what the Calendar lists: meetings just made (until the Calendar has them), meetings just
+    /// deleted (until it drops them) and people just invited (until it lists them).
     func mergeRecent() {
-        self.recentlyCreated.removeAll { Date().timeIntervalSince($0.at) > 600 }
+        let now = Date()
+        self.recentlyCreated.removeAll { now.timeIntervalSince($0.at) > 600 }
+        self.recentlyDeleted.removeAll { now.timeIntervalSince($0.at) > 1800 }
+        self.recentlyInvited.removeAll { now.timeIntervalSince($0.at) > 1800 }
         for (event, _) in self.recentlyCreated {
             func has(_ list: [Event]) -> Bool { list.contains { $0.title == event.title && $0.start == event.start } }
             if !has(self.monthEvents) { self.monthEvents.append(event) }
             if event.end > self.now, !has(self.events) { self.events.append(event) }
         }
+        if !self.recentlyDeleted.isEmpty {
+            let gone = Set(self.recentlyDeleted.map(\.key))
+            self.events.removeAll { gone.contains(Self.key(of: $0)) }
+            self.monthEvents.removeAll { gone.contains(Self.key(of: $0)) }
+        }
+        if !self.recentlyInvited.isEmpty {
+            func invited(_ list: [Event]) -> [Event] {
+                list.map { event in
+                    var event = event
+                    for (key, guests, _) in self.recentlyInvited where key == Self.key(of: event) { event = Self.with(guests, in: event) }
+                    return event
+                }
+            }
+            self.events = invited(self.events)
+            self.monthEvents = invited(self.monthEvents)
+        }
+    }
+
+    // MARK: - Changing a meeting that exists
+
+    /// How the notch tells two copies of a meeting apart across reloads: its title and start.
+    nonisolated static func key(title: String, start: Date) -> String { "\(title.lowercased())|\(start.timeIntervalSince1970)" }
+    nonisolated static func key(of event: Event) -> String { self.key(title: event.title, start: event.start) }
+
+    /// `event` with these people added (nobody twice).
+    static func with(_ guests: [EventAttendee], in event: Event) -> Event {
+        var event = event
+        let known = Set(event.attendees.map { $0.email.lowercased() })
+        let fresh = guests.filter { !known.contains($0.email.lowercased()) }
+        guard !fresh.isEmpty else { return event }
+        event.attendees += fresh
+        event.attendeeEmails += fresh.map { $0.email.lowercased() }
+        event.attendeeCount += fresh.count
+        return event
+    }
+
+    /// The Google account a meeting lives in, with a token for it, when the Google route is open (the account allowed calendar events in myOS).
+    func googleAccess(for event: Event) -> (email: String, token: String)? {
+        guard let email = event.googleEmail ?? self.ownerEmails[event.calendarID], let token = GoogleTokenVault.shared.token(for: email) else { return nil }
+        return (email, token)
+    }
+
+    /// Takes a deleted meeting out of the lists at once and keeps it out until the Calendar has dropped it too.
+    func markDeleted(_ event: Event) {
+        let key = Self.key(of: event)
+        self.recentlyCreated.removeAll { Self.key(of: $0.event) == key }
+        self.recentlyDeleted.append((key, Date()))
+        self.mergeRecent()
+    }
+
+    /// Shows people just invited on the meeting at once, and returns the meeting as it now is.
+    @discardableResult
+    func markInvited(_ guests: [EventAttendee], to event: Event) -> Event {
+        let key = Self.key(of: event)
+        self.recentlyInvited.append((key, guests, Date()))
+        for index in self.recentlyCreated.indices where Self.key(of: self.recentlyCreated[index].event) == key {
+            self.recentlyCreated[index].event = Self.with(guests, in: self.recentlyCreated[index].event)
+        }
+        self.events = self.events.map { Self.key(of: $0) == key ? Self.with(guests, in: $0) : $0 }
+        self.monthEvents = self.monthEvents.map { Self.key(of: $0) == key ? Self.with(guests, in: $0) : $0 }
+        return Self.with(guests, in: event)
+    }
+
+    /// Deletes the meeting from the Mac's Calendar app (it syncs the deletion to the account). Throws when the meeting is not there to delete.
+    func removeFromCalendarApp(_ event: Event) throws {
+        guard !self.isSample else { self.markDeleted(event); return }
+        guard self.access == .granted else { throw CalendarWriteError.noAccess }
+        guard let identifier = event.ekIdentifier else { throw CalendarChangeError.notOnThisMac }
+        // A repeating meeting keeps one identifier for every occurrence: pick the one on screen by its start.
+        let window = self.store.predicateForEvents(withStart: event.start.addingTimeInterval(-60), end: event.end.addingTimeInterval(60), calendars: nil)
+        let found = self.store.events(matching: window).first { $0.eventIdentifier == identifier && abs($0.startDate.timeIntervalSince(event.start)) < 60 }
+            ?? self.store.event(withIdentifier: identifier)
+        guard let target = found else { throw CalendarChangeError.notOnThisMac }
+        try self.store.remove(target, span: .thisEvent, commit: true)
+        self.markDeleted(event)
+        self.reload()
     }
 
     /// Selects `day` and makes sure the month grid shows it (and has its events loaded).

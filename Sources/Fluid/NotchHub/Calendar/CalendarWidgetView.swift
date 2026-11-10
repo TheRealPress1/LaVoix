@@ -7,14 +7,19 @@ struct CalendarWidgetView: View {
     var staticLayout = false
     /// True while the new-event form is showing in place of the day's list.
     @State private var creating: Bool
+    /// The meeting opened from the day list (its details replace the list).
+    @State private var detail: CalendarStore.Event?
     /// What a render preview shows of the new-event form (nil for the real thing).
     private let preview: CalendarNewEventPreview?
+    private let eventPreview: CalendarEventPreview?
 
-    init(store: CalendarStore, staticLayout: Bool = false, startCreating: Bool = false, preview: CalendarNewEventPreview? = nil) {
+    init(store: CalendarStore, staticLayout: Bool = false, startCreating: Bool = false, preview: CalendarNewEventPreview? = nil, eventPreview: CalendarEventPreview? = nil) {
         self._store = ObservedObject(wrappedValue: store)
         self.staticLayout = staticLayout
         self.preview = preview
+        self.eventPreview = eventPreview
         self._creating = State(initialValue: startCreating)
+        self._detail = State(initialValue: eventPreview.flatMap { $0.eventIndex < store.events.count ? store.events[$0.eventIndex] : nil })
     }
 
     private static let accent = Color(red: 0.96, green: 0.32, blue: 0.29)
@@ -28,7 +33,23 @@ struct CalendarWidgetView: View {
             }
         }
         .foregroundStyle(.white)
-        .onAppear { if !self.staticLayout { self.store.reload() } }
+        .onAppear {
+            if !self.staticLayout { self.store.reload() }
+            self.takePendingDetail()
+        }
+        .onChange(of: self.store.pendingDetail) { _, _ in self.takePendingDetail() }
+        // Another day chosen: its list, not the details of a meeting on the day before.
+        .onChange(of: self.store.selectedDay) { _, day in
+            if let open = self.detail, !Calendar.current.isDate(open.start, inSameDayAs: day) { self.detail = nil }
+        }
+    }
+
+    /// A tapped "meeting set" card asks for its meeting's details.
+    private func takePendingDetail() {
+        guard let event = self.store.pendingDetail else { return }
+        self.store.pendingDetail = nil
+        self.creating = false
+        self.detail = event
     }
 
     // MARK: - Month and day
@@ -93,7 +114,7 @@ struct CalendarWidgetView: View {
     private var dayList: some View {
         let events = CalendarStore.events(on: self.store.selectedDay, in: self.store.monthEvents)
         return VStack(alignment: .leading, spacing: 8) {
-            if !self.creating {
+            if !self.creating, self.detail == nil {
                 HStack {
                     Text(self.dayTitle(self.store.selectedDay))
                         .font(.system(size: 14, weight: .semibold))
@@ -112,7 +133,17 @@ struct CalendarWidgetView: View {
                     }
                 }
             }
-            if self.creating {
+            if let detail = self.detail {
+                CalendarEventDetailView(
+                    store: self.store, event: detail, staticLayout: self.staticLayout,
+                    screen: self.eventPreview?.screen ?? .detail, confirmingDelete: self.eventPreview?.confirmingDelete ?? false,
+                    newGuests: self.eventPreview?.newGuests ?? [], previewQuery: self.eventPreview?.query ?? "",
+                    previewSuggestions: self.eventPreview?.suggestions ?? []
+                ) {
+                    self.detail = nil
+                }
+                .id(detail.id)
+            } else if self.creating {
                 CalendarNewEventForm(
                     store: self.store, day: self.store.selectedDay, staticLayout: self.staticLayout,
                     initialTitle: self.staticLayout ? "Call with Martin" : "",
@@ -137,7 +168,9 @@ struct CalendarWidgetView: View {
 
     private func rows(_ events: [CalendarStore.Event]) -> some View {
         VStack(spacing: 6) {
-            ForEach(events) { event in EventRow(event: event, now: self.store.now, day: self.store.selectedDay) }
+            ForEach(events) { event in
+                EventRow(event: event, now: self.store.now, day: self.store.selectedDay) { self.detail = event }
+            }
         }
     }
 
@@ -226,6 +259,8 @@ private struct EventRow: View {
     let event: CalendarStore.Event
     let now: Date
     let day: Date
+    /// Pressing the row (anywhere but its Join and Record buttons) opens the meeting's details.
+    var onOpen: () -> Void = {}
     @State private var hovering = false
 
     var body: some View {
@@ -258,7 +293,11 @@ private struct EventRow: View {
         .frame(height: 40)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(self.hovering ? 0.1 : 0.06)))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onTapGesture { self.onOpen() }
         .onHover { self.hovering = $0 }
+        .accessibilityAddTraits(.isButton)
+        .help("Open this meeting")
     }
 
     private var timeText: String {
@@ -282,6 +321,16 @@ private struct EventRow: View {
 struct CalendarNewEventPreview {
     var screen: CalendarNewEventForm.Screen = .form
     var guests: [CalendarGuest] = []
+    var query = ""
+    var suggestions: [CalendarGuest] = []
+}
+
+/// What a render preview shows of a meeting's details: which meeting of the sample day, which screen, and (for the invite search) what is typed.
+struct CalendarEventPreview {
+    var eventIndex = 0
+    var screen: CalendarEventDetailView.Screen = .detail
+    var confirmingDelete = false
+    var newGuests: [CalendarGuest] = []
     var query = ""
     var suggestions: [CalendarGuest] = []
 }

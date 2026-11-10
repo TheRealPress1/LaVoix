@@ -12,7 +12,8 @@ struct CalendarNewEventForm: View {
     @ObservedObject var store: CalendarStore
     var staticLayout = false
     var initialTitle = ""
-    /// Guests the search offers in a preview (the real search reads people and contacts, which a preview must not).
+    /// What the guest search shows in a preview picture: the typed text and the matches (the real search reads people and contacts, which a preview must not).
+    var previewQuery = ""
     var previewSuggestions: [CalendarGuest] = []
     let onDone: () -> Void
 
@@ -22,8 +23,6 @@ struct CalendarNewEventForm: View {
     @State private var minutes = CalendarStore.newEventDefaultMinutes
     @State private var calendarID: String?
     @State private var guests: [CalendarGuest]
-    @State private var guestQuery = ""
-    @State private var suggestions: [CalendarGuest] = []
     @State private var problem: String?
     /// True once the event is saved: a failure after that (the guests) must not make Save create it a second time.
     @State private var saved = false
@@ -34,7 +33,7 @@ struct CalendarNewEventForm: View {
     @State private var googleFailed = false
     @FocusState private var focus: Field?
 
-    private enum Field { case title, guest }
+    private enum Field { case title }
 
     init(
         store: CalendarStore, day: Date, staticLayout: Bool = false, initialTitle: String = "", screen: Screen = .form,
@@ -43,6 +42,7 @@ struct CalendarNewEventForm: View {
         self._store = ObservedObject(wrappedValue: store)
         self.staticLayout = staticLayout
         self.initialTitle = initialTitle
+        self.previewQuery = guestQuery
         self.previewSuggestions = previewSuggestions
         self.onDone = onDone
         self._screen = State(initialValue: screen)
@@ -50,8 +50,6 @@ struct CalendarNewEventForm: View {
         self._start = State(initialValue: CalendarStore.defaultStart(on: day, now: Date()))
         self._calendarID = State(initialValue: store.preferredNewEventCalendarID())
         self._guests = State(initialValue: guests)
-        self._guestQuery = State(initialValue: guestQuery)
-        self._suggestions = State(initialValue: previewSuggestions)
     }
 
     var body: some View {
@@ -60,7 +58,11 @@ struct CalendarNewEventForm: View {
             switch self.screen {
             case .form: self.formScreen
             case .accounts: self.accountsScreen
-            case .guests: self.guestsScreen
+            case .guests:
+                CalendarGuestPicker(guests: self.$guests, staticLayout: self.staticLayout, previewQuery: self.previewQuery, previewSuggestions: self.previewSuggestions) {
+                    self.screen = .form
+                    if !self.staticLayout { DispatchQueue.main.async { self.focus = .title } }
+                }
             }
         }
         .foregroundStyle(.white)
@@ -71,7 +73,6 @@ struct CalendarNewEventForm: View {
             DispatchQueue.main.async { self.focus = .title }
         }
         .onChange(of: self.focus) { _, focus in if focus != nil { NotchHubController.shared.beginTextEntry() } }
-        .onChange(of: self.guestQuery) { _, _ in self.refreshSuggestions() }
     }
 
     // MARK: - The form
@@ -189,10 +190,7 @@ struct CalendarNewEventForm: View {
 
     /// One line that says who is invited and opens the guest search.
     private var guestsRow: some View {
-        Button {
-            self.screen = .guests
-            if !self.staticLayout { DispatchQueue.main.async { self.focus = .guest } }
-        } label: {
+        Button { self.screen = .guests } label: {
             HStack(spacing: 6) {
                 Image(systemName: "person.badge.plus").font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
                 Text(Self.summary(of: self.guests))
@@ -246,24 +244,28 @@ struct CalendarNewEventForm: View {
     }
 
     /// Creates the event in Google itself: a Meet link when asked, and Google sends the invitations.
-    private func saveToGoogle(token: String) {
+    private func saveToGoogle(email: String, token: String) {
         working = true
         problem = nil
         googleFailed = false
         let clean = CalendarStore.cleanTitle(title)
         let end = start.addingTimeInterval(Double(minutes) * 60)
         let request = GoogleEventRequest(title: clean, start: start, end: end, guests: guests.map(\.email), withMeet: meet)
-        let calendarID = effectiveCalendarID, start = self.start
+        let calendarID = effectiveCalendarID, start = self.start, guests = self.guests
         Task {
             let result = await GoogleCalendarClient.create(request, token: token)
             self.working = false
             switch result {
             case let .success(created):
-                self.store.noteCreatedElsewhere(title: clean, start: start, end: end, calendarID: calendarID, joinURL: created.meetLink.flatMap(URL.init(string:)))
+                let meetLink = created.meetLink.flatMap(URL.init(string:))
+                self.store.noteCreatedElsewhere(title: clean, start: start, end: end, calendarID: calendarID, joinURL: meetLink, googleID: created.id, googleEmail: email, guests: guests)
                 if let calendarID { self.store.rememberNewEventCalendar(calendarID) }
                 self.store.reveal(day: start)
                 self.saved = true
                 self.finish()
+                NotchHubController.shared.announceMeetingSet(NotchBannerContent.MeetingSet(
+                    title: clean, start: start, end: end, meetLink: meetLink, invited: guests.map(\.display), viaGoogle: true
+                ))
             case let .failure(failure):
                 self.problem = failure.message
                 self.googleFailed = true
@@ -302,11 +304,11 @@ struct CalendarNewEventForm: View {
     private var accountsScreen: some View {
         let targets = self.store.saveTargets()
         return Group {
-            self.subHeader("Save in", back: { self.screen = .form })
+            CalendarPane.subHeader("Save in", back: { self.screen = .form })
             if targets.isEmpty {
                 Text("No calendar takes new events").font(.system(size: 12)).foregroundStyle(.orange)
             } else {
-                self.scrolling {
+                CalendarPane.scrolling(staticLayout: self.staticLayout) {
                     VStack(spacing: 4) {
                         ForEach(targets) { target in
                             Button {
@@ -336,155 +338,17 @@ struct CalendarNewEventForm: View {
         }
     }
 
-    // MARK: - Guests
-
-    private var guestsScreen: some View {
-        Group {
-            self.subHeader("Guests", doneTitle: "Done", back: { self.finishGuests() })
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
-                if self.staticLayout {
-                    Text(self.guestQuery.isEmpty ? "Name or email" : self.guestQuery)
-                        .foregroundStyle(self.guestQuery.isEmpty ? Color.white.opacity(0.45) : Color.white)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    TextField("", text: self.$guestQuery, prompt: Text("Name or email").foregroundStyle(.white.opacity(0.45)))
-                        .textFieldStyle(.plain)
-                        .foregroundStyle(.white)
-                        .tint(.white)
-                        .focused(self.$focus, equals: .guest)
-                        .onSubmit { self.submitGuestQuery() }
-                        .onExitCommand { self.finishGuests() }
-                }
-            }
-            .font(.system(size: 13, weight: .medium))
-            .padding(.horizontal, 10).frame(height: 30)
-            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.white.opacity(0.08)))
-            if !self.guests.isEmpty { self.guestChips }
-            self.scrolling {
-                VStack(spacing: 3) {
-                    ForEach(self.suggestions) { guest in
-                        Button { self.add(guest) } label: {
-                            HStack(spacing: 8) {
-                                self.initialsCircle(guest.initials, size: 24)
-                                VStack(alignment: .leading, spacing: 0) {
-                                    Text(guest.display).font(.system(size: 12.5, weight: .medium)).lineLimit(1)
-                                    if guest.display != guest.email {
-                                        Text(guest.email).font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
-                                    }
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 8).frame(height: 34)
-                            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.white.opacity(0.06)))
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    if self.suggestions.isEmpty, !self.guestQuery.trimmingCharacters(in: .whitespaces).isEmpty {
-                        Text("No one found. Type a full address to add it.").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
-                    }
-                }
-            }
-        }
-    }
-
-    private var guestChips: some View {
-        self.scrolling(.horizontal) {
-            HStack(spacing: 4) {
-                ForEach(self.guests) { guest in
-                    Button { self.guests.removeAll { $0 == guest } } label: {
-                        HStack(spacing: 4) {
-                            Text(guest.display).font(.system(size: 11.5, weight: .medium)).lineLimit(1)
-                            Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(.white.opacity(0.6))
-                        }
-                        .padding(.horizontal, 8).frame(height: 22)
-                        .background(Capsule().fill(Color.white.opacity(0.16)))
-                        .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Remove \(guest.email)")
-                }
-            }
-        }
-        .frame(height: 22)
-    }
-
-    /// `content` in a scroll view, except in a preview picture, which cannot draw scroll views (the day list does the same).
-    @ViewBuilder private func scrolling<Content: View>(_ axis: Axis.Set = .vertical, @ViewBuilder _ content: () -> Content) -> some View {
-        if self.staticLayout { content() } else { ScrollView(axis, showsIndicators: false) { content() } }
-    }
-
-    private func initialsCircle(_ text: String, size: CGFloat) -> some View {
-        Text(text.isEmpty ? "•" : text).font(.system(size: size * 0.4, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
-            .frame(width: size, height: size).background(Circle().fill(Color.white.opacity(0.14)))
-    }
-
-    private func subHeader(_ title: String, doneTitle: String? = nil, back: @escaping () -> Void) -> some View {
-        HStack(spacing: 8) {
-            if doneTitle == nil {
-                Button(action: back) {
-                    Image(systemName: "chevron.left").font(.system(size: 11, weight: .bold)).foregroundStyle(.white.opacity(0.7))
-                        .frame(width: 24, height: 24).background(Circle().fill(Color.white.opacity(0.1))).contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Back")
-            }
-            Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white.opacity(0.75))
-            Spacer(minLength: 0)
-            if let doneTitle {
-                Button(doneTitle, action: back).buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(.black)
-                    .padding(.horizontal, 12).frame(height: 24).background(Capsule().fill(Color.white))
-            }
-        }
-        .frame(height: 26)
-    }
-
     // MARK: - Actions
 
     nonisolated static func label(minutes: Int) -> String {
         minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes)m"
     }
 
-    private func add(_ guest: CalendarGuest) {
-        guard !self.guests.contains(where: { $0.email == guest.email }) else { return }
-        self.guests.append(guest)
-        self.guestQuery = ""
-        self.suggestions = []
-    }
-
-    /// Return in the search: add the first match; with nothing typed, go back to the form.
-    private func submitGuestQuery() {
-        if self.guestQuery.trimmingCharacters(in: .whitespaces).isEmpty { self.finishGuests(); return }
-        if let first = self.suggestions.first { self.add(first) }
-    }
-
-    private func finishGuests() {
-        self.guestQuery = ""
-        self.suggestions = []
-        self.screen = .form
-        if !self.staticLayout { DispatchQueue.main.async { self.focus = .title } }
-    }
-
-    /// Looks for people as you type, off the main thread; an answer that comes after the typing moved on is dropped.
-    private func refreshSuggestions() {
-        guard !self.staticLayout else { return }
-        let query = self.guestQuery
-        let taken = Set(self.guests.map(\.email))
-        guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { self.suggestions = []; return }
-        Task {
-            let found = await Task.detached(priority: .userInitiated) { CalendarGuestDirectory.suggestions(for: query, excluding: taken) }.value
-            if self.guestQuery == query { self.suggestions = found }
-        }
-    }
-
     private func save() {
         if self.saved { self.finish(); return }
         guard !self.working else { return }
         if !self.staticLayout, let email = self.googleEmail, let token = GoogleTokenVault.shared.token(for: email) {
-            self.saveToGoogle(token: token)
+            self.saveToGoogle(email: email, token: token)
             return
         }
         // The Calendar app does not take guests on this Mac, so guests need the Google route: say so rather than save without them.
@@ -500,8 +364,9 @@ struct CalendarNewEventForm: View {
     private func saveOnThisMac() {
         guard !self.working else { return }
         self.googleFailed = false
+        let made: CalendarStore.Event
         do {
-            try self.store.createEvent(title: self.title, start: self.start, minutes: self.minutes, calendarID: self.effectiveCalendarID)
+            made = try self.store.createEvent(title: self.title, start: self.start, minutes: self.minutes, calendarID: self.effectiveCalendarID)
             if let id = self.effectiveCalendarID { self.store.rememberNewEventCalendar(id) }
             // Show the day the event is on, so it is seen where it landed.
             self.store.reveal(day: self.start)
@@ -511,6 +376,11 @@ struct CalendarNewEventForm: View {
             return
         }
         self.finish()
+        if !self.staticLayout {
+            NotchHubController.shared.announceMeetingSet(NotchBannerContent.MeetingSet(
+                title: made.title, start: made.start, end: made.end, meetLink: nil, invited: [], viaGoogle: false
+            ))
+        }
     }
 
     /// The event is saved; now the guests (the Calendar app adds them and the account sends the invitations).
