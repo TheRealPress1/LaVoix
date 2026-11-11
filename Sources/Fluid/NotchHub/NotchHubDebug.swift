@@ -31,6 +31,19 @@ enum NotchHubDebug {
         return RecordedMeetingsStore.fixed([RecordedMeetings.Entry(id: UUID(), title: "Standup", start: start, end: start.addingTimeInterval(28 * 60), state: "completed")])
     }
 
+    /// The lyrics a Now Playing preview shows: invented words, timed or not, none found, or still looking.
+    @MainActor static func sampleLyrics(_ widgetName: String) -> LyricsStore {
+        let words = ["I walked along the harbour wall", "", "The lights were low, the tide was slow", "And every boat was leaving", "So I stayed behind to count the stars", "And learn the names of all of them", "", "Take me home, take me home", "Before the morning comes"]
+        let timed = zip([8.0, 14, 20, 26, 33, 39, 46, 52, 58], words).map { LyricLine(time: $0.0, text: $0.1) }
+        switch widgetName {
+        case "nowplaying-lyrics": return .fixed(.found(Lyrics(synced: timed, plain: words)))
+        case "nowplaying-lyrics-plain": return .fixed(.found(Lyrics(synced: [], plain: words)))
+        case "nowplaying-lyrics-none": return .fixed(.notFound)
+        case "nowplaying-lyrics-loading": return .fixed(.loading)
+        default: return .shared
+        }
+    }
+
     /// What the meeting details show in a preview picture: the first sample meeting, its invite search, or its delete question.
     @MainActor static func eventPreview(_ widgetName: String) -> CalendarEventPreview? {
         switch widgetName {
@@ -156,15 +169,17 @@ enum NotchHubDebug {
                 }
             } else if widgetName.hasPrefix("nowplaying") {
                 // nowplaying-bookshelf: Bookshelf's song takes the card (the system names nothing that plays), with a made-up cover.
-                if widgetName == "nowplaying-bookshelf" {
+                // nowplaying-lyrics (timed lyrics, 37 seconds in) / nowplaying-lyrics-plain (words with no times) / nowplaying-lyrics-none / nowplaying-lyrics-loading: the same card, on the Lyrics tab, with invented words.
+                let isBookshelf = widgetName == "nowplaying-bookshelf" || widgetName.hasPrefix("nowplaying-lyrics")
+                if isBookshelf {
                     BookshelfCapture.shared.debugShow(.init(state: .playing, provider: .spotify, title: "Love Story - 2024 Remastered Version", artist: "O'Donel Levy", album: "Black Velvet", artworkURL: nil, canRate: true, score: nil, note: nil, status: "Ready to rate"))
                 }
-                let store = widgetName == "nowplaying-empty" || widgetName == "nowplaying-bookshelf"
+                let store = widgetName == "nowplaying-empty" || isBookshelf
                     ? NowPlayingStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-np-empty-\(UUID().uuidString)"))
                     : NowPlayingStore.sample(playing: widgetName != "nowplaying-paused")
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
-                    NotchWidget(id: "nowplaying", title: "Now Playing", systemImage: "music.note") { AnyView(NowPlayingWidgetView(store: store, staticLayout: true, previewCover: widgetName == "nowplaying-bookshelf" ? NowPlayingStore.sampleArtwork() : nil)) },
+                    NotchWidget(id: "nowplaying", title: "Now Playing", systemImage: "music.note") { AnyView(NowPlayingWidgetView(store: store, lyrics: Self.sampleLyrics(widgetName), staticLayout: true, previewCover: isBookshelf ? NowPlayingStore.sampleArtwork() : nil, previewClock: widgetName == "nowplaying-lyrics" ? { let clock = PlaybackClock(); clock.elapsed = 37; return clock }() : nil, startOnLyrics: widgetName.hasPrefix("nowplaying-lyrics"))) },
                 ])
                 model.selectedWidgetID = "nowplaying"
             } else if widgetName.hasPrefix("download") {
@@ -1790,6 +1805,74 @@ enum NotchHubDebug {
             check("the request myOS is given names the page, the meeting and the time", request?["path"] as? String == "/meetings" && request?["query"] as? String == "id=abc" && request?["requested_at"] as? Int == 1_800_000_000)
 
             print(failures == 0 ? "CALENDAR AUTOTEST ALL PASSED" : "CALENDAR AUTOTEST \(failures) FAILED")
+            exit(failures == 0 ? 0 : 1)
+        }
+    }
+
+    /// `LAVOIX_LYRICS_AUTOTEST=1` checks the Lyrics tab's rules without the network: reading timed lines, finding the line being sung, cleaning a title for the
+    /// search, the addresses asked for, what an answer is turned into, and the store (one request per song, the cache, a failure that can be tried again).
+    @MainActor static func lyricsAutotestIfRequested() {
+        guard ProcessInfo.processInfo.environment["LAVOIX_LYRICS_AUTOTEST"] == "1" else { return }
+        Task { @MainActor in
+            var failures = 0
+            func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)"); if !ok { failures += 1 } }
+
+            let lrc = "[ar:Someone]\n[00:12.50] Hello there\n[00:20.00]\n[01:05.5][02:10.25]  Chorus line \nnot a lyric line\n[length: 03:00]"
+            let lines = LyricsParser.parseSynced(lrc)
+            check("timed lines are read in time order, a line with two stamps counts twice, tags and stray text are not lines", lines.map(\.time) == [12.5, 20.0, 65.5, 130.25] && lines.map(\.text) == ["Hello there", "", "Chorus line", "Chorus line"])
+            check("a fraction of a second is read whatever its length", LyricsParser.parseSynced("[00:01.5]a")[0].time == 1.5 && LyricsParser.parseSynced("[00:01.50]a")[0].time == 1.5 && LyricsParser.parseSynced("[00:01.500]a")[0].time == 1.5 && LyricsParser.parseSynced("[00:01]a")[0].time == 1.0)
+            check("minutes past an hour's worth are fine", LyricsParser.parseSynced("[75:00.00]a")[0].time == 4500)
+            check("the line being sung follows the clock, a moment early", LyricsParser.currentIndex(in: lines, at: 0) == nil && LyricsParser.currentIndex(in: lines, at: 12.0) == nil && LyricsParser.currentIndex(in: lines, at: 12.4) == 0 && LyricsParser.currentIndex(in: lines, at: 30) == 1 && LyricsParser.currentIndex(in: lines, at: 200) == 3)
+            check("plain words keep their blank lines", LyricsParser.parsePlain("one\n\n two \nthree") == ["one", "", "two", "three"])
+
+            check("what a streaming service adds after a title is cut for the search", LyricsQuery.cleanTitle("Love Story - 2024 Remastered Version") == "Love Story" && LyricsQuery.cleanTitle("Song (feat. Someone Else)") == "Song" && LyricsQuery.cleanTitle("Song [Live]") == "Song" && LyricsQuery.cleanTitle("What We On (with Don Toliver)") == "What We On" && LyricsQuery.cleanTitle("Fade (Remastered 2009)") == "Fade" && LyricsQuery.cleanTitle("Title - Live at Wembley") == "Title")
+            check("a title that is only a name is left alone", LyricsQuery.cleanTitle("EdEddnEddy") == "EdEddnEddy" && LyricsQuery.cleanTitle("Don't Stop - Believin") == "Don't Stop - Believin" && LyricsQuery.cleanTitle("Live") == "Live")
+            let get = LyricsClient.getURL(title: "EdEddnEddy", artist: "Simon & Garfunkel", album: "The Forever Story", duration: 138.6)?.absoluteString ?? ""
+            check("the exact lookup names the song, the artist, the album and the length, encoded", get == "https://lrclib.net/api/get?track_name=EdEddnEddy&artist_name=Simon%20%26%20Garfunkel&album_name=The%20Forever%20Story&duration=139")
+            check("the lookup leaves out an album and a length that are not known", LyricsClient.getURL(title: "A", artist: "B", album: nil, duration: nil)?.absoluteString == "https://lrclib.net/api/get?track_name=A&artist_name=B")
+            check("a search names the title and the artist", LyricsClient.searchURL(title: "A b", artist: "C")?.absoluteString == "https://lrclib.net/api/search?track_name=A%20b&artist_name=C")
+
+            let timedRecord: [String: Any] = ["duration": 139.0, "plainLyrics": "a\nb", "syncedLyrics": "[00:01.00]a\n[00:02.00]b"]
+            let plainRecord: [String: Any] = ["duration": 200.0, "plainLyrics": "x\ny"]
+            check("an answer is turned into timed lines and plain words", { let l = LyricsClient.lyrics(from: timedRecord); return l?.synced.count == 2 && l?.plain == ["a", "b"] }())
+            check("with only timed lines the plain words come from them", LyricsClient.lyrics(from: ["syncedLyrics": "[00:01.00]a\n[00:02.00]b"])?.plain == ["a", "b"])
+            check("an instrumental is one, and an empty record is nothing", LyricsClient.lyrics(from: ["instrumental": true])?.instrumental == true && LyricsClient.lyrics(from: ["plainLyrics": ""]) == nil && LyricsClient.lyrics(from: [:]) == nil)
+            check("a search answer is the one of about the song's length, with timed lines first", LyricsClient.best(in: [plainRecord, timedRecord], duration: 139)?.synced.count == 2 && LyricsClient.best(in: [plainRecord], duration: 139) == nil && LyricsClient.best(in: [plainRecord], duration: nil)?.plain == ["x", "y"])
+
+            // The store, with a stand-in for the service.
+            let store = LyricsStore()
+            var asked: [String] = []
+            store.find = { query in
+                asked.append(query.title)
+                if query.title == "Missing" { return .notFound }
+                if query.title == "Offline" { return .failed }
+                return .found(Lyrics(synced: [], plain: ["words of \(query.title)"]))
+            }
+            @MainActor func settle() async { for _ in 0..<100 { if store.state != .loading { return }; try? await Task.sleep(nanoseconds: 20_000_000) } }
+            func song(_ title: String) -> LyricsQuery { LyricsQuery(title: title, artist: "Artist", album: nil, duration: 120) }
+            store.load(song("One"))
+            check("a song is looked for, and the tab says so meanwhile", store.state == .loading)
+            await settle()
+            check("the words found are shown", store.state == .found(Lyrics(synced: [], plain: ["words of One"])) && asked == ["One"])
+            store.load(song("One"))
+            check("asking again for the song shown asks nothing", asked == ["One"] && store.state != .loading)
+            store.load(song("Two")); await settle()
+            store.load(song("One"))
+            check("a song already fetched comes from memory, not the service", asked == ["One", "Two"] && store.state == .found(Lyrics(synced: [], plain: ["words of One"])))
+            store.load(song("Missing")); await settle()
+            check("a song the service does not have is said to have none", store.state == .notFound)
+            store.load(song("Offline")); await settle()
+            check("no connection is its own state", store.state == .failed)
+            store.load(song("Offline")); await settle()
+            check("a failure is tried again when asked for again", asked.filter { $0 == "Offline" }.count == 2)
+            store.stop()
+            check("closing the tab forgets what is shown and asks nothing more", store.state == .idle)
+            for n in 0..<(LyricsStore.maxCached + 5) { store.load(song("Song \(n)")); await settle() }
+            let before = asked.count
+            store.load(song("Song 0")); await settle()
+            check("only the newest songs are kept in memory", asked.count == before + 1)
+
+            print(failures == 0 ? "LYRICS AUTOTEST ALL PASSED" : "LYRICS AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)
         }
     }

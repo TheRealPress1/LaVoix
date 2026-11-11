@@ -4,20 +4,38 @@ import SwiftUI
 struct NowPlayingWidgetView: View {
     @ObservedObject var store: NowPlayingStore
     @ObservedObject private var bookshelf = BookshelfCapture.shared
-    @State private var rightTab: RightTab = NowPlayingWidgetView.defaultRightTab
+    @ObservedObject private var lyrics: LyricsStore
+    @State private var rightTab: RightTab
     @Environment(\.notchTabsExpanded) private var tabsExpanded
 
     /// What the right side can show, in the order the switch lists them. History is what the tab opens on; grading a song is one tap away, not the first thing seen.
     enum RightTab: CaseIterable {
-        case history, grade
+        case history, grade, lyrics
 
-        var label: String { self == .history ? "History" : "Grade" }
+        var label: String {
+            switch self {
+            case .history: "History"
+            case .grade: "Grade"
+            case .lyrics: "Lyrics"
+            }
+        }
     }
 
     static let defaultRightTab = RightTab.history
     var staticLayout = false
     /// Previews can't load a picture from the web: they draw this instead of the song's cover.
     var previewCover: NSImage? = nil
+    /// Where in the song a preview says it is, for the timed lyrics.
+    var previewClock: PlaybackClock? = nil
+
+    init(store: NowPlayingStore, lyrics: LyricsStore = .shared, staticLayout: Bool = false, previewCover: NSImage? = nil, previewClock: PlaybackClock? = nil, startOnLyrics: Bool = false) {
+        self._store = ObservedObject(wrappedValue: store)
+        self._lyrics = ObservedObject(wrappedValue: lyrics)
+        self.staticLayout = staticLayout
+        self.previewCover = previewCover
+        self.previewClock = previewClock
+        self._rightTab = State(initialValue: startOnLyrics ? .lyrics : NowPlayingWidgetView.defaultRightTab)
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -252,34 +270,76 @@ struct NowPlayingWidgetView: View {
 
     // MARK: - Right side: your grade and note, or the history
 
-    /// The history, with a switch to Grade and Notes while Bookshelf has a song to grade (the history is what it opens on); just the history otherwise.
+    /// The song the Lyrics tab looks for: the one on the card (Bookshelf's when it has the card, else the one macOS names), when it has a title and an artist.
+    private var lyricsQuery: LyricsQuery? {
+        guard NotchNowPlayingSettings.showsLyrics else { return nil }
+        if self.showsBookshelfCard {
+            let now = self.bookshelf.now
+            guard let title = now.title, !title.isEmpty, let artist = now.artist, !artist.isEmpty else { return nil }
+            return LyricsQuery(title: title, artist: artist, album: nil, duration: nil)
+        }
+        guard let track = self.store.track, !track.title.isEmpty, let artist = track.artist, !artist.isEmpty else { return nil }
+        return LyricsQuery(title: track.title, artist: artist, album: track.album, duration: track.duration)
+    }
+
+    /// The song's own clock, for timed lyrics: not available for a song only Bookshelf knows about.
+    private var lyricsClock: PlaybackClock? {
+        if let previewClock = self.previewClock { return previewClock }
+        return self.showsBookshelfCard ? nil : self.store.clock
+    }
+
+    /// The tabs on the right, in the order they are listed: History always, Grade while Bookshelf has a song to grade, Lyrics while there is a song to look up.
+    private var rightTabs: [RightTab] {
+        var tabs: [RightTab] = [.history]
+        if self.gradesShownCard, !self.staticLayout { tabs.append(.grade) }
+        if self.lyricsQuery != nil { tabs.append(.lyrics) }
+        return tabs
+    }
+
+    /// The tab shown: the one chosen, or History when the one chosen is not there (the song ended, or has nothing to grade).
+    private func shownTab(_ tabs: [RightTab]) -> RightTab { tabs.contains(self.rightTab) ? self.rightTab : .history }
+
+    /// The history, with a switch to Grade and Notes and to Lyrics when there is more than the history to show (the history is what it opens on).
     @ViewBuilder
     private var rightSide: some View {
-        if self.gradesShownCard, !self.staticLayout {
+        let tabs = self.rightTabs
+        if tabs.count > 1 {
+            let shown = self.shownTab(tabs)
             VStack(alignment: .leading, spacing: 8) {
-                self.tabSwitch
-                if self.rightTab == .grade { BookshelfGradePanel(capture: self.bookshelf) } else { self.historyBody }
+                self.tabSwitch(tabs, shown: shown)
+                switch shown {
+                case .grade: BookshelfGradePanel(capture: self.bookshelf)
+                case .lyrics:
+                    if let query = self.lyricsQuery {
+                        LyricsPanel(lyrics: self.lyrics, query: query, clock: self.lyricsClock, staticLayout: self.staticLayout) { seconds in
+                            if let duration = self.store.track?.duration, duration > 0 { self.store.seek(toFraction: seconds / duration) }
+                        }
+                    }
+                case .history: self.historyBody
+                }
             }
         } else {
             self.history
         }
     }
 
-    private var tabSwitch: some View {
+    private func tabSwitch(_ tabs: [RightTab], shown: RightTab) -> some View {
         HStack(spacing: 4) {
-            ForEach(RightTab.allCases, id: \.label) { tab in
+            ForEach(tabs, id: \.label) { tab in
                 Button { self.rightTab = tab } label: {
                     Text(tab.label).font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white.opacity(self.rightTab == tab ? 1 : 0.5))
+                        .foregroundStyle(.white.opacity(shown == tab ? 1 : 0.5))
                         .padding(.horizontal, 10).padding(.vertical, 4)
-                        .background(Capsule().fill(Color.white.opacity(self.rightTab == tab ? 0.16 : 0)))
+                        .background(Capsule().fill(Color.white.opacity(shown == tab ? 0.16 : 0)))
                 }
                 .buttonStyle(.plain)
             }
             Spacer()
-            if self.rightTab == .history, !self.store.history.isEmpty {
+            if shown == .history, !self.store.history.isEmpty {
                 Button("Clear") { self.store.clearHistory() }
                     .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+            } else if shown == .lyrics {
+                Text("LRCLIB").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(.white.opacity(0.28)).help("Lyrics from lrclib.net")
             }
         }
     }

@@ -9,6 +9,13 @@ enum NotchNowPlayingSettings {
     private static let historyKey = "LaVoixNotchNowPlayingHistory"
 
     private static let lookupsKey = "LaVoixNotchNowPlayingYouTubeLookups"
+    private static let lyricsKey = "LaVoixNotchNowPlayingLyrics"
+
+    /// A Lyrics tab beside History. It asks lrclib.net for the words (the artist, title, album and length of the song), only while that tab is open.
+    static var showsLyrics: Bool {
+        get { UserDefaults.standard.object(forKey: self.lyricsKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: self.lyricsKey) }
+    }
 
     /// For YouTube videos, fetch YouTube's own thumbnail and view count. This contacts youtube.com and ytimg.com.
     static var looksUpYouTube: Bool {
