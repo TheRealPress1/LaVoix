@@ -40,6 +40,7 @@ struct FluidApp: App {
         NotchHubDebug.cardTypingTestIfRequested()
         NotchHubDebug.calendarAutotestIfRequested()
         NotchHubDebug.lyricsAutotestIfRequested()
+        NotchHubDebug.avatarAutotestIfRequested()
         NotchHubDebug.nowPlayingHistoryAutotestIfRequested()
         NotchHubDebug.typingTestIfRequested()
         NotchHubDebug.lagTestIfRequested()

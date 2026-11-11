@@ -64,6 +64,54 @@ nonisolated enum PeopleDatabase {
         return out
     }
 
+    /// Where myOS keeps the pictures it found for people (LinkedIn, Gravatar), one file per person: `<person id>.img`.
+    static var defaultPhotosDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/myOS/photos", isDirectory: true)
+    }
+
+    /// The picture myOS keeps for the person behind a phone number or an email, for a conversation whose contact has none of its own. `key` is the handle as the
+    /// resolver keys it (an email in lower case, or the last ten digits of a number); `contactID` is the Contacts card's identifier when it is known. The person is
+    /// found by the identity myOS holds (the address, the number or the card), never by name, and a person merged into another is followed to the one that has the file.
+    static func photoFile(forHandle key: String, contactID: String? = nil, url: URL = defaultURL, photosDirectory: URL = defaultPhotosDirectory) -> URL? {
+        var clauses: [String] = []
+        var values: [String] = []
+        if key.contains("@") {
+            clauses.append("(i.kind = 'email' AND i.value_norm = ?)")
+            values.append(key.lowercased())
+        } else if key.filter(\.isNumber).count >= 7 {
+            // Numbers are held in full (+15551230001); the key is their last ten digits, so they are compared at the end.
+            clauses.append("(i.kind = 'phone' AND substr(i.value_norm, -\(key.count)) = ?)")
+            values.append(key)
+        }
+        if let contactID, !contactID.isEmpty {
+            clauses.append("(i.kind = 'contacts_id' AND i.value_norm = ?)")
+            values.append(contactID)
+        }
+        guard !clauses.isEmpty else { return nil }
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db else { sqlite3_close(db); return nil }
+        defer { sqlite3_close(db) }
+        sqlite3_busy_timeout(db, 800)
+        let sql = "SELECT DISTINCT i.person_id, p.merged_into FROM identity i JOIN person p ON p.id = i.person_id WHERE \(clauses.joined(separator: " OR ")) LIMIT 6"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement else { sqlite3_finalize(statement); return nil }
+        defer { sqlite3_finalize(statement) }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        for (index, value) in values.enumerated() { sqlite3_bind_text(statement, Int32(index + 1), value, -1, transient) }
+        var candidates: [String] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            candidates.append(String(cString: sqlite3_column_text(statement, 0)))
+            if sqlite3_column_type(statement, 1) != SQLITE_NULL { candidates.append(String(cString: sqlite3_column_text(statement, 1))) }
+        }
+        for id in candidates {
+            // The file name is the person's id and nothing else: letters, digits and dashes, so no id can point outside the folder.
+            guard !id.isEmpty, id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }) else { continue }
+            let file = photosDirectory.appendingPathComponent("\(id).img", isDirectory: false)
+            if FileManager.default.fileExists(atPath: file.path) { return file }
+        }
+        return nil
+    }
+
     /// email (lowercased) -> the known person it belongs to, for many addresses at once. Read-only, in memory.
     static func emailMap(emails: [String], url: URL = defaultURL) -> [String: KnownPerson] {
         let wanted = Array(Set(emails.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { $0.contains("@") }))

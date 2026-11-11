@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import Contacts
 import Foundation
+import ImageIO
 
 /// Turns phone numbers and emails from Messages into the names in your Contacts. Everything stays in memory.
 @MainActor
@@ -18,6 +19,12 @@ final class ContactResolver: ObservableObject {
     private var photos: [String: NSImage] = [:]
     private var photoMisses: Set<String> = []
     private var photoLoading: Set<String> = []
+    /// The pictures myOS keeps for people who have none in Contacts, by the same keys. Contacts' own picture always wins over these.
+    private var keptPhotos: [String: NSImage] = [:]
+    private var keptMissAt: [String: Date] = [:]
+    private var keptLoading: Set<String> = []
+    /// How long before a handle with no kept picture is looked at again (myOS may have found one since).
+    static let keptRetry: TimeInterval = 300
     private var loading = false
 
     func loadIfNeeded() {
@@ -36,6 +43,9 @@ final class ContactResolver: ObservableObject {
             self.names = loaded.names
             self.contactIDs = loaded.ids
             self.entries = loaded.entries
+            // Misses recorded before the cards were known (no card id to ask Contacts about) are not misses.
+            self.photoMisses.removeAll()
+            self.keptMissAt.removeAll()
             self.loading = false
             self.version += 1
         }
@@ -80,23 +90,61 @@ final class ContactResolver: ObservableObject {
         self.names[Self.key(handle)]
     }
 
-    /// The person's contact photo, if they have one. Photos are fetched the first time they're needed, kept only
-    /// in memory, and the view refreshes when one arrives.
+    /// The person's picture: the one on their Contacts card, else the one myOS has kept for them (found through LinkedIn or Gravatar, for people the address book
+    /// has no picture of). Pictures are fetched the first time they're needed, kept only in memory, and the view refreshes when one arrives.
     func photo(for handle: String) -> NSImage? {
         let key = Self.key(handle)
         if let image = self.photos[key] { return image }
-        guard let id = self.contactIDs[key], !self.photoMisses.contains(key), !self.photoLoading.contains(key) else { return nil }
-        self.photoLoading.insert(key)
+        let contactID = self.contactIDs[key]
+        if let contactID, !self.photoMisses.contains(key), !self.photoLoading.contains(key) {
+            self.photoLoading.insert(key)
+            Task {
+                let data = await Task.detached(priority: .utility) { () -> Data? in
+                    let keys = [CNContactThumbnailImageDataKey as CNKeyDescriptor]
+                    return try? CNContactStore().unifiedContact(withIdentifier: contactID, keysToFetch: keys).thumbnailImageData
+                }.value
+                self.photoLoading.remove(key)
+                if let data, let image = NSImage(data: data) { self.photos[key] = image } else { self.photoMisses.insert(key) }
+                self.version += 1
+            }
+        }
+        if let kept = self.keptPhotos[key] { return kept }
+        self.loadKeptPhoto(key: key, contactID: contactID)
+        return nil
+    }
+
+    /// Looks for myOS's picture of the person behind `key`, once (and again after a few minutes if there was none).
+    private func loadKeptPhoto(key: String, contactID: String?) {
+        guard !key.isEmpty, !self.keptLoading.contains(key) else { return }
+        if let missed = self.keptMissAt[key], Date().timeIntervalSince(missed) < Self.keptRetry { return }
+        guard PeopleDatabase.isAvailable else { return }
+        self.keptLoading.insert(key)
         Task {
             let data = await Task.detached(priority: .utility) { () -> Data? in
-                let keys = [CNContactThumbnailImageDataKey as CNKeyDescriptor]
-                return try? CNContactStore().unifiedContact(withIdentifier: id, keysToFetch: keys).thumbnailImageData
+                PeopleDatabase.photoFile(forHandle: key, contactID: contactID).flatMap { ContactResolver.avatarData(at: $0) }
             }.value
-            self.photoLoading.remove(key)
-            if let data, let image = NSImage(data: data) { self.photos[key] = image } else { self.photoMisses.insert(key) }
-            self.version += 1
+            self.keptLoading.remove(key)
+            if let data, let image = NSImage(data: data) {
+                self.keptPhotos[key] = image
+                self.keptMissAt[key] = nil
+                self.version += 1
+            } else {
+                self.keptMissAt[key] = Date()
+            }
         }
-        return nil
+    }
+
+    /// A picture file scaled down to avatar size (a few hundred pixels at most), as PNG data, so forty headshots do not sit in memory at full size.
+    nonisolated static func avatarData(at url: URL, maxPixels: Int = 192) -> Data? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: maxPixels,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        let out = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(out, "public.png" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, image, nil)
+        return CGImageDestinationFinalize(destination) ? out as Data : nil
     }
 
     /// Preview support: pretend this handle has a name.

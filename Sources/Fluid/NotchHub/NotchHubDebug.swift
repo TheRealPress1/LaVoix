@@ -1809,6 +1809,54 @@ enum NotchHubDebug {
         }
     }
 
+    /// `LAVOIX_AVATAR_AUTOTEST=1` checks how a conversation with no picture of its own gets one from myOS: the person is found by phone number, email or Contacts id in a
+    /// made-up database, a merged person is followed, an unsafe id is refused, and a picture is scaled down to avatar size. Made-up people and files in a temporary place only.
+    @MainActor static func avatarAutotestIfRequested() {
+        guard ProcessInfo.processInfo.environment["LAVOIX_AVATAR_AUTOTEST"] == "1" else { return }
+        Task { @MainActor in
+            var failures = 0
+            func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)"); if !ok { failures += 1 } }
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-avatars-\(UUID().uuidString)", isDirectory: true)
+            let photos = root.appendingPathComponent("photos", isDirectory: true)
+            try? FileManager.default.createDirectory(at: photos, withIntermediateDirectories: true)
+            let dbURL = root.appendingPathComponent("system.db")
+            var db: OpaquePointer?
+            sqlite3_open(dbURL.path, &db)
+            let statements = [
+                "CREATE TABLE person (id TEXT PRIMARY KEY, display_name TEXT NOT NULL, merged_into TEXT)",
+                "CREATE TABLE identity (kind TEXT NOT NULL, value_norm TEXT NOT NULL, person_id TEXT NOT NULL, PRIMARY KEY (kind, value_norm))",
+                "INSERT INTO person VALUES ('p-a-1', 'Maya Rao', NULL), ('p-b-2', 'Maya R', 'p-a-1'), ('p-c-3', 'Lee Park', NULL), ('../evil', 'Evil', NULL)",
+                "INSERT INTO identity VALUES ('phone', '+15551230001', 'p-a-1'), ('email', 'maya@example.com', 'p-a-1'), ('phone', '+15551230002', 'p-b-2'), ('phone', '+15551230003', 'p-c-3'), ('contacts_id', 'CARD-1', 'p-a-1'), ('phone', '+15551230004', '../evil')",
+            ]
+            for sql in statements { sqlite3_exec(db, sql, nil, nil, nil) }
+            sqlite3_close(db)
+            func big(_ file: URL, side: Int) {
+                let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in NSColor.systemTeal.setFill(); rect.fill(); return true }
+                if let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff), let png = rep.representation(using: .png, properties: [:]) { try? png.write(to: file) }
+            }
+            big(photos.appendingPathComponent("p-a-1.img"), side: 400)
+            func found(_ key: String, card: String? = nil) -> String? { PeopleDatabase.photoFile(forHandle: key, contactID: card, url: dbURL, photosDirectory: photos)?.lastPathComponent }
+
+            check("a conversation is matched to the person by the end of their phone number", found("5551230001") == "p-a-1.img")
+            check("by email, whatever its case", found("maya@example.com") == "p-a-1.img" && found("Maya@Example.com") == "p-a-1.img")
+            check("by the Contacts card it came from", found("9990000000", card: "CARD-1") == "p-a-1.img")
+            check("a person merged into another is followed to the one that has the picture", found("5551230002") == "p-a-1.img")
+            check("a person with no picture gets none", found("5551230003") == nil)
+            check("a number or address myOS does not know gets none, and neither does a handle too short to mean anything", found("5559999999") == nil && found("nobody@example.com") == nil && found("1234") == nil && found("") == nil)
+            check("an id that is not letters, digits and dashes is never turned into a file path", found("5551230004") == nil)
+            check("without myOS's database there is nothing to find", PeopleDatabase.photoFile(forHandle: "5551230001", url: root.appendingPathComponent("missing.db"), photosDirectory: photos) == nil)
+            let scaled = ContactResolver.avatarData(at: photos.appendingPathComponent("p-a-1.img"), maxPixels: 64).flatMap { NSBitmapImageRep(data: $0) }
+            check("a picture is scaled down to avatar size", scaled != nil && max(scaled?.pixelsWide ?? 999, scaled?.pixelsHigh ?? 999) <= 64)
+            let junk = photos.appendingPathComponent("junk.img")
+            try? Data("not an image".utf8).write(to: junk)
+            check("a file that is not a picture is not one", ContactResolver.avatarData(at: junk) == nil && ContactResolver.avatarData(at: photos.appendingPathComponent("nothing.img")) == nil)
+            try? FileManager.default.removeItem(at: root)
+
+            print(failures == 0 ? "AVATAR AUTOTEST ALL PASSED" : "AVATAR AUTOTEST \(failures) FAILED")
+            exit(failures == 0 ? 0 : 1)
+        }
+    }
+
     /// `LAVOIX_LYRICS_AUTOTEST=1` checks the Lyrics tab's rules without the network: reading timed lines, finding the line being sung, cleaning a title for the
     /// search, the addresses asked for, what an answer is turned into, and the store (one request per song, the cache, a failure that can be tried again).
     @MainActor static func lyricsAutotestIfRequested() {
