@@ -37,7 +37,16 @@ extension NotchWidget {
 
 private struct NotchWidgetActiveKey: EnvironmentKey { static let defaultValue = true }
 
+private struct NotchTabsExpandedKey: EnvironmentKey { static let defaultValue = false }
+
 extension EnvironmentValues {
+    /// True while the row of tab icons is unfolded along the bottom edge, so the content has the notch's own bottom corners well clear below it. When it is
+    /// folded away the content reaches almost to the bottom edge, and a card there has to keep its corners inside the notch's curve.
+    var notchTabsExpanded: Bool {
+        get { self[NotchTabsExpandedKey.self] }
+        set { self[NotchTabsExpandedKey.self] = newValue }
+    }
+
     /// False while a widget is mounted but hidden behind the selected tab, so it can pause its timers.
     var notchWidgetActive: Bool {
         get { self[NotchWidgetActiveKey.self] }

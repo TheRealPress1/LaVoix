@@ -5,6 +5,7 @@ struct NowPlayingWidgetView: View {
     @ObservedObject var store: NowPlayingStore
     @ObservedObject private var bookshelf = BookshelfCapture.shared
     @State private var rightTab: RightTab = NowPlayingWidgetView.defaultRightTab
+    @Environment(\.notchTabsExpanded) private var tabsExpanded
 
     /// What the right side can show, in the order the switch lists them. History is what the tab opens on; grading a song is one tap away, not the first thing seen.
     enum RightTab: CaseIterable {
@@ -20,12 +21,12 @@ struct NowPlayingWidgetView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            // Narrower than the full side and kept off the left edge, and 12 points shorter than the space it is given, so its rounded corners
-            // clear the notch's own. Shorter by measuring, not by padding: padding makes the column taller than the room and pushes the tab icons
-            // down into the notch's bottom edge.
+            // Narrower than the full side and kept off the left edge. With the tab icons unfolded it runs the full height of the room, ending where the
+            // list on the right does; with them folded away it is 12 points shorter, so its rounded corners clear the notch's own bottom corners.
+            // Shorter by measuring, not by padding: padding makes the column taller than the room and pushes the tab icons down into the notch's bottom edge.
             GeometryReader { geometry in
                 self.nowPlaying
-                    .frame(width: 236, height: max(0, geometry.size.height - 12))
+                    .frame(width: 236, height: max(0, geometry.size.height - (self.tabsExpanded ? 0 : 12)))
                     .padding(.leading, 8)
             }
             .frame(width: 244)

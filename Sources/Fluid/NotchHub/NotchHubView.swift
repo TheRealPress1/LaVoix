@@ -85,6 +85,7 @@ struct NotchHubView: View {
                             .allowsHitTesting(active)
                             .accessibilityHidden(!active)
                             .environment(\.notchWidgetActive, active)
+                            .environment(\.notchTabsExpanded, self.model.tabsExpanded)
                     }
                 }
             } }
