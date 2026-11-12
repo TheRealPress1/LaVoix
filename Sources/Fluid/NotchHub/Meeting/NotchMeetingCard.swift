@@ -498,11 +498,11 @@ struct NotchMeetingCardView: View {
         return "Started \(max(1, -seconds / 60)) min ago"
     }
 
-    /// " · with Maya Chen (28 days ago) +1" for the people myOS knows among the invitees; empty when none.
+    /// " · with Maya Chen +1" for the people myOS knows among the invitees; empty when none. (It used to add "(2d ago)", the days since the person was last
+    /// in touch, which read like the meeting's own date next to a meeting that starts today.)
     static func attendeeLine(_ people: [KnownPerson]) -> String {
         guard let first = people.first else { return "" }
         var line = " · with " + first.name
-        if let d = first.daysSince { line += d <= 0 ? " (today)" : d == 1 ? " (yesterday)" : " (\(d)d ago)" }
         if people.count > 1 { line += " +\(people.count - 1)" }
         return line
     }

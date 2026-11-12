@@ -798,28 +798,34 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         } catch {
             throw MeetingCaptureError.screenCapturePermissionDenied(error.localizedDescription)
         }
-        let byProcessID = application.processID.flatMap { processID in
-            content.applications.first(where: { $0.processID == processID })
-        }
-        // The saved PID goes stale when the app relaunches; the bundle match keeps rebuilds working.
-        guard let runningApplication = byProcessID ?? content.applications.first(where: {
-            $0.bundleIdentifier == application.bundleIdentifier
-        }) else {
-            throw MeetingCaptureError.applicationUnavailable(application.displayName)
-        }
-
         let filter: SCContentFilter
         let scope: MeetingCaptureScope
-        if let window = Self.selectWindow(for: runningApplication, in: content, preferredWindowID: application.windowID) {
-            filter = SCContentFilter(desktopIndependentWindow: window)
-            scope = .window
-        } else {
-            let display = application.displayID.flatMap { displayID in
-                content.displays.first(where: { $0.displayID == displayID })
-            } ?? content.displays.first
-            guard let display else { throw MeetingCaptureError.noCaptureDisplay }
-            filter = SCContentFilter(display: display, including: [runningApplication], exceptingWindows: [])
+        if application.isWholeMac {
+            // No app to follow: the whole display's audio (everything any app plays; this process's own audio is left out by the configuration below).
+            guard let display = content.displays.first else { throw MeetingCaptureError.noCaptureDisplay }
+            filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
             scope = .display
+        } else {
+            let byProcessID = application.processID.flatMap { processID in
+                content.applications.first(where: { $0.processID == processID })
+            }
+            // The saved PID goes stale when the app relaunches; the bundle match keeps rebuilds working.
+            guard let runningApplication = byProcessID ?? content.applications.first(where: {
+                $0.bundleIdentifier == application.bundleIdentifier
+            }) else {
+                throw MeetingCaptureError.applicationUnavailable(application.displayName)
+            }
+            if let window = Self.selectWindow(for: runningApplication, in: content, preferredWindowID: application.windowID) {
+                filter = SCContentFilter(desktopIndependentWindow: window)
+                scope = .window
+            } else {
+                let display = application.displayID.flatMap { displayID in
+                    content.displays.first(where: { $0.displayID == displayID })
+                } ?? content.displays.first
+                guard let display else { throw MeetingCaptureError.noCaptureDisplay }
+                filter = SCContentFilter(display: display, including: [runningApplication], exceptingWindows: [])
+                scope = .display
+            }
         }
 
         let configuration = SCStreamConfiguration()
@@ -2790,7 +2796,8 @@ nonisolated enum MeetingCaptureSourceCatalog {
         if let application = candidates.lazy.compactMap({ id in usable.first(where: { $0.bundleIdentifier == id }) }).first {
             return application
         }
-        throw MeetingCaptureError.applicationNotSelected
+        // No call app could be found (a call in a browser that is not on the list, an app nobody listed): record what the Mac plays, instead of refusing.
+        return .wholeMac
     }
 
     static func availableApplications() async throws -> [MeetingApplicationIdentity] {

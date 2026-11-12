@@ -20,8 +20,20 @@ enum MeetingCaptureTargetAutotest {
         check("a preferred app wins", resolve([system, finder, brave, zoom], "com.brave.Browser") == "com.brave.Browser")
         check("Brave is found even when it is not preferred and not in the old fallback list", resolve([system, finder, brave], nil) == "com.brave.Browser")
         check("the old fallbacks still work", resolve([finder, chrome], nil) == "com.google.Chrome" && resolve([chrome, zoom], nil) == "us.zoom.xos")
-        check("a nameless system process is never chosen", resolve([system], nil) == nil)
-        check("with only unrelated apps it fails instead of recording a random one", resolve([system, finder], nil) == nil)
+        let wholeMac = MeetingApplicationIdentity.wholeMacBundleIdentifier
+        check("a nameless system process is never chosen: with nothing else the whole Mac is recorded", resolve([system], nil) == wholeMac)
+        check("with only unrelated apps the whole Mac is recorded, not a random app, and not a refusal", resolve([system, finder], nil) == wholeMac && resolve([], nil) == wholeMac)
+        check("the whole-Mac identity says so, and no real app does", MeetingApplicationIdentity.wholeMac.isWholeMac && !app("com.google.Chrome", "Chrome").isWholeMac && MeetingApplicationIdentity.wholeMac.displayName == "Computer audio")
+        // Auto-detect stays strict: it captures the app it detected or fails, never everything and never another app.
+        func strict(_ apps: [MeetingApplicationIdentity], _ preferred: String?) -> String {
+            do { return try MeetingCaptureSourceCatalog.resolveApplication(from: apps, preferredBundleIdentifier: preferred, requirePreferredApplication: true).bundleIdentifier }
+            catch MeetingCaptureError.applicationNotSelected { return "not-selected" }
+            catch MeetingCaptureError.applicationUnavailable { return "unavailable" }
+            catch { return "other" }
+        }
+        check("auto-detect with the app present captures that app", strict([finder, zoom], "us.zoom.xos") == "us.zoom.xos")
+        check("auto-detect with the app gone fails (never another app, never the whole Mac)", strict([finder, chrome], "us.zoom.xos") == "unavailable")
+        check("auto-detect with no app named fails", strict([finder, chrome], nil) == "not-selected")
         check("an absent preferred app falls back to another call app", resolve([finder, brave], "us.zoom.xos") == "com.brave.Browser")
         check("Safari counts as a browser", resolve([finder, app("com.apple.Safari", "Safari")], nil) == "com.apple.Safari")
         check("Zoom and Teams links map to their apps", NotchMeetingCardController.likelyCallApp(for: URL(string: "https://us02web.zoom.us/j/123")) == "us.zoom.xos"

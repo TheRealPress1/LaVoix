@@ -192,6 +192,15 @@ nonisolated struct MeetingApplicationIdentity: Codable, Equatable, Sendable {
         self.displayID = displayID
         self.windowID = windowID
     }
+
+    /// Stands for "everything this Mac plays", for a call whose app could not be named (a browser the list of known ones does not have, a call app nobody
+    /// listed): the recording takes the audio of the whole display except this app's own, and the microphone, the way a recorder that does not care where
+    /// the call is would. Nothing here is a real app: there is no process to find, no window to follow, no icon.
+    static let wholeMacBundleIdentifier = "com.myos.whole-mac"
+    static var wholeMac: MeetingApplicationIdentity {
+        MeetingApplicationIdentity(bundleIdentifier: Self.wholeMacBundleIdentifier, displayName: "Computer audio")
+    }
+    var isWholeMac: Bool { self.bundleIdentifier == Self.wholeMacBundleIdentifier }
 }
 
 nonisolated struct MeetingMicrophoneIdentity: Codable, Equatable, Sendable {

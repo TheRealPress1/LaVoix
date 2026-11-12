@@ -878,7 +878,7 @@ enum NotchHubDebug {
             check("days since last contact come along", known.map(\.daysSince) == [20, 70])
             check("a merged person and unknown addresses match nothing", PeopleDatabase.known(emails: ["di@z.com", "x@nowhere.com"], url: url).isEmpty)
             check("phones are not matched as emails; bad input is ignored", PeopleDatabase.known(emails: ["+14155550000", "", "not-an-email"], url: url).isEmpty)
-            check("the heads-up line names the first person and counts the rest", NotchMeetingCardView.attendeeLine(known) == " · with Ann Close (20d ago) +1" && NotchMeetingCardView.attendeeLine([]) == "")
+            check("the heads-up line names the first person and counts the rest, with no days-ago", NotchMeetingCardView.attendeeLine(known) == " · with Ann Close +1" && NotchMeetingCardView.attendeeLine(Array(known.prefix(1))) == " · with Ann Close" && NotchMeetingCardView.attendeeLine([]) == "")
             let meetingID = UUID()
             let start = Date(timeIntervalSince1970: 1_800_000_000)
             let payload = MeetingInboxExporter.payload(meetingID: meetingID, title: "Design sync", start: start, end: start.addingTimeInterval(1800), personIDs: ["b", "a", "a"], unknownAttendees: 2, noteFile: "meeting-x.md")
