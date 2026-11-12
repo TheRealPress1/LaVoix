@@ -9,6 +9,9 @@ struct NotchHubView: View {
     /// Set by the image preview tool, which can't draw text fields.
     nonisolated(unsafe) static var previewStatic = false
 
+    /// How the welcome strip widens and draws back in: quick at first and settling without a bounce, a clean swoop.
+    private static let stripSwoop = Animation.timingCurve(0.22, 1, 0.36, 1, duration: 0.55)
+
     private var isOpen: Bool { self.forceOpen || self.model.isOpen }
 
     /// The tab on screen plus the one used just before it, so flipping back and forth is instant. Every other tab is
@@ -19,14 +22,15 @@ struct NotchHubView: View {
     var body: some View {
         let open = self.isOpen
         let banner = open ? nil : self.model.banner
+        let isStrip = banner?.welcomeBack == true
         let baseSize: CGSize = open
             ? (self.model.tabsExpanded ? NotchGeometry.openSize : NotchGeometry.openSizeCollapsed)
             : (banner != nil
-                ? NotchGeometry.bannerSize(content: banner, expanded: self.model.bannerExpanded, enlarged: self.model.bannerEnlarged, notchHeight: self.model.closedSize.height)
+                ? NotchGeometry.bannerSize(content: banner, expanded: self.model.bannerExpanded, enlarged: self.model.bannerEnlarged, notchHeight: self.model.closedSize.height, notchWidth: self.model.closedSize.width)
                 : self.model.closedSize)
         let size = open ? CGSize(width: baseSize.width, height: baseSize.height + self.model.extraHeight) : baseSize
         ZStack(alignment: .top) {
-            NotchHubShape(topCornerRadius: open ? 19 : (banner != nil ? 10 : 6), bottomCornerRadius: open ? 26 : (banner != nil ? 30 : 14))
+            NotchHubShape(topCornerRadius: open ? 19 : (isStrip ? 6 : (banner != nil ? 10 : 6)), bottomCornerRadius: open ? 26 : (isStrip ? 14 : (banner != nil ? 30 : 14)))
                 .fill(Color.black)
                 .frame(width: size.width, height: size.height)
                 .overlay(alignment: .top) {
@@ -35,8 +39,8 @@ struct NotchHubView: View {
                             .frame(width: size.width, height: size.height, alignment: .top)
                             .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
                     } else if let banner {
-                        NotchBannerView(content: banner, expanded: self.model.bannerExpanded, staticLayout: self.forceOpen || Self.previewStatic)
-                            .padding(.top, self.model.closedSize.height)
+                        NotchBannerView(content: banner, expanded: self.model.bannerExpanded, staticLayout: self.forceOpen || Self.previewStatic, notchWidth: self.model.closedSize.width)
+                            .padding(.top, isStrip ? 0 : self.model.closedSize.height)
                             .frame(width: size.width, height: size.height, alignment: .top)
                             .transition(.opacity)
                             .id(banner.id)
@@ -47,7 +51,7 @@ struct NotchHubView: View {
         .animation(.spring(response: 0.42, dampingFraction: 0.82), value: open)
         .animation(.spring(response: 0.36, dampingFraction: 0.86), value: self.model.tabsExpanded)
         .animation(.spring(response: 0.36, dampingFraction: 0.86), value: self.model.extraHeight)
-        .animation(.spring(response: 0.42, dampingFraction: 0.82), value: self.model.banner?.id)
+        .animation(self.model.bannerIsStrip ? Self.stripSwoop : .spring(response: 0.42, dampingFraction: 0.82), value: self.model.banner?.id)
         .animation(.spring(response: 0.38, dampingFraction: 0.85), value: self.model.bannerExpanded)
         .animation(.spring(response: 0.38, dampingFraction: 0.85), value: self.model.bannerEnlarged)
     }

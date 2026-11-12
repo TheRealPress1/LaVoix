@@ -150,11 +150,9 @@ enum NotchHubDebug {
                 if widgetName == "banner-sticker" || widgetName == "banner-sticker-plain" {
                     files = [MessagesSampleFiles.makeBannerSticker(flagged: widgetName == "banner-sticker")]
                 }
-                // banner-welcome / banner-welcome-sheen: the "Welcome back" card that drops out when the notch comes back on (invented name).
-                if widgetName.hasPrefix("banner-welcome") {
-                    // banner-welcome-sheen: the light caught halfway across the title.
-                    if widgetName.hasSuffix("sheen") { NotchWelcomeCardView.previewSheen = 0.45 }
-                    model.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: "Welcome back", subtitle: nil, text: "", date: Date(), welcomeBack: NotchWelcomeCardView.greeting(name: "Maya")))
+                // banner-welcome: the "Welcome back" strip that widens out of the notch to either side of the camera.
+                if widgetName == "banner-welcome" {
+                    model.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: "Welcome back", subtitle: nil, text: "", date: Date(), welcomeBack: true))
                     model.setBannerExpanded(false)
                 // banner-meeting / banner-meeting-nolink: the card that says a meeting was set (invented).
                 } else if widgetName.hasPrefix("banner-meeting") {
@@ -1791,11 +1789,6 @@ enum NotchHubDebug {
                   && NotchBannerContent.MeetingSet(title: "t", start: noon, end: noon, meetLink: nil, invited: [], viaGoogle: false).detailLine == "Added to your calendar")
             let setCard = NotchBannerContent(chatID: 0, chatGUID: "", title: "t", subtitle: nil, text: "", date: now, meetingSet: NotchBannerContent.MeetingSet(title: "t", start: noon, end: noon, meetLink: setLink, invited: [], viaGoogle: true))
             check("the card has room for its buttons", setCard.contentHeight(expanded: false) > NotchBannerContent(chatID: 1, chatGUID: "g", title: "t", subtitle: nil, text: "hi", date: now).contentHeight(expanded: false))
-            // The "Welcome back" card (invented name, fixed hours in UTC)
-            func hello(_ hour: Int, _ name: String?) -> String { NotchWelcomeCardView.greeting(name: name, now: utc.date(from: DateComponents(year: 2026, month: 11, day: 12, hour: hour, minute: 30)) ?? now, calendar: utc) }
-            check("the greeting follows the time of day: small hours, morning, afternoon, evening", hello(3, nil) == "Hello" && hello(8, nil) == "Good morning" && hello(12, nil) == "Good afternoon" && hello(17, nil) == "Good afternoon" && hello(18, nil) == "Good evening" && hello(23, nil) == "Good evening")
-            check("the greeting adds the first name when there is one, and nothing when the name is empty", hello(8, "Maya") == "Good morning, Maya" && hello(8, "") == "Good morning")
-            check("the first name is the account name's first word, or nothing", NotchWelcomeCardView.firstName(from: "Maya Chen") == "Maya" && NotchWelcomeCardView.firstName(from: "  Maya  ") == "Maya" && NotchWelcomeCardView.firstName(from: "") == nil && NotchWelcomeCardView.firstName(from: "   ") == nil)
             // A recording that failed is told as a heading and what to do (invented-free: these are the app's own messages)
             let callMessage = NotchMeetingModel.splitFailure("Couldn't tell which app the call is in. Open the call in a browser or meeting app, or start it from the meeting prompt.")
             check("a failure message is split into its first sentence and what to do", callMessage.title == "Couldn't tell which app the call is in" && callMessage.detail == "Open the call in a browser or meeting app, or start it from the meeting prompt.")
@@ -1809,8 +1802,12 @@ enum NotchHubDebug {
             let twoLines = NotchMeetingModel.failedExtraHeight(.failed("Couldn't tell which app the call is in. Open the call in a browser or meeting app, or start it from the meeting prompt."))
             check("a failure with something to do is taller than the one without, by its lines; a lone sentence and other phases add nothing", oneLine > 0 && twoLines > oneLine && NotchMeetingModel.failedExtraHeight(.failed("Microphone permission is required.")) == 0 && NotchMeetingModel.failedExtraHeight(.recording) == 0)
             check("the detail of the call message takes two lines at the card's width, and a long one at most four", NotchMeetingModel.failedDetailLines("Open the call in a browser or meeting app, or start it from the meeting prompt.") == 2 && NotchMeetingModel.failedDetailLines(String(repeating: "word ", count: 120)) == 4)
-            let welcomeCard = NotchBannerContent(chatID: 0, chatGUID: "", title: "Welcome back", subtitle: nil, text: "", date: now, welcomeBack: "Good morning, Maya")
-            check("the welcome card is a slim one, shorter than a message card with its reply row", welcomeCard.contentHeight(expanded: false) == NotchWelcomeCardView.contentHeight && welcomeCard.contentHeight(expanded: true) == welcomeCard.contentHeight(expanded: false) && welcomeCard.contentHeight(expanded: true) < NotchBannerContent(chatID: 1, chatGUID: "g", title: "t", subtitle: nil, text: "hi", date: now).contentHeight(expanded: true))
+            // The "Welcome back" strip: the notch's own height, reaching out to both sides of it
+            let welcomeStrip = NotchBannerContent(chatID: 0, chatGUID: "", title: "Welcome back", subtitle: nil, text: "", date: now, welcomeBack: true)
+            let stripSize = NotchGeometry.bannerSize(content: welcomeStrip, expanded: false, notchHeight: 32, notchWidth: 190)
+            check("the welcome strip is as tall as the notch and reaches out the same distance on each side", stripSize.height == 32 && stripSize.width == 190 + NotchGeometry.welcomeWing * 2)
+            check("it stays that size when hovered or enlarged, and a message card still goes down", NotchGeometry.bannerSize(content: welcomeStrip, expanded: true, enlarged: true, notchHeight: 32, notchWidth: 190) == stripSize && NotchGeometry.bannerSize(content: NotchBannerContent(chatID: 1, chatGUID: "g", title: "t", subtitle: nil, text: "hi", date: now), expanded: false, notchHeight: 32, notchWidth: 190).height > 32 + 40)
+            check("a model that shows the strip remembers that, and a message card after it does not", { let m = NotchHubModel(); m.showBanner(welcomeStrip); let first = m.bannerIsStrip; m.hideBanner(); let kept = m.bannerIsStrip; m.showBanner(NotchBannerContent(chatID: 1, chatGUID: "g", title: "t", subtitle: nil, text: "hi", date: now)); return first && kept && !m.bannerIsStrip }())
 
             // Which meetings were recorded (made-up folders in a temporary place; only titles and times are read)
             let tmpRoot = FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-recorded-\(UUID().uuidString)", isDirectory: true)

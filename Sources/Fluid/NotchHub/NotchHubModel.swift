@@ -59,7 +59,11 @@ final class NotchHubModel: ObservableObject {
     /// A file on the card is shown large: the card grows to make room.
     @Published private(set) var bannerEnlarged = false
 
+    /// The card now or last shown is the welcome strip: it swoops out and back with its own curve (kept after it goes, so it draws back in the same way).
+    private(set) var bannerIsStrip = false
+
     func showBanner(_ content: NotchBannerContent) {
+        self.bannerIsStrip = content.welcomeBack
         self.bannerExpanded = false
         self.bannerEnlarged = false
         self.banner = content

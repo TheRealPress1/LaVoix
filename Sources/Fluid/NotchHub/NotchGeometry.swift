@@ -39,15 +39,21 @@ enum NotchGeometry {
     static let bannerWidth: CGFloat = 420
 
     /// The card grows to fit its message, up to `NotchBannerContent.maxLines` lines.
-    static func bannerSize(content: NotchBannerContent?, expanded: Bool, enlarged: Bool = false, notchHeight: CGFloat) -> CGSize {
+    static func bannerSize(content: NotchBannerContent?, expanded: Bool, enlarged: Bool = false, notchHeight: CGFloat, notchWidth: CGFloat = 190) -> CGSize {
+        // The welcome strip is the notch's own height and reaches out to either side of it: it does not go down.
+        if content?.welcomeBack == true { return CGSize(width: notchWidth + self.welcomeWing * 2, height: notchHeight) }
         let body = content?.contentHeight(expanded: expanded, enlarged: enlarged) ?? (expanded ? 118 : 70)
         return CGSize(width: self.bannerWidth, height: notchHeight + body)
     }
 
     @MainActor static func bannerRect(for screen: NSScreen, content: NotchBannerContent?, expanded: Bool, enlarged: Bool = false) -> NSRect {
-        let size = self.bannerSize(content: content, expanded: expanded, enlarged: enlarged, notchHeight: self.closedSize(for: screen).height)
+        let notch = self.closedSize(for: screen)
+        let size = self.bannerSize(content: content, expanded: expanded, enlarged: enlarged, notchHeight: notch.height, notchWidth: notch.width)
         return NSRect(x: screen.frame.midX - size.width / 2 - 8, y: screen.frame.maxY - size.height - 8, width: size.width + 16, height: size.height + 8)
     }
+
+    /// How far the "Welcome back" strip reaches out on each side of the notch: room for a word and a gap either side of it.
+    static let welcomeWing: CGFloat = 92
 
     static let meetingCardPadding: CGFloat = 16
 

@@ -478,20 +478,20 @@ final class NotchHubController {
         self.window?.ignoresMouseEvents = false
         self.bannerHovered = false
         self.model.showBanner(content)
-        self.scheduleBannerDismiss(after: content.welcomeBack != nil ? 4.2 : (content.meetingSet != nil ? 9 : (content.alertSymbol == nil ? 6 : (content.actionID == nil ? 12 : 30))))
+        self.scheduleBannerDismiss(after: content.welcomeBack ? 3.4 : (content.meetingSet != nil ? 9 : (content.alertSymbol == nil ? 6 : (content.actionID == nil ? 12 : 30))))
     }
 
-    /// The "Welcome back" card: drops out of the notch a moment after it comes back on (the app opening, or the notch being switched on again) to say it
-    /// is running. A test or render run never shows it, and it gives way like any card to a dictation overlay, a recording card or an open notch.
+    /// The "Welcome back" strip: a moment after the notch comes back on (the app opening, or the notch being switched on again) it widens out to either side of the
+    /// camera, "Welcome" on the left and "Back" with a hand on the right, then draws back in, to say the notch is running. A test or render run never shows it, and
+    /// like any card it gives way to a dictation overlay, a recording card or an open notch.
     private func scheduleWelcomeBack() {
         guard !DiagnosticRun.isActive else { return }
         self.welcomeTask?.cancel()
         self.welcomeTask = Task { [weak self] in
-            // Lets the closed notch settle first, so the card reads as the notch coming back and not as part of the launch.
+            // Lets the closed notch settle first, so the strip reads as the notch coming back and not as part of the launch.
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             guard !Task.isCancelled, let self, self.isRunning else { return }
-            let greeting = NotchWelcomeCardView.greeting(name: NotchWelcomeCardView.firstName(from: NSFullUserName()))
-            self.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: "Welcome back", subtitle: nil, text: "", date: Date(), welcomeBack: greeting))
+            self.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: "Welcome back", subtitle: nil, text: "", date: Date(), welcomeBack: true))
         }
     }
 
@@ -712,13 +712,12 @@ final class NotchHubController {
         // If the panel is no longer the key window, typing is over, whatever the flag says.
         if self.isEditingText, !(self.window?.isKeyWindow ?? false) { self.isEditingText = false; self.window?.allowsKey = false }
         let point = NSEvent.mouseLocation
-        if self.model.banner != nil, !self.model.isOpen {
+        // The welcome strip has nothing to reply to and does not stand in the way: the pointer goes on to open the notch as usual.
+        if let banner = self.model.banner, !banner.welcomeBack, !self.model.isOpen {
             let inside = NotchGeometry.bannerRect(for: screen, content: self.model.banner, expanded: self.model.bannerExpanded, enlarged: self.model.bannerEnlarged).contains(point)
             if inside, !self.bannerHovered {
                 self.bannerHovered = true
                 self.bannerTask?.cancel()
-                // A greeting has nothing to reply to: the pointer resting on it only keeps it there.
-                if self.model.banner?.welcomeBack != nil { return }
                 self.model.setBannerExpanded(true)
                 // Hovering is enough to start typing: take the keyboard now.
                 self.beginTextEntry()
@@ -798,6 +797,8 @@ final class NotchHubController {
     }
 
     private func open(byHover: Bool = false) {
+        // Opening the notch takes the welcome strip's place.
+        if self.model.banner?.welcomeBack == true { self.bannerTask?.cancel(); self.model.hideBanner() }
         if !self.model.isOpen {
             self.openedAt = Date()
             let playing = NotchNowPlayingStrip.shared.isPlayingAudibly || BookshelfCapture.shared.now.state == .playing
