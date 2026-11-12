@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Darwin
 import Foundation
@@ -316,7 +317,17 @@ final class MeetingSessionCoordinator: ObservableObject {
             preferredCoreAudioUID: self.preferredMicrophoneUID()
         )
         var application: MeetingApplicationIdentity?
-        if mode == .onlineCall {
+        if mode == .onlineCall, MeetingCaptureSourceCatalog.capturesWholeMac(preferredBundleIdentifier: preferredBundleIdentifier) {
+            // The default: the whole Mac, with no app to find, follow or lose (see `capturesWholeMac`). When the call's app is known (Zoom, Teams, a browser)
+            // its name stays on the recording as the label, so the list still says where the call was.
+            var wholeMac = MeetingApplicationIdentity.wholeMac
+            if let preferredBundleIdentifier,
+               let name = NSRunningApplication.runningApplications(withBundleIdentifier: preferredBundleIdentifier).first?.localizedName, !name.isEmpty
+            {
+                wholeMac.displayName = name
+            }
+            application = wholeMac
+        } else if mode == .onlineCall {
             let applications = try await MeetingCaptureSourceCatalog.availableApplications()
             var resolved = try MeetingCaptureSourceCatalog.resolveApplication(
                 from: applications,

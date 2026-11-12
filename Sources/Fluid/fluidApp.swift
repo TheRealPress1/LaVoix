@@ -22,6 +22,7 @@ struct FluidApp: App {
         WritingRecoveryAutotest.runIfRequested()
         MeetingCaptureTargetAutotest.runIfRequested()
         MeetingFaceTimeCaptureAutotest.runIfRequested()
+        MeetingWholeMacCaptureAutotest.runIfRequested()
         MeetingReprocessAutotest.runIfRequested()
         MeetingTranscriptAttachTool.runIfRequested()
         NotchHubDebug.renderIfRequested()

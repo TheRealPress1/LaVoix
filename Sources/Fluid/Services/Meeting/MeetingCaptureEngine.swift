@@ -2769,6 +2769,15 @@ nonisolated enum MeetingCaptureSourceCatalog {
         "com.microsoft.teams2",
     ]
 
+    /// A call is recorded from the whole Mac (everything it plays, and the microphone), whatever app the call is in: the recording is not tied to an app, so a
+    /// call in a browser nobody listed, a call app nobody listed, or a second window cannot be missed. The exceptions are the apps whose call sound a
+    /// display-wide capture cannot carry and that have their own way of being heard (FaceTime's helper process, and Safari's separate media process): those
+    /// are recorded by app when one of them is positively the call app.
+    static func capturesWholeMac(preferredBundleIdentifier: String?) -> Bool {
+        guard let preferredBundleIdentifier, !preferredBundleIdentifier.isEmpty else { return true }
+        return !MeetingAppRegistry.callAudioIsTapped(bundleIdentifier: preferredBundleIdentifier)
+    }
+
     /// Manual setup keeps Zoom/Chrome/Teams fallback. Auto-detect must capture the
     /// detected app or fail — never a different meeting.
     static func resolveApplication(

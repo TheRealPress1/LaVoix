@@ -791,6 +791,8 @@ final class NotchMeetingCardController {
     /// What the live watch last said, and what the person already dismissed (not shown again until the problem clears and comes back).
     private var liveWarningKind: MeetingCaptureWarning.Kind?
     private var dismissedWarningKind: MeetingCaptureWarning.Kind?
+    /// The person kept a whole-Mac recording going when asked whether the call was over: not asked again until sound has come back and gone away again.
+    private var dismissedCallOver = false
     private var watchTask: Task<Void, Never>?
     private var unprotectedClock = MeetingUnprotectedMicrophoneClock()
     static let watchIntervalSeconds: Double = 5
@@ -808,6 +810,7 @@ final class NotchMeetingCardController {
 
     func dismissNotice() {
         if case let .captureWarning(kind) = self.model.notice?.kind { self.dismissedWarningKind = kind }
+        if case .callEnded = self.model.notice?.kind { self.dismissedCallOver = true }
         self.clearNotice()
     }
 
@@ -843,6 +846,7 @@ final class NotchMeetingCardController {
             self.watchTask = nil
             self.liveWarningKind = nil
             self.dismissedWarningKind = nil
+            self.dismissedCallOver = false
             if self.model.notice != nil, self.model.phase != .recording { self.model.notice = nil }
         }
     }
@@ -852,14 +856,24 @@ final class NotchMeetingCardController {
         let protection = await coordinator.liveMicrophoneProtection()
         guard self.model.phase == .recording else { return }
         let unprotectedFor = self.unprotectedClock.observe(protection, at: Date())
+        let callAudioSilentFor = MeetingCaptureWatch.callAudioSilence(
+            silentForSeconds: coordinator.trackHealth[.applicationAudio]?.silentForSeconds,
+            lastSampleAt: coordinator.trackHealth[.applicationAudio]?.lastSampleAt,
+            recordingStartedAt: session.startedAt,
+            now: Date()
+        )
+        // A recording of the whole Mac does not end with the call, so after a long silence the card asks (Stop recording / Keep recording).
+        if MeetingCaptureWatch.callLooksOver(isWholeMac: session.capturedApplication?.isWholeMac == true, callAudioSilentFor: callAudioSilentFor) {
+            if !self.dismissedCallOver, self.model.notice?.kind != .callEnded {
+                DebugLogger.shared.info("Whole-Mac recording: no sound for \(Int(callAudioSilentFor)) s, asking whether the call is over", source: "NotchMeetingCard")
+                self.showNotice(MeetingNotice.callEnded)
+            }
+            return
+        }
+        if callAudioSilentFor < MeetingCaptureWatch.callAudioSilenceSeconds { self.dismissedCallOver = false }
         let warning = MeetingCaptureWatch.evaluate(
             mode: session.mode,
-            callAudioSilentFor: MeetingCaptureWatch.callAudioSilence(
-                silentForSeconds: coordinator.trackHealth[.applicationAudio]?.silentForSeconds,
-                lastSampleAt: coordinator.trackHealth[.applicationAudio]?.lastSampleAt,
-                recordingStartedAt: session.startedAt,
-                now: Date()
-            ),
+            callAudioSilentFor: callAudioSilentFor,
             microphoneUnprotectedFor: unprotectedFor
         )
         guard let warning else {
@@ -1002,10 +1016,9 @@ final class NotchMeetingCardController {
         if let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier, MeetingAppRegistry.isBrowserApp(bundleIdentifier: front) {
             return front
         }
-        return NSWorkspace.shared.runningApplications
-            .filter { $0.activationPolicy == .regular }
-            .compactMap(\.bundleIdentifier)
-            .first { MeetingAppRegistry.isBrowserApp(bundleIdentifier: $0) }
+        // Otherwise nothing is known about where the call is, and nothing is guessed (a browser that merely happens to be running used to be): the recording
+        // is of the whole Mac.
+        return nil
     }
 
     func joinEventCall() {

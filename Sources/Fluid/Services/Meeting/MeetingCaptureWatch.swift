@@ -51,6 +51,15 @@ nonisolated enum MeetingCaptureWatch {
         }
     }
 
+    /// A recording of the whole Mac has no call window whose closing would end it, so it would run on after the call. When nothing at all has played this long the
+    /// card asks whether to stop (it never stops by itself).
+    static let wholeMacCallOverSeconds: TimeInterval = 300
+
+    /// Whether to ask "the call looks over, stop recording?": only for a recording of the whole Mac, and only after `wholeMacCallOverSeconds` of silence.
+    static func callLooksOver(isWholeMac: Bool, callAudioSilentFor: TimeInterval?) -> Bool {
+        isWholeMac && (callAudioSilentFor ?? 0) >= self.wholeMacCallOverSeconds
+    }
+
     /// How long the call-audio track has been silent. A ScreenCaptureKit track delivers buffers of zeros while nothing plays, so its own
     /// `silentForSeconds` grows. A Core Audio tap delivers nothing at all while nothing plays (its callbacks only arrive while the Mac plays something), so
     /// its health never updates and `silentForSeconds` stays at 0 or nil: the time since the last sample (or, with none yet, since the recording began)

@@ -31,6 +31,21 @@ enum MeetingCaptureTargetAutotest {
             catch MeetingCaptureError.applicationUnavailable { return "unavailable" }
             catch { return "other" }
         }
+        // The default: the whole Mac, whatever the call app is; FaceTime and Safari (their own audio paths) keep their app.
+        check("a call app, a browser nobody listed, or no app at all is recorded from the whole Mac",
+              MeetingCaptureSourceCatalog.capturesWholeMac(preferredBundleIdentifier: nil)
+              && MeetingCaptureSourceCatalog.capturesWholeMac(preferredBundleIdentifier: "us.zoom.xos")
+              && MeetingCaptureSourceCatalog.capturesWholeMac(preferredBundleIdentifier: "com.google.Chrome")
+              && MeetingCaptureSourceCatalog.capturesWholeMac(preferredBundleIdentifier: "company.thebrowser.dia")
+              && MeetingCaptureSourceCatalog.capturesWholeMac(preferredBundleIdentifier: ""))
+        check("FaceTime and Safari keep their own capture, because a display-wide one cannot carry their call sound",
+              !MeetingCaptureSourceCatalog.capturesWholeMac(preferredBundleIdentifier: MeetingAppRegistry.faceTimeBundleIdentifier)
+              && !MeetingCaptureSourceCatalog.capturesWholeMac(preferredBundleIdentifier: MeetingAppRegistry.safariBundleIdentifier))
+        check("a whole-Mac recording asks whether the call is over after five silent minutes, and only then",
+              !MeetingCaptureWatch.callLooksOver(isWholeMac: true, callAudioSilentFor: 299)
+              && MeetingCaptureWatch.callLooksOver(isWholeMac: true, callAudioSilentFor: 300)
+              && !MeetingCaptureWatch.callLooksOver(isWholeMac: true, callAudioSilentFor: nil))
+        check("a recording of an app does not ask (its own window closing ends it)", !MeetingCaptureWatch.callLooksOver(isWholeMac: false, callAudioSilentFor: 3600))
         check("auto-detect with the app present captures that app", strict([finder, zoom], "us.zoom.xos") == "us.zoom.xos")
         check("auto-detect with the app gone fails (never another app, never the whole Mac)", strict([finder, chrome], "us.zoom.xos") == "unavailable")
         check("auto-detect with no app named fails", strict([finder, chrome], nil) == "not-selected")
