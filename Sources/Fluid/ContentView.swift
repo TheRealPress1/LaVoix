@@ -336,6 +336,8 @@ struct ContentView: View {
     @State private var recordingAppInfo: (name: String, bundleId: String, windowTitle: String)? = nil
     @State private var recordingPrecedingText: String = ""
     @State private var recordingFocusTarget: TypingService.CapturedFocusTarget? = nil
+    /// The text field of the notch that had the cursor when this recording began (a reply, a search, a note), if there was one: the words go there.
+    @State private var recordingNotchField = NotchTextFieldRef()
 
     // Command Mode State
     // @State private var showCommandMode: Bool = false
@@ -2406,6 +2408,8 @@ struct ContentView: View {
     }
 
     private func captureRecordingTargetContext() {
+        // A text field of the notch that has the cursor now is where this dictation is for (see `NotchHubController.insertDictatedText`).
+        self.recordingNotchField.field = NotchHubController.shared.focusedTextField
         // Capture the focused target PID BEFORE any overlay/UI changes.
         // Used to restore focus when the user interacts with overlay dropdowns.
         let targetContext = TypingService.captureRecordingTargetContext()
@@ -3346,7 +3350,11 @@ struct ContentView: View {
         let shouldCopyToClipboard = shouldDeliverOutputs &&
             !sendsExistingDraft &&
             SettingsStore.shared.copyTranscriptionToClipboard
-        let shouldTypeExternally = shouldDeliverOutputs && !isFluidFrontmost
+        // Dictation that began with the cursor in a text field of the notch (a reply to a message, a search, a note) puts its words there. That field belongs to
+        // this app, so it counted as "this app is in front, nothing to type" and the words went nowhere; it must not go to another app either.
+        let notchField = shouldDeliverOutputs && !sendsExistingDraft ? self.recordingNotchField.field : nil
+        let notchFieldTakesText = notchField.map { NotchHubController.shared.canInsertDictatedText(into: $0) } ?? false
+        let shouldTypeExternally = shouldDeliverOutputs && !isFluidFrontmost && !notchFieldTakesText
 
         // Send-only stops normally have no History row. Recover their words if
         // Escape arrives after the output decision but before delivery completes.
@@ -3385,6 +3393,12 @@ struct ContentView: View {
         {
             editor.insertText(finalText, replacementRange: editor.selectedRange())
         }
+
+        if notchFieldTakesText, let notchField {
+            let inserted = NotchHubController.shared.insertDictatedText(finalText, into: notchField)
+            DebugLogger.shared.info("Dictation put into a text field of the notch: inserted=\(inserted) chars=\(finalText.count)", source: "ContentView")
+        }
+        self.recordingNotchField.field = nil
 
         if shouldTypeExternally {
             let typingTarget = stopSnapshot.map { (pid: $0.target?.pid, shouldRestoreOriginalFocus: true) }

@@ -81,10 +81,17 @@ extension NotchHubDebug {
             hub.beginTextEntry()
             await settle(1.0)
             checkCursor("hovering a card puts the cursor in its reply box", hub.hasTextFocus)
+            // Dictation that began with the cursor in this reply box puts its words in it (they used to go nowhere: the notch is this app, not "another app").
+            let replyBox = hub.focusedTextField
+            check("dictation finds the reply box that has the cursor, and it can be typed into", replyBox != nil && replyBox?.isEditable == true && replyBox.map { hub.canInsertDictatedText(into: $0) } == true)
+            let drafted = replyBox?.string ?? ""
+            check("dictated words go into the reply box at the cursor", replyBox.map { hub.insertDictatedText("see you at eight", into: $0) } == true && replyBox?.string == drafted + "see you at eight")
+            check("no words, no change", replyBox.map { hub.insertDictatedText("", into: $0) } == false && replyBox?.string == drafted + "see you at eight")
 
             // 2. The cursor is gone (clicked elsewhere, the window lost the keyboard): pressing the reply box ANYWHERE on it, not only on its line of text, brings it back.
             window.makeFirstResponder(nil)
             check("with the cursor taken away, nothing is being edited", !hub.hasTextFocus)
+            check("and then nothing takes dictated words either", hub.focusedTextField == nil && replyBox.map { !hub.canInsertDictatedText(into: $0) } == true)
             if let field = textFields(in: content).first {
                 let rect = field.convert(field.bounds, to: nil)
                 // Above the field, inside the rounded box around it (the box is taller than the line of text).
@@ -137,6 +144,8 @@ extension NotchHubDebug {
             whatsApp.requestReplyFocus()
             await settle(0.8)
             checkCursor("WhatsApp: picking a chat while the tab is open puts the cursor in its reply box", hub.hasTextFocus)
+            let whatsAppBox = hub.focusedTextField
+            check("WhatsApp: dictated words go into its reply box too", whatsAppBox.map { hub.insertDictatedText("on my way", into: $0) } == true && whatsAppBox?.string.hasSuffix("on my way") == true)
 
             hub.endTextEntry()
             note("end: \(describe())")

@@ -639,6 +639,27 @@ final class NotchHubController {
         (self.window?.isKeyWindow ?? false) && self.window?.firstResponder is NSTextView
     }
 
+    /// The text field of the notch that has the cursor right now (its field editor), if any: where a dictation that starts now should put its words.
+    var focusedTextField: NSTextView? {
+        guard self.hasTextFocus else { return nil }
+        return self.window?.firstResponder as? NSTextView
+    }
+
+    /// Whether dictated words can still go into `field`: it is a field of the notch's window, it can be edited, and it still has the cursor.
+    func canInsertDictatedText(into field: NSTextView) -> Bool {
+        guard let window = self.window, field.window === window, field.isEditable else { return false }
+        return window.firstResponder === field
+    }
+
+    /// Dictation was started with the cursor in a text field of the notch (a reply, a search, a note): the finished words go in there, at the cursor, the way
+    /// typing would. Dictation otherwise treats a field of this app as nothing to type into (the app is not "another app"), so they went nowhere.
+    @discardableResult
+    func insertDictatedText(_ text: String, into field: NSTextView) -> Bool {
+        guard !text.isEmpty, self.canInsertDictatedText(into: field) else { return false }
+        field.insertText(text, replacementRange: field.selectedRange())
+        return true
+    }
+
     /// Lets the notch take the keyboard while a reply is being typed.
     func beginTextEntry() {
         guard let window else { return }
@@ -1055,4 +1076,9 @@ final class NotchHubController {
         self.model.setClosedSize(NotchGeometry.closedSize(for: screen))
         window.setFrame(NotchGeometry.windowFrame(for: screen), display: true)
     }
+}
+
+/// The notch's text field that had the cursor when a dictation began, held loosely: it may be gone (the notch closed) by the time the words are ready.
+final class NotchTextFieldRef {
+    weak var field: NSTextView?
 }
