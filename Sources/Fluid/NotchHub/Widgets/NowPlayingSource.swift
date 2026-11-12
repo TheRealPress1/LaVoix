@@ -4,7 +4,10 @@ import SwiftUI
 /// Where a track is coming from: a music app, or a website playing in a browser.
 struct NowPlayingSource: Equatable, Codable {
     enum Kind: String, Codable {
-        case youtube, youtubeMusic, spotify, appleMusic, soundcloud, netflix, twitch, vimeo, other
+        case youtube, youtubeMusic, spotify, appleMusic, soundcloud, netflix, twitch, vimeo
+        /// Social sites, whose feeds play video: they wear their own mark, not the browser's.
+        case instagram, linkedin, tiktok, facebook, x
+        case other
     }
 
     var kind: Kind
@@ -40,7 +43,34 @@ struct NowPlayingSource: Equatable, Codable {
         if matches("twitch.tv") { return NowPlayingSource(kind: .twitch, name: "Twitch") }
         if matches("vimeo.com") { return NowPlayingSource(kind: .vimeo, name: "Vimeo") }
         if matches("music.apple.com") { return NowPlayingSource(kind: .appleMusic, name: "Apple Music") }
+        if matches("instagram.com") { return NowPlayingSource(kind: .instagram, name: "Instagram") }
+        if matches("linkedin.com") || matches("lnkd.in") { return NowPlayingSource(kind: .linkedin, name: "LinkedIn") }
+        if matches("tiktok.com") { return NowPlayingSource(kind: .tiktok, name: "TikTok") }
+        if matches("facebook.com") || matches("fb.com") { return NowPlayingSource(kind: .facebook, name: "Facebook") }
+        if matches("x.com") || matches("twitter.com") { return NowPlayingSource(kind: .x, name: "X") }
         return nil
+    }
+
+    /// The website a browser tab is on, from its TITLE, for when its address cannot be read (the browser is not the app in front, or it will not say):
+    /// "(2) Instagram", "(1) Feed | LinkedIn", "Home / X". Only a title whose LAST part (after " | ", " - ", " / " and the like, a leading "(3) " count
+    /// ignored) is exactly a social site's name counts, so "How to grow on Instagram - YouTube" stays a YouTube video.
+    static func site(forBrowserTitle title: String) -> NowPlayingSource? {
+        var text = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("("), let close = text.firstIndex(of: ")"), text[text.index(after: text.startIndex) ..< close].allSatisfy(\.isNumber) {
+            text = String(text[text.index(after: close)...]).trimmingCharacters(in: .whitespaces)
+        }
+        var last = text
+        for separator in [" | ", " - ", " – ", " — ", " · ", " • ", " / "] {
+            if let range = last.range(of: separator, options: .backwards) { last = String(last[range.upperBound...]) }
+        }
+        switch last.trimmingCharacters(in: .whitespaces).lowercased() {
+        case "instagram": return NowPlayingSource(kind: .instagram, name: "Instagram")
+        case "linkedin": return NowPlayingSource(kind: .linkedin, name: "LinkedIn")
+        case "tiktok": return NowPlayingSource(kind: .tiktok, name: "TikTok")
+        case "facebook": return NowPlayingSource(kind: .facebook, name: "Facebook")
+        case "x": return NowPlayingSource(kind: .x, name: "X")
+        default: return nil
+        }
     }
 }
 
@@ -72,6 +102,11 @@ struct NowPlayingSourceLogo: View {
             case .vimeo:
                 RoundedRectangle(cornerRadius: self.size * 0.28, style: .continuous).fill(Color(red: 0.1, green: 0.72, blue: 0.93))
                     .overlay(Text("v").font(.system(size: self.size * 0.75, weight: .heavy, design: .rounded)).foregroundStyle(.white))
+            case .instagram: QuickLinkIcon(kind: .instagram, size: self.size)
+            case .linkedin: QuickLinkIcon(kind: .linkedin, size: self.size)
+            case .tiktok: QuickLinkIcon(kind: .tiktok, size: self.size)
+            case .facebook: QuickLinkIcon(kind: .facebook, size: self.size)
+            case .x: QuickLinkIcon(kind: .x, size: self.size)
             default:
                 if let icon = Self.appIcon(bundleID: self.bundleID) {
                     Image(nsImage: icon).resizable()

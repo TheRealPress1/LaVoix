@@ -149,6 +149,12 @@ final class NowPlayingStore: ObservableObject {
         /// the artist a beat after the title.
         var key: String { "\(self.bundleID ?? "")|\(self.title)" }
 
+        /// The site to show: the one read from the browser's tab, or, in a browser whose address was not read, the one the tab's title names
+        /// ("(2) Instagram"), so a site wears its own mark and name and not the browser's.
+        var shownSite: NowPlayingSource? {
+            self.site ?? (NowPlayingSource.isBrowser(self.bundleID) ? NowPlayingSource.site(forBrowserTitle: self.title) : nil)
+        }
+
         static func == (lhs: Track, rhs: Track) -> Bool {
             lhs.title == rhs.title && lhs.artist == rhs.artist && lhs.album == rhs.album
                 && lhs.bundleID == rhs.bundleID && lhs.isPlaying == rhs.isPlaying
@@ -171,7 +177,11 @@ final class NowPlayingStore: ObservableObject {
         var viewCount: Int64?
 
         var key: String { "\(self.bundleID ?? "")|\(self.title)" }
-        var source: NowPlayingSource { self.site ?? NowPlayingSource.native(bundleID: self.bundleID, appName: self.appName) }
+        /// See `Track.shownSite`: an entry logged before the site was known (or when it could not be read) still shows it, from its title.
+        var shownSite: NowPlayingSource? {
+            self.site ?? (NowPlayingSource.isBrowser(self.bundleID) ? NowPlayingSource.site(forBrowserTitle: self.title) : nil)
+        }
+        var source: NowPlayingSource { self.shownSite ?? NowPlayingSource.native(bundleID: self.bundleID, appName: self.appName) }
     }
 
     static let maxHistory = 100
@@ -246,6 +256,9 @@ final class NowPlayingStore: ObservableObject {
         let yt = NowPlayingSource(kind: .youtube, name: "YouTube")
         store.history = [
             HistoryItem(id: UUID(), title: "Weekend Update ft. James Austin Johnson and Ashley Padilla", artist: "Saturday Night Live", album: nil, appName: "Dia", bundleID: "company.thebrowser.dia", date: now.addingTimeInterval(-90), site: yt, viewCount: 1_234_567),
+            // Feeds in the browser, logged with no site: they show their own mark and name from the tab's title, not the browser's.
+            HistoryItem(id: UUID(), title: "(2) Instagram", artist: nil, album: nil, appName: "Dia", bundleID: "company.thebrowser.dia", date: now.addingTimeInterval(-1100), site: nil),
+            HistoryItem(id: UUID(), title: "(1) Feed | LinkedIn", artist: nil, album: nil, appName: "Dia", bundleID: "company.thebrowser.dia", date: now.addingTimeInterval(-1300), site: nil),
             HistoryItem(id: UUID(), title: "Nights", artist: "Frank Ocean", album: "Blonde", appName: "Spotify", bundleID: "com.spotify.client", date: now.addingTimeInterval(-900), site: nil),
             HistoryItem(id: UUID(), title: "Shark Tank US | Can Aira Secure A Deal?", artist: "Sony Pictures Television", album: nil, appName: "Dia", bundleID: "company.thebrowser.dia", date: now.addingTimeInterval(-4000), site: yt),
             HistoryItem(id: UUID(), title: "Blinding Lights", artist: "The Weeknd", album: "After Hours", appName: "Music", bundleID: "com.apple.Music", date: now.addingTimeInterval(-9000), site: nil),
@@ -534,7 +547,7 @@ final class NowPlayingStore: ObservableObject {
     private func logWatch(_ track: Track?) {
         guard !self.isSample else { return }
         guard let track, track.isPlaying else { self.watchLog.observe(nil); return }
-        let source = track.site ?? NowPlayingSource.native(bundleID: track.bundleID, appName: track.appName)
+        let source = track.shownSite ?? NowPlayingSource.native(bundleID: track.bundleID, appName: track.appName)
         let musicKinds: Set<NowPlayingSource.Kind> = [.spotify, .appleMusic, .youtubeMusic, .soundcloud]
         let music = musicKinds.contains(source.kind) || track.bundleID == "com.spotify.client" || track.bundleID == "com.apple.Music"
         self.watchLog.observe(WatchSession(

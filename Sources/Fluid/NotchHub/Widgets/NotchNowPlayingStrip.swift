@@ -150,7 +150,7 @@ private struct StripView: View {
                 if let art = self.model.track?.artwork {
                     Image(nsImage: art).resizable().aspectRatio(contentMode: .fill)
                 } else {
-                    NowPlayingSourceLogo(source: self.model.track?.site, bundleID: self.model.track?.bundleID, size: 22)
+                    NowPlayingSourceLogo(source: self.model.track?.shownSite, bundleID: self.model.track?.bundleID, size: 22)
                 }
             }
             .frame(width: 22, height: 22)

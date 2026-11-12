@@ -2420,6 +2420,13 @@ enum NotchHubDebug {
             check("YouTube detected", NowPlayingSource.site(forHost: "www.youtube.com")?.kind == .youtube)
             check("YouTube Music is not YouTube", NowPlayingSource.site(forHost: "music.youtube.com")?.kind == .youtubeMusic)
             check("unknown sites give no label", NowPlayingSource.site(forHost: "mail.google.com") == nil)
+            check("Instagram, LinkedIn, TikTok, Facebook and X are recognised by address", NowPlayingSource.site(forHost: "www.instagram.com")?.kind == .instagram && NowPlayingSource.site(forHost: "www.linkedin.com")?.name == "LinkedIn" && NowPlayingSource.site(forHost: "vm.tiktok.com")?.kind == .tiktok && NowPlayingSource.site(forHost: "m.facebook.com")?.kind == .facebook && NowPlayingSource.site(forHost: "x.com")?.kind == .x && NowPlayingSource.site(forHost: "twitter.com")?.kind == .x)
+            check("a look-alike address is not one of them", NowPlayingSource.site(forHost: "notinstagram.com") == nil && NowPlayingSource.site(forHost: "linkedin.com.example.org") == nil && NowPlayingSource.site(forHost: "box.com") == nil)
+            check("a tab title that ends with the site's name gives the site, with or without the unread count", NowPlayingSource.site(forBrowserTitle: "(2) Instagram")?.kind == .instagram && NowPlayingSource.site(forBrowserTitle: "(1) Feed | LinkedIn")?.kind == .linkedin && NowPlayingSource.site(forBrowserTitle: "Instagram")?.kind == .instagram && NowPlayingSource.site(forBrowserTitle: "(12) Home / X")?.kind == .x && NowPlayingSource.site(forBrowserTitle: "Facebook")?.kind == .facebook)
+            check("a video that merely mentions a site is not that site", NowPlayingSource.site(forBrowserTitle: "How to grow on Instagram - YouTube") == nil && NowPlayingSource.site(forBrowserTitle: "Instagram tips and tricks") == nil && NowPlayingSource.site(forBrowserTitle: "Netflix") == nil && NowPlayingSource.site(forBrowserTitle: "(2x) Instagram") == nil && NowPlayingSource.site(forBrowserTitle: "") == nil)
+            let tabHistory = NowPlayingStore.HistoryItem(id: UUID(), title: "(2) Instagram", artist: nil, album: nil, appName: "Dia", bundleID: "company.thebrowser.dia", date: Date(), site: nil, videoID: nil, viewCount: nil)
+            check("a browser entry logged with no site shows the site from its title (Instagram, not Dia), and a song in a native app is left alone", tabHistory.shownSite?.kind == .instagram && tabHistory.source.name == "Instagram"
+                && NowPlayingStore.HistoryItem(id: UUID(), title: "(2) Instagram", artist: nil, album: nil, appName: "Music", bundleID: "com.apple.Music", date: Date(), site: nil, videoID: nil, viewCount: nil).shownSite == nil)
             check("video ID from a watch page", NowPlayingArtwork.youTubeVideoID(host: "www.youtube.com", path: "/watch", query: "v=dQw4w9WgXcQ&t=30s") == "dQw4w9WgXcQ")
             check("video ID from a short link", NowPlayingArtwork.youTubeVideoID(host: "youtu.be", path: "/dQw4w9WgXcQ", query: "") == "dQw4w9WgXcQ")
             check("video ID from a Shorts page", NowPlayingArtwork.youTubeVideoID(host: "youtube.com", path: "/shorts/dQw4w9WgXcQ", query: "") == "dQw4w9WgXcQ")
@@ -2475,7 +2482,7 @@ enum NotchHubDebug {
 
             // 9b. What the right side opens on: the history, with grading listed second.
             check("Now Playing opens on the history, not on grading", NowPlayingWidgetView.defaultRightTab == .history)
-            check("the switch lists History first and Grade second", NowPlayingWidgetView.RightTab.allCases.map(\.label) == ["History", "Grade"])
+            check("the switch lists History first and Grade second (then Lyrics)", NowPlayingWidgetView.RightTab.allCases.map(\.label) == ["History", "Grade", "Lyrics"])
 
             // 10. The buttons on the Bookshelf card act on the player the card shows, by its bundle identifier, and only when it is running.
             final class Recorder: @unchecked Sendable { var scripts: [String] = [] }

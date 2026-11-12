@@ -202,7 +202,7 @@ struct NowPlayingWidgetView: View {
                 // No artwork at all: show where it's from, not an empty box.
                 ZStack {
                     Color.white.opacity(0.1)
-                    NowPlayingSourceLogo(source: track.site, bundleID: track.bundleID, size: 30)
+                    NowPlayingSourceLogo(source: track.shownSite, bundleID: track.bundleID, size: 30)
                 }
             }
         }
@@ -217,7 +217,7 @@ struct NowPlayingWidgetView: View {
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 5) {
-                NowPlayingSourceLogo(source: track.site, bundleID: track.bundleID, size: 13)
+                NowPlayingSourceLogo(source: track.shownSite, bundleID: track.bundleID, size: 13)
                 Text(self.detailLine(track)).font(.system(size: 11)).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
             }
         }
@@ -408,7 +408,7 @@ private struct HistoryRow: View {
                 }
                 .frame(width: 32, height: 32)
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                NowPlayingSourceLogo(source: self.item.site, bundleID: self.item.bundleID, size: 14)
+                NowPlayingSourceLogo(source: self.item.shownSite, bundleID: self.item.bundleID, size: 14)
                     .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(Color.black, lineWidth: 1.5))
                     .offset(x: 4, y: 4)
             }
