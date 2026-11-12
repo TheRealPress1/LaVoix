@@ -26,6 +26,7 @@ final class NotchHubController {
     private var closeTask: Task<Void, Never>?
     private var releaseTask: Task<Void, Never>?
     private var peekTask: Task<Void, Never>?
+    private var welcomeTask: Task<Void, Never>?
     private var bannerTask: Task<Void, Never>?
     private var meetingCardTask: Task<Void, Never>?
     private var bannerHovered = false
@@ -162,6 +163,7 @@ final class NotchHubController {
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             await self?.prewarmWidgets()
         }
+        self.scheduleWelcomeBack()
         self.dragMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] _ in
             Task { @MainActor in self?.fileDragMoved() }
         }
@@ -190,6 +192,7 @@ final class NotchHubController {
         if let becomeKeyObserver { NotificationCenter.default.removeObserver(becomeKeyObserver) }
         self.becomeKeyObserver = nil
         self.peekTask?.cancel()
+        self.welcomeTask?.cancel()
         self.bannerTask?.cancel()
         self.meetingCardTask?.cancel()
         self.model.hideBanner()
@@ -475,7 +478,21 @@ final class NotchHubController {
         self.window?.ignoresMouseEvents = false
         self.bannerHovered = false
         self.model.showBanner(content)
-        self.scheduleBannerDismiss(after: content.meetingSet != nil ? 9 : (content.alertSymbol == nil ? 6 : (content.actionID == nil ? 12 : 30)))
+        self.scheduleBannerDismiss(after: content.welcomeBack != nil ? 4.2 : (content.meetingSet != nil ? 9 : (content.alertSymbol == nil ? 6 : (content.actionID == nil ? 12 : 30))))
+    }
+
+    /// The "Welcome back" card: drops out of the notch a moment after it comes back on (the app opening, or the notch being switched on again) to say it
+    /// is running. A test or render run never shows it, and it gives way like any card to a dictation overlay, a recording card or an open notch.
+    private func scheduleWelcomeBack() {
+        guard !DiagnosticRun.isActive else { return }
+        self.welcomeTask?.cancel()
+        self.welcomeTask = Task { [weak self] in
+            // Lets the closed notch settle first, so the card reads as the notch coming back and not as part of the launch.
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard !Task.isCancelled, let self, self.isRunning else { return }
+            let greeting = NotchWelcomeCardView.greeting(name: NotchWelcomeCardView.firstName(from: NSFullUserName()))
+            self.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: "Welcome back", subtitle: nil, text: "", date: Date(), welcomeBack: greeting))
+        }
     }
 
     /// A card that says a meeting was just set (its time, the Meet link, who was invited). It drops out of a closed notch, so an open one folds away first.
@@ -700,6 +717,8 @@ final class NotchHubController {
             if inside, !self.bannerHovered {
                 self.bannerHovered = true
                 self.bannerTask?.cancel()
+                // A greeting has nothing to reply to: the pointer resting on it only keeps it there.
+                if self.model.banner?.welcomeBack != nil { return }
                 self.model.setBannerExpanded(true)
                 // Hovering is enough to start typing: take the keyboard now.
                 self.beginTextEntry()

@@ -40,6 +40,8 @@ struct NotchBannerContent: Equatable, Identifiable {
     var textIsPlaceholder = false
     /// Set for the card that confirms a new calendar meeting (its time, the Meet link, who was invited), instead of a message.
     var meetingSet: MeetingSet? = nil
+    /// Set for the "Welcome back" card that drops out when the notch comes back on: the greeting line under the title (see NotchWelcomeCardView).
+    var welcomeBack: String? = nil
 
     /// A meeting that was just set, as the card tells it.
     struct MeetingSet: Equatable {
@@ -104,6 +106,7 @@ struct NotchBannerContent: Equatable, Identifiable {
 
     /// Everything in the card that sits under the notch band, with the reply row only when expanded, and room for the enlarged file while one is.
     func contentHeight(expanded: Bool, enlarged: Bool = false) -> CGFloat {
+        if self.welcomeBack != nil { return NotchWelcomeCardView.contentHeight }
         // Title row, the time, one more line, then the buttons.
         if self.meetingSet != nil { return 8 + 19 + 2 + 17 + 2 + 15 + 12 + 30 + 18 }
         if self.lookStyle { return NotchLookCardView.contentHeight(text: self.text, hasButtons: self.actionLabel != nil, cardWidth: NotchGeometry.bannerWidth) }
@@ -138,7 +141,10 @@ struct NotchBannerView: View {
     private var enlargedFile: MessageAttachment? { self.hovering.enlarged ?? Self.previewEnlarged }
 
     var body: some View {
-        if let set = self.content.meetingSet {
+        if let greeting = self.content.welcomeBack {
+            NotchWelcomeCardView(greeting: greeting, staticLayout: self.staticLayout)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        } else if let set = self.content.meetingSet {
             self.meetingBody(set)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else if self.content.lookStyle {

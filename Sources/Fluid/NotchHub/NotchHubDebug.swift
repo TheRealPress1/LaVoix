@@ -148,8 +148,12 @@ enum NotchHubDebug {
                 if widgetName == "banner-sticker" || widgetName == "banner-sticker-plain" {
                     files = [MessagesSampleFiles.makeBannerSticker(flagged: widgetName == "banner-sticker")]
                 }
+                // banner-welcome: the "Welcome back" card that drops out when the notch comes back on (invented name).
+                if widgetName == "banner-welcome" {
+                    model.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: "Welcome back", subtitle: nil, text: "", date: Date(), welcomeBack: NotchWelcomeCardView.greeting(name: "Maya")))
+                    model.setBannerExpanded(false)
                 // banner-meeting / banner-meeting-nolink: the card that says a meeting was set (invented).
-                if widgetName.hasPrefix("banner-meeting") {
+                } else if widgetName.hasPrefix("banner-meeting") {
                     let start = Calendar.current.date(bySettingHour: 15, minute: 45, second: 0, of: Date()) ?? Date()
                     model.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: "Call with Martin", subtitle: nil, text: "", date: Date(), meetingSet: NotchBannerContent.MeetingSet(
                         title: "Call with Martin", start: start, end: start.addingTimeInterval(1800),
@@ -1766,6 +1770,13 @@ enum NotchHubDebug {
                   && NotchBannerContent.MeetingSet(title: "t", start: noon, end: noon, meetLink: nil, invited: [], viaGoogle: false).detailLine == "Added to your calendar")
             let setCard = NotchBannerContent(chatID: 0, chatGUID: "", title: "t", subtitle: nil, text: "", date: now, meetingSet: NotchBannerContent.MeetingSet(title: "t", start: noon, end: noon, meetLink: setLink, invited: [], viaGoogle: true))
             check("the card has room for its buttons", setCard.contentHeight(expanded: false) > NotchBannerContent(chatID: 1, chatGUID: "g", title: "t", subtitle: nil, text: "hi", date: now).contentHeight(expanded: false))
+            // The "Welcome back" card (invented name, fixed hours in UTC)
+            func hello(_ hour: Int, _ name: String?) -> String { NotchWelcomeCardView.greeting(name: name, now: utc.date(from: DateComponents(year: 2026, month: 11, day: 12, hour: hour, minute: 30)) ?? now, calendar: utc) }
+            check("the greeting follows the time of day: small hours, morning, afternoon, evening", hello(3, nil) == "Hello" && hello(8, nil) == "Good morning" && hello(12, nil) == "Good afternoon" && hello(17, nil) == "Good afternoon" && hello(18, nil) == "Good evening" && hello(23, nil) == "Good evening")
+            check("the greeting adds the first name when there is one, and nothing when the name is empty", hello(8, "Maya") == "Good morning, Maya" && hello(8, "") == "Good morning")
+            check("the first name is the account name's first word, or nothing", NotchWelcomeCardView.firstName(from: "Maya Chen") == "Maya" && NotchWelcomeCardView.firstName(from: "  Maya  ") == "Maya" && NotchWelcomeCardView.firstName(from: "") == nil && NotchWelcomeCardView.firstName(from: "   ") == nil)
+            let welcomeCard = NotchBannerContent(chatID: 0, chatGUID: "", title: "Welcome back", subtitle: nil, text: "", date: now, welcomeBack: "Good morning, Maya")
+            check("the welcome card is a slim one, shorter than a message card with its reply row", welcomeCard.contentHeight(expanded: false) == NotchWelcomeCardView.contentHeight && welcomeCard.contentHeight(expanded: true) == welcomeCard.contentHeight(expanded: false) && welcomeCard.contentHeight(expanded: true) < NotchBannerContent(chatID: 1, chatGUID: "g", title: "t", subtitle: nil, text: "hi", date: now).contentHeight(expanded: true))
 
             // Which meetings were recorded (made-up folders in a temporary place; only titles and times are read)
             let tmpRoot = FileManager.default.temporaryDirectory.appendingPathComponent("lavoix-recorded-\(UUID().uuidString)", isDirectory: true)
