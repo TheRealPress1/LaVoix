@@ -105,6 +105,8 @@ enum NotchHubDebug {
                 case "meeting-ended-writing": model.phase = .ended; model.endedAt = Date(); model.notes = .writing("Writing notes…")
                 case "meeting-ended-ready": model.phase = .ended; model.endedAt = Date(); model.notes = .ready(UUID())
                 case "meeting-failed": model.phase = .failed("Recording was interrupted. Your audio is saved.")
+                case "meeting-failed-call": model.phase = .failed("Couldn't tell which app the call is in. Open the call in a browser or meeting app, or start it from the meeting prompt.")
+                case "meeting-failed-plain": model.phase = .failed("Microphone permission is required to record this meeting.")
                 default: break
                 }
                 // The clock ticks from `Date()`, so freeze it for a stable render.
@@ -148,8 +150,10 @@ enum NotchHubDebug {
                 if widgetName == "banner-sticker" || widgetName == "banner-sticker-plain" {
                     files = [MessagesSampleFiles.makeBannerSticker(flagged: widgetName == "banner-sticker")]
                 }
-                // banner-welcome: the "Welcome back" card that drops out when the notch comes back on (invented name).
-                if widgetName == "banner-welcome" {
+                // banner-welcome / banner-welcome-sheen: the "Welcome back" card that drops out when the notch comes back on (invented name).
+                if widgetName.hasPrefix("banner-welcome") {
+                    // banner-welcome-sheen: the light caught halfway across the title.
+                    if widgetName.hasSuffix("sheen") { NotchWelcomeCardView.previewSheen = 0.45 }
                     model.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: "Welcome back", subtitle: nil, text: "", date: Date(), welcomeBack: NotchWelcomeCardView.greeting(name: "Maya")))
                     model.setBannerExpanded(false)
                 // banner-meeting / banner-meeting-nolink: the card that says a meeting was set (invented).
@@ -1775,6 +1779,19 @@ enum NotchHubDebug {
             check("the greeting follows the time of day: small hours, morning, afternoon, evening", hello(3, nil) == "Hello" && hello(8, nil) == "Good morning" && hello(12, nil) == "Good afternoon" && hello(17, nil) == "Good afternoon" && hello(18, nil) == "Good evening" && hello(23, nil) == "Good evening")
             check("the greeting adds the first name when there is one, and nothing when the name is empty", hello(8, "Maya") == "Good morning, Maya" && hello(8, "") == "Good morning")
             check("the first name is the account name's first word, or nothing", NotchWelcomeCardView.firstName(from: "Maya Chen") == "Maya" && NotchWelcomeCardView.firstName(from: "  Maya  ") == "Maya" && NotchWelcomeCardView.firstName(from: "") == nil && NotchWelcomeCardView.firstName(from: "   ") == nil)
+            // A recording that failed is told as a heading and what to do (invented-free: these are the app's own messages)
+            let callMessage = NotchMeetingModel.splitFailure("Couldn't tell which app the call is in. Open the call in a browser or meeting app, or start it from the meeting prompt.")
+            check("a failure message is split into its first sentence and what to do", callMessage.title == "Couldn't tell which app the call is in" && callMessage.detail == "Open the call in a browser or meeting app, or start it from the meeting prompt.")
+            let interrupted = NotchMeetingModel.splitFailure("Recording was interrupted. Your audio is saved.")
+            check("a short message splits the same way", interrupted.title == "Recording was interrupted" && interrupted.detail == "Your audio is saved.")
+            let oneSentence = NotchMeetingModel.splitFailure("Microphone permission is required to record this meeting.")
+            check("one sentence has no detail, and loses only its full stop", oneSentence.title == "Microphone permission is required to record this meeting" && oneSentence.detail == nil)
+            check("a dot inside a number or an abbreviation without a space after it is not the end", NotchMeetingModel.splitFailure("Version 3.5 failed. Try again.").title == "Version 3.5 failed" && NotchMeetingModel.splitFailure("Version 3.5 failed. Try again.").detail == "Try again." && NotchMeetingModel.splitFailure("No answer from Zoom (zoom.us) yet").detail == nil)
+            check("an empty message stays empty and a failure phase knows its text", NotchMeetingModel.splitFailure("  ").title == "" && NotchMeetingModel.Phase.failed("A. B").failureText?.detail == "B" && NotchMeetingModel.Phase.recording.failureText == nil)
+            let oneLine = NotchMeetingModel.failedExtraHeight(.failed("It failed. Try again."))
+            let twoLines = NotchMeetingModel.failedExtraHeight(.failed("Couldn't tell which app the call is in. Open the call in a browser or meeting app, or start it from the meeting prompt."))
+            check("a failure with something to do is taller than the one without, by its lines; a lone sentence and other phases add nothing", oneLine > 0 && twoLines > oneLine && NotchMeetingModel.failedExtraHeight(.failed("Microphone permission is required.")) == 0 && NotchMeetingModel.failedExtraHeight(.recording) == 0)
+            check("the detail of the call message takes two lines at the card's width, and a long one at most four", NotchMeetingModel.failedDetailLines("Open the call in a browser or meeting app, or start it from the meeting prompt.") == 2 && NotchMeetingModel.failedDetailLines(String(repeating: "word ", count: 120)) == 4)
             let welcomeCard = NotchBannerContent(chatID: 0, chatGUID: "", title: "Welcome back", subtitle: nil, text: "", date: now, welcomeBack: "Good morning, Maya")
             check("the welcome card is a slim one, shorter than a message card with its reply row", welcomeCard.contentHeight(expanded: false) == NotchWelcomeCardView.contentHeight && welcomeCard.contentHeight(expanded: true) == welcomeCard.contentHeight(expanded: false) && welcomeCard.contentHeight(expanded: true) < NotchBannerContent(chatID: 1, chatGUID: "g", title: "t", subtitle: nil, text: "hi", date: now).contentHeight(expanded: true))
 

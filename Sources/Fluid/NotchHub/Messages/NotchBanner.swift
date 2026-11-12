@@ -144,6 +144,8 @@ struct NotchBannerView: View {
         if let greeting = self.content.welcomeBack {
             NotchWelcomeCardView(greeting: greeting, staticLayout: self.staticLayout)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                // The warm glow behind the hand must not spill past the card's edge.
+                .clipped()
         } else if let set = self.content.meetingSet {
             self.meetingBody(set)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

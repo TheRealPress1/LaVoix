@@ -17,6 +17,51 @@ final class NotchMeetingModel: ObservableObject {
 
         /// The slim one-row card.
         var isCompact: Bool { self == .starting || self == .detected }
+
+        /// For a failure: the message as a heading and, when there is more to it, what is left (what to do about it). nil for any other phase.
+        var failureText: (title: String, detail: String?)? {
+            guard case let .failed(message) = self else { return nil }
+            return NotchMeetingModel.splitFailure(message)
+        }
+    }
+
+    /// The width the failure's detail has: the card (400) less its side padding (26 each) and the disc and gap beside it.
+    static let failedDetailWidth: CGFloat = 400 - 52 - 32 - 12
+    static let failedDetailFont = NSFont.systemFont(ofSize: 11.5)
+
+    /// How many lines the detail of a failure needs (up to four).
+    static func failedDetailLines(_ detail: String) -> Int {
+        let bounds = (detail as NSString).boundingRect(
+            with: CGSize(width: self.failedDetailWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: self.failedDetailFont]
+        )
+        let line = NSLayoutManager().defaultLineHeight(for: self.failedDetailFont)
+        return min(4, max(1, Int((bounds.height / line).rounded(.up))))
+    }
+
+    /// Height a failure card needs over the plain one when it has a detail: the heading, the detail's lines, and the button under them.
+    /// Nothing for a failure with no detail (one row, the button beside it) or any other phase.
+    static func failedExtraHeight(_ phase: Phase) -> CGFloat {
+        guard let detail = phase.failureText?.detail else { return 0 }
+        return 9 + (CGFloat(self.failedDetailLines(detail)) * NSLayoutManager().defaultLineHeight(for: self.failedDetailFont)).rounded(.up)
+    }
+
+    /// "Couldn't tell which app the call is in. Open the call in a browser or meeting app." gives the first sentence, without its full stop, as the heading and the
+    /// rest as the detail; a message of one sentence has no detail. A full stop inside a word or a number ("3.5", "zoom.us") is not the end of a sentence.
+    static func splitFailure(_ message: String) -> (title: String, detail: String?) {
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let chars = Array(text)
+        var i = 0
+        while i < chars.count - 1 {
+            if ".!?".contains(chars[i]), chars[i + 1].isWhitespace {
+                let title = String(chars[0...i]).trimmingCharacters(in: CharacterSet(charactersIn: ".").union(.whitespaces))
+                let detail = String(chars[(i + 1)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !title.isEmpty { return (title, detail.isEmpty ? nil : detail) }
+            }
+            i += 1
+        }
+        let whole = text.trimmingCharacters(in: CharacterSet(charactersIn: ".").union(.whitespaces))
+        return (whole.isEmpty ? text : whole, nil)
     }
 
     @Published var phase: Phase = .recording
@@ -173,7 +218,7 @@ struct NotchMeetingCardView: View {
         let size = NotchGeometry.meetingCardSize(
             notchHeight: self.notchHeight,
             compact: self.model.phase.isCompact,
-            noticeHeight: showsNotice ? NotchGeometry.meetingNoticeHeight : 0
+            noticeHeight: showsNotice ? NotchGeometry.meetingNoticeHeight : NotchMeetingModel.failedExtraHeight(self.model.phase)
         )
         return ZStack(alignment: .top) {
             NotchHubShape(topCornerRadius: 10, bottomCornerRadius: 28)
@@ -363,17 +408,52 @@ struct NotchMeetingCardView: View {
             }
             .padding(.top, 8)
         case let .failed(message):
-            HStack(spacing: 10) {
-                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 15)).foregroundStyle(.orange)
-                Text(message).font(.system(size: 12)).lineLimit(2).foregroundStyle(.white.opacity(0.8))
-                Spacer(minLength: 8)
-                Button(action: self.onWriteNotes) {
-                    Text("Open").font(.system(size: 12, weight: .semibold)).foregroundStyle(.black)
-                        .padding(.horizontal, 12).padding(.vertical, 5).background(Capsule().fill(Color.white))
-                }
-                .buttonStyle(.plain)
+            // What went wrong as a heading and what to do about it under it (a long sentence used to run out of room and end in "..."), a soft amber
+            // disc instead of a filled warning triangle, and the same white button as the other cards. With something to do the text has the whole
+            // width and the button sits under it (as in the notices on the recording card); a lone sentence keeps the button beside it.
+            let text = NotchMeetingModel.splitFailure(message)
+            let disc = ZStack {
+                Circle().fill(Color.orange.opacity(0.16))
+                Image(systemName: "exclamationmark").font(.system(size: 14, weight: .bold)).foregroundStyle(Color.orange)
             }
-            .padding(.top, 8)
+            .frame(width: 32, height: 32)
+            let button = Button(action: self.onWriteNotes) {
+                Text("Open").font(.system(size: 12, weight: .semibold)).foregroundStyle(.black)
+                    .padding(.horizontal, 14).padding(.vertical, 5).background(Capsule().fill(Color.white))
+            }
+            .buttonStyle(.plain)
+            if let detail = text.detail {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .top, spacing: 12) {
+                        disc
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(text.title).font(.system(size: 13, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                            Text(detail)
+                                .font(Font(NotchMeetingModel.failedDetailFont))
+                                .foregroundStyle(.white.opacity(0.58))
+                                .lineLimit(4)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    HStack { Spacer(minLength: 0); button }
+                }
+                .padding(.top, 4)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(message)
+            } else {
+                HStack(spacing: 12) {
+                    disc
+                    Text(text.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    button
+                }
+                .padding(.top, 8)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(message)
+            }
         }
     }
 
@@ -1007,7 +1087,8 @@ final class NotchMeetingCardController {
             for: screen,
             compact: self.model.phase.isCompact,
             pill: self.model.isPill,
-            hasNotice: self.model.phase == .recording && self.model.notice != nil
+            hasNotice: self.model.phase == .recording && self.model.notice != nil,
+            failedExtra: NotchMeetingModel.failedExtraHeight(self.model.phase)
         )
         let panel = self.panel ?? self.makePanel(frame: frame, notchHeight: NotchGeometry.closedSize(for: screen).height)
         self.panel = panel

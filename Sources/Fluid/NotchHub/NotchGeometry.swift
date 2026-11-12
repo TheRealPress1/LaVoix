@@ -68,11 +68,11 @@ enum NotchGeometry {
         CGSize(width: notch.width + self.meetingPillWing * 2, height: notch.height)
     }
 
-    @MainActor static func meetingCardFrame(for screen: NSScreen, compact: Bool = false, pill: Bool = false, hasNotice: Bool = false) -> NSRect {
+    @MainActor static func meetingCardFrame(for screen: NSScreen, compact: Bool = false, pill: Bool = false, hasNotice: Bool = false, failedExtra: CGFloat = 0) -> NSRect {
         let notch = self.closedSize(for: screen)
         let size = pill
             ? self.meetingPillSize(notch: notch)
-            : self.meetingCardSize(notchHeight: notch.height, compact: compact, noticeHeight: hasNotice ? self.meetingNoticeHeight : 0)
+            : self.meetingCardSize(notchHeight: notch.height, compact: compact, noticeHeight: hasNotice ? self.meetingNoticeHeight : failedExtra)
         let width = size.width + self.meetingCardPadding * 2
         let height = size.height + self.meetingCardPadding
         return NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height)
