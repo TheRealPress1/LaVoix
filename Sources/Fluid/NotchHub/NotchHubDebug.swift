@@ -411,6 +411,23 @@ enum NotchHubDebug {
             hub.debugSetOpen(false)
             try? await Task.sleep(nanoseconds: 800_000_000)
             out(card.debugReport("hub closed (card should be back)"))
+            // The closed recording strip opens its card (where Stop is) when the pointer rests on it, and not when it only passes
+            card.model.expanded = false
+            card.pillHoverSeconds = 0.3
+            card.pillHover(true)
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            out("pointer on the strip, pause not over: expanded=\(card.model.expanded) (expect false)")
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            out("pointer rested on the strip: expanded=\(card.model.expanded) (expect true)")
+            card.toggleExpanded()
+            card.pillHover(true)
+            card.pillHover(false)
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            out("pointer left before the pause was over: expanded=\(card.model.expanded) (expect false)")
+            card.model.expanded = true
+            card.pillHover(true)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            out("already open: stays open, not toggled shut: expanded=\(card.model.expanded) (expect true)")
             card.dismiss()
             out(card.debugReport("dismissed"))
             hub.stop()

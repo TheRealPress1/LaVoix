@@ -120,6 +120,8 @@ struct NotchMeetingCardView: View {
     var onDetectedHover: (Bool) -> Void = { _ in }
     var onToggleExpanded: () -> Void = {}
     var onCardHover: (Bool) -> Void = { _ in }
+    /// The pointer came onto or left the closed recording strip.
+    var onPillHover: (Bool) -> Void = { _ in }
     var onNoticeStop: () -> Void = {}
     var onNoticeDismiss: () -> Void = {}
 
@@ -186,18 +188,25 @@ struct NotchMeetingCardView: View {
                         .padding(.leading, 14)
                         .frame(width: wing, alignment: .leading)
                         Spacer(minLength: self.model.notchWidth)
-                        RecordingDot()
-                            .padding(.trailing, 16)
-                            .frame(width: wing, alignment: .trailing)
+                        // The chevron says the strip opens: Stop is in the card it opens (the pointer resting here for a moment opens it, so does a click).
+                        HStack(spacing: 7) {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.5))
+                            RecordingDot()
+                        }
+                        .padding(.trailing, 16)
+                        .frame(width: wing, alignment: .trailing)
                     }
                     .frame(width: size.width, height: size.height)
                     .contentShape(Rectangle())
                     .onTapGesture(perform: self.onToggleExpanded)
+                    .onHover { self.onPillHover($0) }
                 }
         }
         .frame(width: size.width + NotchGeometry.meetingCardPadding * 2, height: size.height + NotchGeometry.meetingCardPadding, alignment: .top)
         .foregroundStyle(.white)
-        .help("Recording. Click to open")
+        .help("Recording. Rest the pointer here or click to open it and stop the recording")
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Recording \(self.model.recordingTitle)")
     }
@@ -717,6 +726,23 @@ final class NotchMeetingCardController {
         if self.model.expanded { self.scheduleCollapse(after: 12) }
     }
 
+    private var pillHoverTask: Task<Void, Never>?
+    /// How long the pointer rests on the closed strip before the card opens: long enough that going past it to a menu does not open it.
+    var pillHoverSeconds = 0.4
+
+    /// Resting the pointer on the closed recording strip opens the card, where Stop is (the strip used to open only on a click, with nothing to say so, and
+    /// the card folds itself away again, so Stop was hard to find). Leaving the strip before the pause is over cancels it.
+    func pillHover(_ hovering: Bool) {
+        self.pillHoverTask?.cancel()
+        guard hovering, self.model.phase == .recording, !self.model.expanded else { return }
+        self.pillHoverTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: UInt64(self.pillHoverSeconds * 1_000_000_000))
+            guard !Task.isCancelled, self.model.phase == .recording, !self.model.expanded else { return }
+            self.toggleExpanded()
+        }
+    }
+
     /// The open card closes itself shortly after the pointer leaves it.
     func cardHover(_ hovering: Bool) {
         guard self.model.phase == .recording, self.model.expanded else { return }
@@ -1113,6 +1139,7 @@ final class NotchMeetingCardController {
             onDetectedHover: { MeetingDetectionPromptController.shared.notchCardHover($0) },
             onToggleExpanded: { [weak self] in self?.toggleExpanded() },
             onCardHover: { [weak self] in self?.cardHover($0) },
+            onPillHover: { [weak self] in self?.pillHover($0) },
             onNoticeStop: { [weak self] in self?.stopFromNotice() },
             onNoticeDismiss: { [weak self] in self?.dismissNotice() }
         )
