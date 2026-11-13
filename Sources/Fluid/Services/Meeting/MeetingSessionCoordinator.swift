@@ -201,6 +201,16 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
     private static let correctionUndoStackCap = 50
 
+    /// A recording shorter than this is not worth transcribing and is voided (the user's rule, 2026-11-12: "any recording less than 20 seconds should be voided as not
+    /// worth transcribing"). The app passes this to the coordinator; the coordinator's own default is 0 (no rule), so a test or a tool that builds one is not surprised.
+    nonisolated static let worthTranscribingSeconds: TimeInterval = 20
+
+    /// The shortest recording that is kept and transcribed, in seconds (see `worthTranscribingSeconds`). Shorter ones are voided at Stop.
+    private let minimumRecordingSeconds: TimeInterval
+
+    /// Told, with its length in seconds, whenever a recording was voided for being too short, so the notch can say so.
+    let recordingVoided = PassthroughSubject<TimeInterval, Never>()
+
     init(
         store: any MeetingSessionStoring,
         capture: any MeetingCaptureControlling,
@@ -208,8 +218,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         audioArbiter: any MeetingAudioActivityArbitrating,
         preferredMicrophoneUID: @escaping @MainActor () -> String? = { nil },
         validateRecordingModels: @escaping @MainActor () async throws -> Void = {},
-        processingLogger: @escaping @MainActor (String) -> Void = { DebugLogger.shared.info($0, source: "MeetingSessionCoordinator") }
+        processingLogger: @escaping @MainActor (String) -> Void = { DebugLogger.shared.info($0, source: "MeetingSessionCoordinator") },
+        minimumRecordingSeconds: TimeInterval = 0
     ) {
+        self.minimumRecordingSeconds = max(0, minimumRecordingSeconds)
         self.store = store
         self.persistence = MeetingSessionPersistenceQueue(store: store)
         self.capture = capture
@@ -1592,6 +1604,12 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         self.captureGeneration = nil
         self.degradeReason = nil
+        // Measured as the notch card shows it (from the session's start to the stop). A recording shorter than the minimum is voided, never processed.
+        let recordedSeconds = max(0, stopResult.stoppedAt.timeIntervalSince(session.startedAt))
+        if recordedSeconds < self.minimumRecordingSeconds {
+            await self.voidShortRecording(session, seconds: recordedSeconds)
+            throw MeetingCoordinatorError.recordingTooShort(seconds: recordedSeconds)
+        }
         Self.apply(stopResult, to: &session)
         session.state = .processing
         session.processingAttempts.append(Self.pendingProcessingAttempt())
@@ -1604,6 +1622,26 @@ final class MeetingSessionCoordinator: ObservableObject {
         diagnosticsStopSucceeded = true
         #endif
         return processed
+    }
+
+    /// A recording too short to be worth transcribing: nothing of it is kept. The session leaves the store (its folder and audio with it) and the coordinator goes back to
+    /// idle the way a finished meeting does, without a result. Pending saves are written out first so a queued save cannot bring the session back after it is deleted.
+    private func voidShortRecording(_ session: MeetingSession, seconds: TimeInterval) async {
+        await self.flushQueuedPersistence()
+        do {
+            try await self.store.delete(id: session.id)
+        } catch {
+            // The audio could not be removed; the session is still not processed or shown, and the next storage sweep takes it.
+            self.processingLogger("Voided a short recording but its files could not be deleted: session=\(session.id.uuidString.prefix(8))")
+        }
+        self.correctionUndoStacks[session.id] = nil
+        self.activeSession = nil
+        self.trackHealth = [:]
+        self.state = .idle
+        self.operationGeneration = nil
+        await self.releaseActivityLease()
+        self.processingLogger(String(format: "Voided a recording of %.0f s (under %.0f s): session=%@", seconds, self.minimumRecordingSeconds, String(session.id.uuidString.prefix(8))))
+        self.recordingVoided.send(seconds)
     }
 
     private func process(_ inputSession: MeetingSession, generation: UUID) async throws -> MeetingSession {
@@ -2239,6 +2277,8 @@ enum MeetingCoordinatorError: LocalizedError {
     case dictationActive
     case noCorrectionToUndo
     case maintenanceInProgress
+    /// Voided at Stop: shorter than the coordinator's minimum, so it was neither kept nor transcribed.
+    case recordingTooShort(seconds: TimeInterval)
 
     var errorDescription: String? {
         switch self {
@@ -2256,6 +2296,8 @@ enum MeetingCoordinatorError: LocalizedError {
             return "There is nothing to undo."
         case .maintenanceInProgress:
             return "LaVoix is tidying up meeting storage. Try again in a moment."
+        case let .recordingTooShort(seconds):
+            return "That recording was only \(Int(seconds.rounded())) seconds long, so it was discarded instead of transcribed."
         }
     }
 }

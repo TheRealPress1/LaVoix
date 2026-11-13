@@ -129,7 +129,9 @@ final class AppServices: ObservableObject {
                 guard CPUArchitecture.isAppleSilicon else {
                     throw MeetingParakeetNemotronRuntimeError.unsupportedArchitecture
                 }
-            }
+            },
+            // A recording under 20 seconds is voided at Stop instead of being transcribed.
+            minimumRecordingSeconds: MeetingSessionCoordinator.worthTranscribingSeconds
         )
         self._meetingSessionCoordinator = coordinator
         self.setupMeetingCoordinatorForwarding()

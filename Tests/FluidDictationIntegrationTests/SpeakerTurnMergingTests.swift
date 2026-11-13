@@ -2284,6 +2284,63 @@ final class MeetingSessionCoordinatorTests: XCTestCase {
         ])
     }
 
+    // A recording shorter than the minimum is voided at Stop (2026-11-12: "any recording less than 20 seconds should be voided as not worth transcribing").
+    func testRecordingUnderTheMinimumIsVoidedNotTranscribed() async throws {
+        let harness = self.makeHarness(minimumRecordingSeconds: 3600)
+        let started = try await harness.coordinator.startRecording(configuration: MeetingModelFixture.makeOnlineConfiguration())
+        var voided: [TimeInterval] = []
+        let subscription = harness.coordinator.recordingVoided.sink { voided.append($0) }
+        defer { subscription.cancel() }
+
+        do {
+            _ = try await harness.coordinator.stopAndTranscribe()
+            XCTFail("A recording under the minimum must not be transcribed")
+        } catch let error as MeetingCoordinatorError {
+            guard case .recordingTooShort = error else { return XCTFail("Unexpected coordinator error: \(error)") }
+            XCTAssertNotNil(error.errorDescription)
+        }
+
+        let storeSnapshot = await harness.store.snapshot()
+        XCTAssertNil(storeSnapshot.sessions[started.id], "The voided session leaves the store")
+        XCTAssertEqual(harness.processing.processCallCount, 0, "Nothing is processed")
+        XCTAssertEqual(harness.arbiter.releaseCallCount, 1, "The audio lease is released exactly once")
+        XCTAssertEqual(harness.coordinator.state, .idle)
+        XCTAssertNil(harness.coordinator.activeSession)
+        XCTAssertNil(harness.coordinator.latestCompletedSession)
+        XCTAssertEqual(voided.count, 1, "The notch is told once")
+        XCTAssertFalse(storeSnapshot.persistedStates.suffix(1).contains(.processing), "It never reached processing")
+
+        // The coordinator is usable again straight away.
+        let next = try await harness.coordinator.startRecording(configuration: MeetingModelFixture.makeOnlineConfiguration())
+        XCTAssertEqual(harness.coordinator.state, .recording(next.id))
+    }
+
+    func testRecordingOverTheMinimumIsKeptAndTranscribed() async throws {
+        let harness = self.makeHarness(minimumRecordingSeconds: 0.05)
+        let started = try await harness.coordinator.startRecording(configuration: MeetingModelFixture.makeOnlineConfiguration())
+        var voided = 0
+        let subscription = harness.coordinator.recordingVoided.sink { _ in voided += 1 }
+        defer { subscription.cancel() }
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        let result = try await harness.coordinator.stopAndTranscribe()
+
+        XCTAssertEqual(result.id, started.id)
+        XCTAssertEqual(harness.processing.processCallCount, 1)
+        XCTAssertEqual(harness.coordinator.state, .completed(started.id))
+        XCTAssertEqual(voided, 0, "A recording that is long enough is never voided")
+    }
+
+    func testCoordinatorWithNoMinimumNeverVoidsAnything() async throws {
+        let harness = self.makeHarness()
+        let started = try await harness.coordinator.startRecording(configuration: MeetingModelFixture.makeOnlineConfiguration())
+
+        _ = try await harness.coordinator.stopAndTranscribe()
+
+        XCTAssertEqual(harness.coordinator.state, .completed(started.id))
+        XCTAssertEqual(MeetingSessionCoordinator.worthTranscribingSeconds, 20, "The app's rule: under 20 seconds is not worth transcribing")
+    }
+
     func testStaleCaptureEventCannotMutateNewGeneration() async throws {
         let harness = self.makeHarness()
         let firstSession = try await harness.coordinator.startRecording(
@@ -2482,7 +2539,8 @@ final class MeetingSessionCoordinatorTests: XCTestCase {
         blockStart: Bool = false,
         blockStop: Bool = false,
         failStop: Bool = false,
-        failingSaveState: MeetingSessionState? = nil
+        failingSaveState: MeetingSessionState? = nil,
+        minimumRecordingSeconds: TimeInterval = 0
     ) -> MeetingCoordinatorHarness {
         let store = FakeMeetingSessionStore(failingSaveState: failingSaveState)
         let capture = FakeMeetingCaptureController(
@@ -2497,7 +2555,8 @@ final class MeetingSessionCoordinatorTests: XCTestCase {
                 store: store,
                 capture: capture,
                 processing: processing,
-                audioArbiter: arbiter
+                audioArbiter: arbiter,
+                minimumRecordingSeconds: minimumRecordingSeconds
             ),
             store: store,
             capture: capture,

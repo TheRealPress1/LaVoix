@@ -644,6 +644,17 @@ final class NotchMeetingCardController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] snapshot in self?.updateCaption(snapshot) }
             .store(in: &self.cancellables)
+        // A recording too short to keep was voided at Stop: nothing else would tell the person where it went.
+        coordinator.recordingVoided
+            .receive(on: DispatchQueue.main)
+            .sink { seconds in
+                NotchHubController.shared.showAlert(
+                    title: "Recording discarded",
+                    text: "It was only \(Int(seconds.rounded())) seconds long, so it wasn't kept or transcribed.",
+                    symbol: "waveform", lookStyle: true
+                )
+            }
+            .store(in: &self.cancellables)
     }
 
     /// The hub started or stopped; show or remove the card to match.
