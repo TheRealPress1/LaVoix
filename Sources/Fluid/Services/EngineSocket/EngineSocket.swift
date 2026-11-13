@@ -653,7 +653,9 @@ nonisolated enum EngineSocket {
             let actionID2 = (object["action2_id"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(160)) }
             // "style":"look" is Look's own, quieter card; any other value is the usual alert card.
             let lookStyle = (object["style"] as? String) == "look"
-            await MainActor.run { NotchHubController.shared.showAlert(title: String(title.prefix(80)), text: String(text.prefix(lookStyle ? 600 : 300)), symbol: symbol, icon: icon, actionLabel: label, actionID: actionID, action2Label: label2, action2ID: actionID2, lookStyle: lookStyle) }
+            // Look's proposal for a calendar event: drawn as a calendar tile with Approve instead of the plain card (an older myOS sends none, and gets the plain card).
+            let eventProposal = NotchBannerContent.EventProposal.parse(object["event"])
+            await MainActor.run { NotchHubController.shared.showAlert(title: String(title.prefix(80)), text: String(text.prefix(lookStyle ? 600 : 300)), symbol: symbol, icon: icon, actionLabel: label, actionID: actionID, action2Label: label2, action2ID: actionID2, lookStyle: lookStyle, eventProposal: eventProposal) }
             _ = emit(["ok": true])
         case "notch.connections_set":
             // The state of every connector, for the Connections tab (and its badge).

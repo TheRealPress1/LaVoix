@@ -32,6 +32,8 @@ struct NotchBannerContent: Equatable, Identifiable {
     var action2ID: String? = nil
     /// Look's own, quieter card (see NotchLookCardView) instead of the connection alert's coloured disc.
     var lookStyle = false
+    /// Set when Look proposes a calendar event: the card draws it as a calendar tile with Approve (see NotchEventProposalCard), and the card's own button is not drawn.
+    var eventProposal: EventProposal? = nil
     /// Set for a WhatsApp message: the number it came from. Replies go out through WhatsApp, and pressing the card opens that chat in the WhatsApp tab.
     var whatsAppPhone: String? = nil
     /// The files that came with the message: shown as small tiles under the name (enlarged when the pointer rests on one).
@@ -109,6 +111,7 @@ struct NotchBannerContent: Equatable, Identifiable {
         if self.welcomeBack { return 0 }
         // Title row, the time, one more line, then the buttons.
         if self.meetingSet != nil { return 8 + 19 + 2 + 17 + 2 + 15 + 12 + 30 + 18 }
+        if let event = self.eventProposal { return NotchEventProposalCard.contentHeight(event) }
         if self.lookStyle { return NotchLookCardView.contentHeight(text: self.text, hasButtons: self.actionLabel != nil, cardWidth: NotchGeometry.bannerWidth) }
         // With no words under the name, the row is as tall as the avatar (40) rather than the name, so the tile does not sit on the card's edge.
         let top: CGFloat = self.showsText
@@ -149,6 +152,15 @@ struct NotchBannerView: View {
         } else if let set = self.content.meetingSet {
             self.meetingBody(set)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        } else if let event = self.content.eventProposal {
+            NotchEventProposalCard(
+                proposal: event, width: NotchGeometry.bannerWidth,
+                onApprove: { id in
+                    NotchHubController.shared.dismissBanner()
+                    ConnectionsWidgetView.press(id)
+                },
+                onDismiss: { NotchHubController.shared.dismissBanner() }
+            )
         } else if self.content.lookStyle {
             self.lookBody
         } else {

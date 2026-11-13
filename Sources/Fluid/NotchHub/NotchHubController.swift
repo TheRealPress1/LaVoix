@@ -478,7 +478,7 @@ final class NotchHubController {
         self.window?.ignoresMouseEvents = false
         self.bannerHovered = false
         self.model.showBanner(content)
-        self.scheduleBannerDismiss(after: content.welcomeBack ? 3.4 : (content.meetingSet != nil ? 9 : (content.alertSymbol == nil ? 6 : (content.actionID == nil ? 12 : 30))))
+        self.scheduleBannerDismiss(after: content.welcomeBack ? 3.4 : (content.meetingSet != nil ? 9 : (content.eventProposal != nil ? 45 : (content.alertSymbol == nil ? 6 : (content.actionID == nil ? 12 : 30)))))
     }
 
     /// The "Welcome back" strip: a moment after the notch comes back on (the app opening, or the notch being switched on again) it widens out to either side of the
@@ -522,8 +522,8 @@ final class NotchHubController {
     }
 
     /// A card about a connection that broke (from the engine socket's `notch.alert`, sent by myOS). Clicking it opens myOS.
-    func showAlert(title: String, text: String, symbol: String, icon: String? = nil, actionLabel: String? = nil, actionID: String? = nil, action2Label: String? = nil, action2ID: String? = nil, lookStyle: Bool = false) {
-        self.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: title, subtitle: nil, text: text, date: Date(), alertSymbol: symbol, alertIcon: icon, alertAction: .openMyOS, actionLabel: actionLabel, actionID: actionID, action2Label: action2Label, action2ID: action2ID, lookStyle: lookStyle))
+    func showAlert(title: String, text: String, symbol: String, icon: String? = nil, actionLabel: String? = nil, actionID: String? = nil, action2Label: String? = nil, action2ID: String? = nil, lookStyle: Bool = false, eventProposal: NotchBannerContent.EventProposal? = nil) {
+        self.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: title, subtitle: nil, text: text, date: Date(), alertSymbol: symbol, alertIcon: icon, alertAction: .openMyOS, actionLabel: actionLabel, actionID: actionID, action2Label: action2Label, action2ID: action2ID, lookStyle: lookStyle, eventProposal: eventProposal))
     }
 
     /// A file on the card is being shown large (or no longer): the card grows or shrinks to match.

@@ -160,6 +160,19 @@ enum NotchHubDebug {
                 if widgetName == "banner-welcome" {
                     model.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: "Welcome back", subtitle: nil, text: "", date: Date(), welcomeBack: true))
                     model.setBannerExpanded(false)
+                // banner-event / banner-event-accounts / banner-event-allday / banner-event-long: Look's proposal for a calendar event as a tile with Approve (invented; one calendar, four, an all-day event, a long title and place).
+                } else if widgetName.hasPrefix("banner-event") {
+                    let accounts = widgetName == "banner-event-accounts" ? ["gaspardseuge@gmail.com", "gaspard@work-company.example", "gs@school.example", "gaspard.seuge@family.example"] : ["gaspardseuge@gmail.com"]
+                    let long = widgetName == "banner-event-long"
+                    let object: [String: Any] = [
+                        "title": long ? "Harbor Post summer party with the whole newsroom and their families" : (widgetName == "banner-event-allday" ? "Team offsite" : "Dinner with Jordan"),
+                        "weekday": "Fri", "month": "NOV", "day": "13",
+                        "time": widgetName == "banner-event-allday" ? "All day" : "7:00 PM – 9:00 PM",
+                        "place": long ? "The Pier Room, 14 Fulton Wharf, Boston, Massachusetts" : (widgetName == "banner-event-allday" ? "" : "Le Petit Zinc on Hanover St"),
+                        "accounts": accounts, "selected": 0, "action_prefix": "look.event:e1-1:",
+                    ]
+                    model.showBanner(NotchBannerContent(chatID: 0, chatGUID: "", title: "Add “Dinner with Jordan”?", subtitle: nil, text: "", date: Date(), alertSymbol: "calendar.badge.plus", actionLabel: "Approve", actionID: "look.event:e1-1:0", lookStyle: true, eventProposal: NotchBannerContent.EventProposal.parse(object)))
+                    model.setBannerExpanded(false)
                 // banner-meeting / banner-meeting-nolink: the card that says a meeting was set (invented).
                 } else if widgetName.hasPrefix("banner-meeting") {
                     let start = Calendar.current.date(bySettingHour: 15, minute: 45, second: 0, of: Date()) ?? Date()
@@ -840,6 +853,32 @@ enum NotchHubDebug {
         }
     }
 
+    /// `LAVOIX_EVENT_CARD_AUTOTEST=1` checks the card Look draws for a calendar event it proposes: the engine's object read into the card, its height, and what Approve presses.
+    /// Invented values only; it reads no data of the user's.
+    @MainActor static func eventCardAutotestIfRequested() {
+        guard ProcessInfo.processInfo.environment["LAVOIX_EVENT_CARD_AUTOTEST"] == "1" else { return }
+        Task { @MainActor in
+            var failures = 0
+            func check(_ name: String, _ ok: Bool) {
+                print("\(ok ? "PASS" : "FAIL") \(name)")
+                if !ok { failures += 1 }
+            }
+            // The event Look proposes: read from the engine's object, sized by whether it has a calendar chip, and Approve presses the calendar chosen on the card.
+            let eventObject: [String: Any] = ["title": "Dinner with Sam", "weekday": "Fri", "month": "NOV", "day": "13", "time": "7:00 PM – 8:30 PM", "place": "Le Petit Zinc", "accounts": ["a@x.com", "b@y.com", "not-an-address"], "selected": 1, "action_prefix": "look.event:e1-2:"]
+            let proposal = NotchBannerContent.EventProposal.parse(eventObject)!
+            check("an event Look proposes is read from the engine's object, with only real addresses as calendars", proposal.title == "Dinner with Sam" && proposal.accounts == ["a@x.com", "b@y.com"] && proposal.selected == 1 && proposal.place == "Le Petit Zinc" && proposal.month == "NOV" && proposal.day == "13")
+            check("an object missing what the tile needs is no event", NotchBannerContent.EventProposal.parse(["title": "x"]) == nil && NotchBannerContent.EventProposal.parse(["title": "x", "month": "NOV", "day": "13", "time": "t"]) == nil && NotchBannerContent.EventProposal.parse(nil) == nil && NotchBannerContent.EventProposal.parse(["title": " ", "month": "NOV", "day": "13", "time": "t", "action_prefix": "p:"]) == nil)
+            check("Approve presses the calendar chosen on the card, and the first when the choice is out of range", NotchEventProposalCard.actionID(proposal, account: 1) == "look.event:e1-2:1" && NotchEventProposalCard.actionID(proposal, account: 9) == "look.event:e1-2:0" && NotchEventProposalCard.actionID(proposal, account: -1) == "look.event:e1-2:0")
+            var noChipProposal = proposal
+            noChipProposal.accounts = []
+            let withChip = NotchBannerContent(chatID: 0, chatGUID: "", title: "t", subtitle: nil, text: "x", date: Date(), eventProposal: proposal)
+            let withoutChip = NotchBannerContent(chatID: 0, chatGUID: "", title: "t", subtitle: nil, text: "x", date: Date(), eventProposal: noChipProposal)
+            check("the event card is taller with the calendar chip than without, and is not the plain card's height", NotchGeometry.bannerSize(content: withChip, expanded: false, notchHeight: 32).height > NotchGeometry.bannerSize(content: withoutChip, expanded: false, notchHeight: 32).height && NotchGeometry.bannerSize(content: withoutChip, expanded: false, notchHeight: 32).height > 32 + 100)
+            print(failures == 0 ? "EVENT CARD AUTOTEST ALL PASSED" : "EVENT CARD AUTOTEST \(failures) FAILED")
+            exit(failures == 0 ? 0 : 1)
+        }
+    }
+
     /// `LAVOIX_PEOPLE_AUTOTEST=1` builds a fake myOS database and checks what the People tab reads from it.
     @MainActor static func peopleAutotestIfRequested() {
         guard ProcessInfo.processInfo.environment["LAVOIX_PEOPLE_AUTOTEST"] == "1" else { return }
@@ -1327,6 +1366,7 @@ enum NotchHubDebug {
         check("the model remembers the card is enlarged, and forgets with a new card", cardModel.bannerEnlarged == true)
         cardModel.showBanner(tileCard)
         check("a new card starts at its normal size", cardModel.bannerEnlarged == false)
+
 
         // Resting on a tile enlarges it after a moment; passing over does not; leaving puts it away.
         let hover = AttachmentHoverModel()
