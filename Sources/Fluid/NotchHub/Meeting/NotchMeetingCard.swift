@@ -264,29 +264,39 @@ struct NotchMeetingCardView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(self.model.event?.title ?? "Meeting").font(.system(size: 13, weight: .semibold)).lineLimit(1)
                     if let event = self.model.event {
-                        TimelineView(.periodic(from: .now, by: 1)) { context in
-                            Text(Self.countdown(to: event.start, now: context.date) + Self.attendeeLine(self.model.knownAttendees))
-                                .font(.system(size: 11).monospacedDigit()).foregroundStyle(.white.opacity(0.55))
+                        // "Starts in 1:16" with the picture of the person you are meeting beside it (their name is on hover): a short line, so it never wraps.
+                        HStack(spacing: 6) {
+                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                                Text(Self.countdown(to: event.start, now: context.date))
+                                    .font(.system(size: 11).monospacedDigit()).foregroundStyle(.white.opacity(0.55)).lineLimit(1).fixedSize()
+                            }
+                            self.attendeeFaces
                         }
                     }
                 }
+                // The title and its line are what the card is for: they claim their width first, and the buttons and the gap take what is left.
+                .layoutPriority(1)
                 Spacer(minLength: 8)
+                // Join and Record are for a meeting with a call link (Google Meet and the like). One without a link is only a heads-up.
                 if self.model.event?.joinURL != nil {
+                    // The buttons keep their own size however long the title is: only the title gives way.
                     Button(action: self.onJoin) {
                         Text("Join").font(.system(size: 12, weight: .semibold)).foregroundStyle(.black)
                             .padding(.horizontal, 14).padding(.vertical, 5).background(Capsule().fill(Color.white))
                     }
                     .buttonStyle(.plain)
-                }
-                Button(action: self.onRecordEvent) {
-                    // A plain red record dot, like a camera's record light.
-                    ZStack {
-                        Circle().strokeBorder(Color.white.opacity(0.55), lineWidth: 1.5).frame(width: 20, height: 20)
-                        Circle().fill(Color(red: 1, green: 0.27, blue: 0.23)).frame(width: 11, height: 11)
+                    .fixedSize()
+                    Button(action: self.onRecordEvent) {
+                        // A plain red record dot, like a camera's record light.
+                        ZStack {
+                            Circle().strokeBorder(Color.white.opacity(0.55), lineWidth: 1.5).frame(width: 20, height: 20)
+                            Circle().fill(Color(red: 1, green: 0.27, blue: 0.23)).frame(width: 11, height: 11)
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .fixedSize()
+                    .help("Record this meeting")
                 }
-                .buttonStyle(.plain)
-                .help("Record this meeting")
                 Button(action: self.onDismiss) {
                     Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.white.opacity(0.45))
                 }
@@ -498,13 +508,32 @@ struct NotchMeetingCardView: View {
         return "Started \(max(1, -seconds / 60)) min ago"
     }
 
-    /// " · with Maya Chen +1" for the people myOS knows among the invitees; empty when none. (It used to add "(2d ago)", the days since the person was last
-    /// in touch, which read like the meeting's own date next to a meeting that starts today.)
-    static func attendeeLine(_ people: [KnownPerson]) -> String {
-        guard let first = people.first else { return "" }
-        var line = " · with " + first.name
-        if people.count > 1 { line += " +\(people.count - 1)" }
-        return line
+    /// The pictures beside "Starts in 1:16": the first three people myOS knows among the invitees, and how many more there are. (It used to be a line of words,
+    /// " · with Maya Chen +1", which wrapped onto a second line next to the buttons.)
+    static func faces(_ people: [KnownPerson]) -> (shown: [KnownPerson], more: Int) {
+        (Array(people.prefix(3)), max(0, people.count - 3))
+    }
+
+    /// Their pictures (their initials when there is none), overlapping a little, with the names on hover. Nothing when myOS knows none of the invitees.
+    @ViewBuilder
+    private var attendeeFaces: some View {
+        let faces = Self.faces(self.model.knownAttendees)
+        if !faces.shown.isEmpty {
+            HStack(spacing: 4) {
+                HStack(spacing: -5) {
+                    ForEach(faces.shown, id: \.id) { person in
+                        NotchAvatar(name: person.name, handle: person.handle, size: 16)
+                            .overlay(Circle().strokeBorder(Color.black, lineWidth: 1.5))
+                    }
+                }
+                if faces.more > 0 {
+                    Text("+\(faces.more)").font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.55))
+                }
+            }
+            .help("With " + self.model.knownAttendees.map(\.name).joined(separator: ", "))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("With " + self.model.knownAttendees.map(\.name).joined(separator: ", "))
+        }
     }
 
     static func clock(_ seconds: TimeInterval) -> String {

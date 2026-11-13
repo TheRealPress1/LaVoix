@@ -93,7 +93,13 @@ enum NotchHubDebug {
                     case "meeting-notice-dictation": model.notice = .dictationBlocked(meetingIsRecording: true)
                     default: model.notice = .dictationBlocked(meetingIsRecording: false)
                     }
-                case "meeting-starting": model.phase = .starting
+                case "meeting-starting", "meeting-starting-nolink", "meeting-starting-group", "meeting-starting-long":
+                    // The heads-up before a meeting: the first sample meeting has a call link; "nolink" is the same meeting without one (no Join, no Record), "group" has five known invitees.
+                    model.phase = .starting
+                    if widgetName == "meeting-starting-nolink" { model.event?.joinURL = nil }
+                    if widgetName == "meeting-starting-long" { model.event?.title = "Quarterly planning and roadmap review with the whole product team" }
+                    let people = ["Joshua Bell", "Maya Chen", "Dana Ortiz", "Eli Park", "Sam Wu"]
+                    model.knownAttendees = (widgetName == "meeting-starting-group" ? people : [people[0]]).enumerated().map { KnownPerson(id: "p\($0.offset)", name: $0.element, daysSince: nil, handle: "p\($0.offset)@example.com") }
                 case "meeting-detected", "meeting-detected-starting", "meeting-detected-error":
                     model.phase = .detected
                     model.detectedName = "Zoom · in Google Chrome"
@@ -878,7 +884,9 @@ enum NotchHubDebug {
             check("days since last contact come along", known.map(\.daysSince) == [20, 70])
             check("a merged person and unknown addresses match nothing", PeopleDatabase.known(emails: ["di@z.com", "x@nowhere.com"], url: url).isEmpty)
             check("phones are not matched as emails; bad input is ignored", PeopleDatabase.known(emails: ["+14155550000", "", "not-an-email"], url: url).isEmpty)
-            check("the heads-up line names the first person and counts the rest, with no days-ago", NotchMeetingCardView.attendeeLine(known) == " · with Ann Close +1" && NotchMeetingCardView.attendeeLine(Array(known.prefix(1))) == " · with Ann Close" && NotchMeetingCardView.attendeeLine([]) == "")
+            check("the heads-up shows the first three people's pictures and counts the rest", NotchMeetingCardView.faces(known).shown.map(\.name) == ["Ann Close", "Bo Mid"] && NotchMeetingCardView.faces(known).more == 0 && NotchMeetingCardView.faces([]).shown.isEmpty
+                && NotchMeetingCardView.faces((1...5).map { KnownPerson(id: "p\($0)", name: "P\($0)", daysSince: nil) }).shown.count == 3 && NotchMeetingCardView.faces((1...5).map { KnownPerson(id: "p\($0)", name: "P\($0)", daysSince: nil) }).more == 2)
+            check("each known invitee carries the address that matched, which finds their picture", known.map(\.handle) == ["ann@x.com", "bo@y.com"])
             let meetingID = UUID()
             let start = Date(timeIntervalSince1970: 1_800_000_000)
             let payload = MeetingInboxExporter.payload(meetingID: meetingID, title: "Design sync", start: start, end: start.addingTimeInterval(1800), personIDs: ["b", "a", "a"], unknownAttendees: 2, noteFile: "meeting-x.md")

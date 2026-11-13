@@ -23,6 +23,8 @@ nonisolated struct KnownPerson: Equatable {
     let id: String
     let name: String
     let daysSince: Int?
+    /// The invitee address that matched this person (lower case): what finds their picture. nil when it is not known.
+    var handle: String? = nil
 }
 
 nonisolated enum PeopleDatabase {
@@ -43,7 +45,7 @@ nonisolated enum PeopleDatabase {
         sqlite3_busy_timeout(db, 800)
         let marks = wanted.map { _ in "?" }.joined(separator: ",")
         let sql = """
-        SELECT DISTINCT p.id, p.display_name, s.days_since
+        SELECT DISTINCT p.id, p.display_name, s.days_since, i.value_norm
         FROM identity i JOIN person p ON p.id = i.person_id AND p.merged_into IS NULL
         LEFT JOIN person_score s ON s.person_id = p.id
         WHERE i.kind = 'email' AND i.value_norm IN (\(marks)) ORDER BY COALESCE(s.strength, 0) DESC, p.display_name
@@ -54,11 +56,16 @@ nonisolated enum PeopleDatabase {
         let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
         for (i, email) in wanted.enumerated() { sqlite3_bind_text(statement, Int32(i + 1), email, -1, transient) }
         var out: [KnownPerson] = []
+        var seen = Set<String>()
         while sqlite3_step(statement) == SQLITE_ROW {
+            // A person invited under two of their addresses is one person: the first address that matched is the one kept.
+            let id = String(cString: sqlite3_column_text(statement, 0))
+            guard seen.insert(id).inserted else { continue }
             out.append(KnownPerson(
-                id: String(cString: sqlite3_column_text(statement, 0)),
+                id: id,
                 name: String(cString: sqlite3_column_text(statement, 1)),
-                daysSince: sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : Int(sqlite3_column_int(statement, 2))
+                daysSince: sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : Int(sqlite3_column_int(statement, 2)),
+                handle: sqlite3_column_type(statement, 3) == SQLITE_NULL ? nil : String(cString: sqlite3_column_text(statement, 3))
             ))
         }
         return out
@@ -135,7 +142,8 @@ nonisolated enum PeopleDatabase {
             guard wantedSet.contains(email) else { continue }
             out[email] = KnownPerson(
                 id: String(cString: sqlite3_column_text(statement, 1)), name: String(cString: sqlite3_column_text(statement, 2)),
-                daysSince: sqlite3_column_type(statement, 3) == SQLITE_NULL ? nil : Int(sqlite3_column_int(statement, 3))
+                daysSince: sqlite3_column_type(statement, 3) == SQLITE_NULL ? nil : Int(sqlite3_column_int(statement, 3)),
+                handle: email
             )
         }
         return out
