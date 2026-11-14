@@ -62,6 +62,18 @@ enum NotchHubDebug {
             // A trailing "+tabs" renders the notch with its tab row unfolded.
             let tabsUnfolded = widgetName.hasSuffix("+tabs")
             if tabsUnfolded { widgetName = String(widgetName.dropLast(5)) }
+            if widgetName == "connector-icons" {
+                // The logos the Connections tab and the alert cards draw, in one row (LinkedIn's among them); the last is what an unknown connector gets.
+                let items: [(String, String)] = [("gmail:me@example.com", "Gmail"), ("github", "GitHub"), ("linkedin", "LinkedIn"), ("whatsapp", "WhatsApp"), ("bump", "Bump"), ("unknown", "Other")]
+                let row = HStack(spacing: 14) { ForEach(items, id: \.0) { ConnectorIconView(id: $0.0, title: $0.1, size: 52) } }.padding(24).background(Color.black)
+                let renderer = ImageRenderer(content: row)
+                renderer.scale = 2
+                if let tiff = renderer.nsImage?.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff), let png = rep.representation(using: .png, properties: [:]) {
+                    try? png.write(to: URL(fileURLWithPath: path))
+                    print("NOTCH RENDER WROTE \(path)")
+                }
+                exit(0)
+            }
             if widgetName.hasPrefix("meeting") {
                 let model = NotchMeetingModel()
                 model.event = CalendarStore.sample().events.first
