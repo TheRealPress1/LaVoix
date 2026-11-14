@@ -41,6 +41,7 @@ struct FluidApp: App {
         NotchHubDebug.whatsAppFilesAutotestIfRequested()
         NotchHubDebug.cardTypingTestIfRequested()
         NotchHubDebug.calendarAutotestIfRequested()
+        NotchHubDebug.placeLookupAutotestIfRequested()
         NotchHubDebug.lyricsAutotestIfRequested()
         NotchHubDebug.avatarAutotestIfRequested()
         NotchHubDebug.nowPlayingHistoryAutotestIfRequested()

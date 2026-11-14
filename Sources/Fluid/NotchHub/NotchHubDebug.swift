@@ -243,6 +243,7 @@ enum NotchHubDebug {
                 let store = MessagesStore.sample(access: widgetName == "messages-denied" ? .needsFullDiskAccess : .granted)
                 if widgetName == "messages-group" { store.select(5) }
                 let emojiOpen = widgetName == "messages-emoji"
+                let lookPreview: NotchPlaceLookup.State? = widgetName == "messages-look" ? NotchPlaceLookup.State.found(query: "Atlanta International School", NotchPlaceLookup.samplePlaces) : (widgetName == "messages-look-typing" ? NotchPlaceLookup.State.typing : nil)
                 // messages-times: a thread over several days, to see the times iMessage puts above a pause (invented words).
                 if widgetName == "messages-times" {
                     let now = Date()
@@ -268,14 +269,14 @@ enum NotchHubDebug {
                 }
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
-                    NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") { AnyView(MessagesWidgetView(store: store, staticLayout: true, previewEnlargedFileID: enlargedFileID, previewEmojiOpen: emojiOpen)) },
+                    NotchWidget(id: "messages", title: "Messages", systemImage: "message.fill") { AnyView(MessagesWidgetView(store: store, staticLayout: true, previewEnlargedFileID: enlargedFileID, previewEmojiOpen: emojiOpen, previewPlaces: lookPreview)) },
                 ])
                 model.selectedWidgetID = "messages"
                 model.setBadge("messages", 3)
             } else if widgetName.hasPrefix("whatsapp") {
                 // whatsapp-files (invented photos, a video and a document in the chat, a tiny picture beside "Photo" in the list), whatsapp-files-chips (a caption, a
                 // document, a photo that is not on the Mac) or whatsapp-files-enlarged (the photo enlarged). Invented chats and files only; WhatsApp's database is never read.
-                let sample = WhatsAppSamples.make(variant: widgetName)
+                let sample = WhatsAppSamples.make(variant: widgetName.hasPrefix("whatsapp-look") ? "whatsapp-emoji" : widgetName)
                 if let stand_in = NSImage(systemSymbolName: "person.crop.circle.fill", accessibilityDescription: nil) {
                     ContactResolver.shared.debugSetPhoto(stand_in, for: "+15551230001")
                     ContactResolver.shared.debugSetName("Krish Bhatia", for: "+15551230004")
@@ -284,7 +285,7 @@ enum NotchHubDebug {
                 model = NotchHubModel(widgets: [
                     NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
                     NotchWidget(id: "whatsapp", title: "WhatsApp", systemImage: "bubble.left.fill", brandImage: ConnectorIcon.whatsApp, brandImageIdle: ConnectorIcon.whatsAppGrey) {
-                        AnyView(WhatsAppWidgetView(store: sample.store, staticLayout: true, previewEnlargedFileID: sample.enlargedFileID, previewEmojiOpen: widgetName == "whatsapp-emoji"))
+                        AnyView(WhatsAppWidgetView(store: sample.store, staticLayout: true, previewEnlargedFileID: sample.enlargedFileID, previewEmojiOpen: widgetName == "whatsapp-emoji", previewPlaces: widgetName == "whatsapp-look" ? NotchPlaceLookup.State.found(query: "Atlanta International School", NotchPlaceLookup.samplePlaces) : (widgetName == "whatsapp-look-typing" ? NotchPlaceLookup.State.typing : nil)))
                     },
                 ])
                 model.selectedWidgetID = "whatsapp"
@@ -1914,6 +1915,114 @@ enum NotchHubDebug {
             check("the request myOS is given names the page, the meeting and the time", request?["path"] as? String == "/meetings" && request?["query"] as? String == "id=abc" && request?["requested_at"] as? Int == 1_800_000_000)
 
             print(failures == 0 ? "CALENDAR AUTOTEST ALL PASSED" : "CALENDAR AUTOTEST \(failures) FAILED")
+            exit(failures == 0 ? 0 : 1)
+        }
+    }
+
+    /// `LAVOIX_PLACE_LOOKUP_AUTOTEST=1` checks `/look` in the reply boxes without the network: what counts as the command, the place it asks for, how an address is written on one
+    /// line, and how the bar opens, cycles and closes as you type. `=live` also types into Apple Maps' autocomplete (public place names; their letters are the only thing sent).
+    @MainActor static func placeLookupAutotestIfRequested() {
+        guard let mode = ProcessInfo.processInfo.environment["LAVOIX_PLACE_LOOKUP_AUTOTEST"], mode == "1" || mode == "live" else { return }
+        Task { @MainActor in
+            var failures = 0
+            func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)"); if !ok { failures += 1 } }
+            check("/look and /look <place> are commands, in any case and with spaces before; /looking and ordinary text are not",
+                  NotchPlaceCommand.isCommand("/look") && NotchPlaceCommand.isCommand("/Look Atlanta") && NotchPlaceCommand.isCommand("  /LOOK\tx") && !NotchPlaceCommand.isCommand("/looking") && !NotchPlaceCommand.isCommand("look at this") && !NotchPlaceCommand.isCommand("hey /look x"))
+            check("the place is what follows /look, on one line", NotchPlaceCommand.query(in: "/look  Atlanta   International\nSchool ") == "Atlanta International School")
+            check("nothing after /look means no place, and plain text has none", NotchPlaceCommand.query(in: "/look") == nil && NotchPlaceCommand.query(in: "/look   ") == nil && NotchPlaceCommand.query(in: "hello") == nil)
+            check("a very long place is cut to 120 characters", NotchPlaceCommand.query(in: "/look " + String(repeating: "a", count: 300))?.count == 120)
+            let us = CNMutablePostalAddress(); us.street = "2890 N Fulton Dr NE"; us.city = "Atlanta"; us.state = "GA"; us.postalCode = "30305"; us.country = "United States"; us.isoCountryCode = "US"
+            let fr = CNMutablePostalAddress(); fr.street = "12 Rue Cler"; fr.city = "Paris"; fr.postalCode = "75007"; fr.country = "France"; fr.isoCountryCode = "FR"
+            let usLine = PlaceAddress.line(us), frLine = PlaceAddress.line(fr)
+            check("an address is one line with no line break", !usLine.contains("\n") && !frLine.contains("\n"))
+            check("a French address is written the French way", frLine.hasPrefix("12 Rue Cler, 75007 Paris"))
+            let home = Locale.current.region?.identifier
+            check("the country is named when it is not the Mac's own, and left out when it is", (home == "FR" || frLine.hasSuffix("France")) && (home != "US" || usLine == "2890 N Fulton Dr NE, Atlanta, GA 30305"))
+            check("a suggestion's line is tidied: double spaces collapsed, the Mac's own country left off", PlaceSuggestion.detail("2890 N Fulton Dr NE, Atlanta, GA  30305, United States") == (home == "US" ? "2890 N Fulton Dr NE, Atlanta, GA 30305" : "2890 N Fulton Dr NE, Atlanta, GA 30305, United States"))
+
+            // The bar, with no network: it opens at "/look", cycles through suggestions, and closes.
+            let bar = NotchPlaceLookup()
+            bar.draftChanged(to: "/look")
+            check("the bar opens the moment the box holds /look", bar.state == .typing)
+            bar.draftChanged(to: "/look A")
+            check("one letter after it keeps the bar waiting", bar.state == .typing)
+            check("Return with nothing to take does not take anything", bar.returnPressed() == nil)
+            bar.draftChanged(to: "hello")
+            check("text that is not /look closes the bar", bar.state == .idle)
+            let shown = NotchPlaceLookup(state: .found(query: "Atlanta International School", NotchPlaceLookup.samplePlaces))
+            check("the first suggestion is the one showing, and the one Return takes", shown.current?.name == NotchPlaceLookup.samplePlaces[0].name && shown.returnPressed()?.name == NotchPlaceLookup.samplePlaces[0].name)
+            shown.next()
+            check("the arrow shows the next suggestion, and Return then takes that one", shown.selected == 1 && shown.returnPressed()?.name == NotchPlaceLookup.samplePlaces[1].name)
+            shown.next(); shown.next()
+            check("after the last suggestion the first comes round again", shown.selected == 0 && shown.current?.name == NotchPlaceLookup.samplePlaces[0].name)
+            let known = await shown.address(for: NotchPlaceLookup.samplePlaces[0])
+            check("a suggestion whose address is known needs no asking", known == "2890 N Fulton Dr NE, Atlanta, GA 30305")
+            shown.draftChanged(to: "hello")
+            check("typing something else drops the suggestions", shown.state == .idle && shown.current == nil && shown.selected == 0)
+            let single = NotchPlaceLookup(state: .found(query: "x", [NotchPlaceLookup.samplePlaces[0]]))
+            single.next()
+            check("with one suggestion the arrow does nothing", single.selected == 0)
+
+            if mode == "live" {
+                @MainActor func settle(_ lookup: NotchPlaceLookup, for typed: String, seconds: Double = 10) async {
+                    let end = Date().addingTimeInterval(seconds)
+                    while Date() < end {
+                        try? await Task.sleep(nanoseconds: 50_000_000)
+                        switch lookup.state {
+                        case let .found(q, _): if q == typed { return }
+                        case .notFound, .failed: return
+                        default: continue
+                        }
+                    }
+                }
+                let live = NotchPlaceLookup()
+                // Apple ranks the suggestions, and for a short fragment it may put the airport above the school: the place only has to be among the first three, and first once the
+                // fragment is specific enough.
+                for (typed, first, within) in [("Atlanta Intern", "Atlanta International School", 3), ("Atlanta International S", "Atlanta International School", 1), ("Switchy", "Switchyards", 1), ("Ponce City Mar", "Ponce City Market", 1)] {
+                    live.draftChanged(to: "/look \(typed)")
+                    await settle(live, for: typed)
+                    if case let .found(_, list) = live.state {
+                        print("live: \(typed) -> \(list.map { "\($0.name) | \($0.detail)" })")
+                        check("half-typed '\(typed)' suggests \(first) within the first \(within)", list.prefix(within).contains { $0.name.hasPrefix(first) })
+                        let address = await live.address(for: live.current ?? list[0])
+                        print("live: address \(address ?? "nil")")
+                        check("its address comes as one street line", (address ?? "").contains(",") && !(address ?? "").contains("\n"))
+                    } else { check("half-typed '\(typed)' found suggestions (\(live.state))", false) }
+                }
+                live.draftChanged(to: "/look Atlanta International S")
+                await settle(live, for: "Atlanta International S")
+                check("the school's address is its street, with the zip", await live.address(for: live.current ?? NotchPlaceLookup.samplePlaces[2]) == "2890 N Fulton Dr NE, Atlanta, GA 30305")
+                let quick = NotchPlaceLookup()
+                quick.draftChanged(to: "/look Atlanta International S")
+                check("Return before any suggestion has come waits", quick.returnPressed() == nil)
+                let end = Date().addingTimeInterval(10); while Date() < end && quick.ready == nil { try? await Task.sleep(nanoseconds: 50_000_000) }
+                check("...and takes the first suggestion the moment it arrives", quick.ready?.name == "Atlanta International School")
+                let nothing = NotchPlaceLookup()
+                nothing.draftChanged(to: "/look zzqxjv qqpl wwkk 99")
+                await settle(nothing, for: "zzqxjv qqpl wwkk 99", seconds: 15)
+                // Typing fast, a letter every 90 ms: what shows at the end is the answer to the LAST letters, never to earlier ones.
+                let fast = NotchPlaceLookup()
+                let fastName = "Atlanta International S"
+                var typedSoFar = ""
+                fast.draftChanged(to: "/look")
+                for letter in fastName { typedSoFar.append(letter); fast.draftChanged(to: "/look " + typedSoFar); try? await Task.sleep(nanoseconds: 90_000_000) }
+                await settle(fast, for: fastName)
+                if case let .found(asked, list) = fast.state {
+                    check("after fast typing the suggestions are for the last letters, and the school is first", asked == fastName && list.first?.name.hasPrefix("Atlanta International School") == true)
+                } else { check("fast typing ended with suggestions (\(fast.state))", false) }
+                // A question replaced at once is answered only for the new letters.
+                let swap = NotchPlaceLookup()
+                swap.draftChanged(to: "/look Switchy")
+                swap.draftChanged(to: "/look Ponce City Mar")
+                await settle(swap, for: "Ponce City Mar")
+                if case let .found(asked, list) = swap.state {
+                    check("a question replaced at once is answered only for the new letters", asked == "Ponce City Mar" && list.first?.name.hasPrefix("Ponce City Market") == true)
+                } else { check("the replaced question ended with suggestions (\(swap.state))", false) }
+                var nothingFound = false
+                if case .notFound = nothing.state { nothingFound = true } else { print("live (nothing): \(nothing.state)") }
+                check("letters that mean nothing end in 'not found', not a failure", nothingFound)
+            }
+            print(failures == 0 ? "PLACE LOOKUP AUTOTEST ALL PASSED" : "PLACE LOOKUP AUTOTEST \(failures) FAILED")
             exit(failures == 0 ? 0 : 1)
         }
     }

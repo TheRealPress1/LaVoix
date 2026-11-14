@@ -10,6 +10,10 @@ struct WhatsAppWidgetView: View {
     var previewEnlargedFileID: Int64? = nil
     /// Previews can't click: this draws the emoji row open.
     var previewEmojiOpen = false
+    /// Previews can't type: this draws a `/look` in the reply box with what it found (or was looking for) above it.
+    var previewPlaces: NotchPlaceLookup.State? = nil
+    /// `/look <place>` typed in the reply box: what Apple Maps found, shown above the box.
+    @StateObject private var places = NotchPlaceLookup()
     @Environment(\.notchWidgetActive) private var active
     @State private var query = ""
     @State private var draft = ""
@@ -176,13 +180,16 @@ struct WhatsAppWidgetView: View {
                     .simultaneousGesture(TapGesture().onEnded { self.emojiOpen = false })
                     .onChange(of: self.store.thread) { _, thread in if let last = thread.last { proxy.scrollTo(last.id, anchor: .bottom) } }
                     .onChange(of: self.store.pending) { _, items in if let last = items.last { proxy.scrollTo(last.id, anchor: .bottom) } }
-                    .onChange(of: self.store.selected) { _, _ in self.draft = ""; self.hovering.clear(); self.emojiOpen = false }
+                    .onChange(of: self.store.selected) { _, _ in self.draft = ""; self.hovering.clear(); self.emojiOpen = false; self.places.clear() }
+                    .onChange(of: self.draft) { _, text in self.places.draftChanged(to: text) }
+                    .onChange(of: self.places.ready) { _, place in if let place { self.pick(place) } }
                     .onAppear { if let last = self.store.thread.last { proxy.scrollTo(last.id, anchor: .bottom) } }
                 }
             }
             if let error = self.store.error {
                 Text(error).font(.system(size: 10.5)).foregroundStyle(.orange).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
             }
+            NotchPlaceResults(state: self.previewPlaces ?? self.places.state, selected: self.previewPlaces == nil ? self.places.selected : 0, resolving: self.places.resolving, staticLayout: self.staticLayout, onPick: { self.pick($0) }, onNext: { self.places.next() })
             if self.showsEmoji { NotchEmojiStrip(recents: self.recentEmojis, staticLayout: self.staticLayout) { self.add($0) } }
             HStack(spacing: 8) {
                 self.replyField
@@ -243,7 +250,7 @@ struct WhatsAppWidgetView: View {
     @ViewBuilder
     private var replyField: some View {
         if self.staticLayout {
-            Text("WhatsApp").font(.system(size: 13)).foregroundStyle(.white.opacity(0.4)).frame(maxWidth: .infinity, alignment: .leading)
+            Text(self.previewPlaces == nil ? "WhatsApp" : (self.previewPlaces == .typing ? "/look" : "/look Atlanta International School")).font(.system(size: 13)).foregroundStyle(.white.opacity(self.previewPlaces == nil ? 0.4 : 0.95)).frame(maxWidth: .infinity, alignment: .leading)
         } else {
             TextField("", text: self.$draft, prompt: Text("WhatsApp").foregroundStyle(.white.opacity(0.45)))
                 .textFieldStyle(.plain).font(.system(size: 13)).foregroundStyle(.white).tint(.white)
@@ -283,8 +290,26 @@ struct WhatsAppWidgetView: View {
     }
 
     private func send() {
+        // "/look <place>" is a question for the notch, never a message: Return (or the arrow) takes the suggestion showing, and its address goes in the box.
+        if NotchPlaceCommand.isCommand(self.draft) { self.useShownPlace(); return }
         self.store.send(self.draft)
         self.draft = ""
+    }
+
+    /// Return (or the arrow) in a `/look` box: the suggestion showing goes in the box; with none yet, it goes in the moment one comes (`places.ready`).
+    private func useShownPlace() {
+        if let place = self.places.returnPressed() { self.pick(place) }
+    }
+
+    /// The address replaces the `/look` in the box, ready to send; nothing is sent. Its address was asked for in the background as the suggestion showed, so this is
+    /// usually at once.
+    private func pick(_ place: PlaceCandidate) {
+        Task { @MainActor in
+            guard let address = await self.places.address(for: place) else { return }
+            self.places.clear()
+            self.draft = address
+            self.startTyping()
+        }
     }
 
     private static func relative(_ date: Date) -> String {

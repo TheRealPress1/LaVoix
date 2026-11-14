@@ -12,6 +12,8 @@ struct MessagesWidgetView: View {
     var previewEnlargedFileID: Int64? = nil
     /// Previews can't click: this draws the emoji strip open.
     var previewEmojiOpen = false
+    /// Previews can't type: this draws a `/look` in the reply box with what it found (or was looking for) above it.
+    var previewPlaces: NotchPlaceLookup.State? = nil
     /// The conversation a dragged file is over.
     @State private var dropChatID: Int64?
 
@@ -82,7 +84,7 @@ struct MessagesWidgetView: View {
             }
             .frame(width: 232)
 
-            ThreadView(store: self.store, staticLayout: self.staticLayout, previewEnlargedFileID: self.previewEnlargedFileID, previewEmojiOpen: self.previewEmojiOpen)
+            ThreadView(store: self.store, staticLayout: self.staticLayout, previewEnlargedFileID: self.previewEnlargedFileID, previewEmojiOpen: self.previewEmojiOpen, previewPlaces: self.previewPlaces)
                 .frame(maxWidth: .infinity)
         }
         .foregroundStyle(.white)
@@ -324,6 +326,9 @@ private struct ThreadView: View {
     var staticLayout = false
     var previewEnlargedFileID: Int64? = nil
     var previewEmojiOpen = false
+    var previewPlaces: NotchPlaceLookup.State? = nil
+    /// `/look <place>` typed in the reply box: what Apple Maps found, shown above the box.
+    @StateObject private var places = NotchPlaceLookup()
     @State private var emojiOpen = false
     @State private var recentEmojis = NotchEmojiSettings.recents
     private var showsEmoji: Bool { self.emojiOpen || self.previewEmojiOpen }
@@ -393,6 +398,7 @@ private struct ThreadView: View {
                 StagedFilesBar(store: self.store, recipient: self.recipient)
             }
 
+            NotchPlaceResults(state: self.previewPlaces ?? self.places.state, selected: self.previewPlaces == nil ? self.places.selected : 0, resolving: self.places.resolving, staticLayout: self.staticLayout, onPick: { self.pick($0) }, onNext: { self.places.next() })
             if self.showsEmoji { self.emojiStrip }
             HStack(spacing: 8) {
                 self.replyField
@@ -441,7 +447,9 @@ private struct ThreadView: View {
             let store = self.store
             NotchDropLoader.load(providers) { urls in store.stage(urls) }
         })
-        .onChange(of: self.store.selectedChatID) { _, _ in self.draft = ""; self.hovering.clear(); self.emojiOpen = false }
+        .onChange(of: self.store.selectedChatID) { _, _ in self.draft = ""; self.hovering.clear(); self.emojiOpen = false; self.places.clear() }
+        .onChange(of: self.draft) { _, text in self.places.draftChanged(to: text) }
+        .onChange(of: self.places.ready) { _, place in if let place { self.pick(place) } }
         // A chat was picked by hand: the keyboard goes to its reply box.
         .onChange(of: self.store.replyFocusRequest) { _, _ in
             self.emojiOpen = false
@@ -479,7 +487,7 @@ private struct ThreadView: View {
     @ViewBuilder
     private var replyField: some View {
         if self.staticLayout {
-            Text("iMessage").font(.system(size: 13)).foregroundStyle(.white.opacity(0.4)).frame(maxWidth: .infinity, alignment: .leading)
+            Text(self.previewPlaces == nil ? "iMessage" : (self.previewPlaces == .typing ? "/look" : "/look Atlanta International School")).font(.system(size: 13)).foregroundStyle(.white.opacity(self.previewPlaces == nil ? 0.4 : 0.95)).frame(maxWidth: .infinity, alignment: .leading)
         } else {
             TextField("", text: self.$draft, prompt: Text("iMessage").foregroundStyle(.white.opacity(0.45)))
                 .textFieldStyle(.plain)
@@ -493,6 +501,8 @@ private struct ThreadView: View {
     }
 
     private func send() {
+        // "/look <place>" is a question for the notch, never a message: Return (or the arrow) takes the suggestion showing, and its address goes in the box.
+        if NotchPlaceCommand.isCommand(self.draft) { self.useShownPlace(); return }
         if self.store.stagedFiles.isEmpty {
             self.store.send(self.draft)
         } else {
@@ -500,6 +510,22 @@ private struct ThreadView: View {
             self.store.sendStaged(thenText: self.draft)
         }
         self.draft = ""
+    }
+
+    /// Return (or the arrow) in a `/look` box: the suggestion showing goes in the box; with none yet, it goes in the moment one comes (`places.ready`).
+    private func useShownPlace() {
+        if let place = self.places.returnPressed() { self.pick(place) }
+    }
+
+    /// The address replaces the `/look` in the box, ready to send; nothing is sent. Its address was asked for in the background as the suggestion showed, so this is
+    /// usually at once.
+    private func pick(_ place: PlaceCandidate) {
+        Task { @MainActor in
+            guard let address = await self.places.address(for: place) else { return }
+            self.places.clear()
+            self.draft = address
+            self.startTyping()
+        }
     }
 
     /// In a group, the first name of who is talking, shown above their first message in a run.
