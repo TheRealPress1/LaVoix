@@ -48,6 +48,7 @@ import SQLite3
 ///   {"op":"activity"}                                     -> {"ok":true,"activity":{recording,meeting_processing,dictating,busy}}   (so background work can wait its turn)
 ///   {"op":"contacts.lookup","emails":[...],"phones":[...]} -> {"ok":true,"contact":{found,full_name,nickname,organization,job_title,emails,phones,photo?,birthday?{month,day},dates?[{label,month,day}],addresses?[{label,city,state,country}],relations?[{label,name}],urls?[...]}}   (found by those addresses only; no birth year, no street)
 ///   {"op":"google.tokens","accounts":[{"email","access_token","expires_at"}]}  -> {"ok":true,"accounts":n}   (myOS gives the engine short-lived Google access tokens, kept in memory only, so the notch can create calendar events with a Meet link and invitations; an empty list forgets them)
+///   {"op":"notch.calendar_note","title","account","start","end","location"?,"all_day"?}  -> {"ok":true}   (myOS made this event in Google for the user: start and end are seconds since 1970, account is the Google address; the notch's calendar shows it at once until the Mac's Calendar has synced the real one down)
 ///   {"op":"permissions.status"}                          -> {"ok":true,"permissions":{microphone,accessibility,input_monitoring,contacts,full_disk_access}}   (each "granted" | "denied" | "not_asked"; read-only)
 ///   {"op":"permissions.request","name"}                   -> {"ok":true}   (shows macOS's own question where there is one; Full Disk Access is refused, the user switches it on in System Settings)
 ///   {"op":"shortcuts.get"}                                -> {"ok":true,"shortcuts":{dictation:[...],edit,command,cancel,paste_last}}   (labels such as "Fn"; read-only)
@@ -656,6 +657,12 @@ nonisolated enum EngineSocket {
             // Look's proposal for a calendar event: drawn as a calendar tile with Approve instead of the plain card (an older myOS sends none, and gets the plain card).
             let eventProposal = NotchBannerContent.EventProposal.parse(object["event"])
             await MainActor.run { NotchHubController.shared.showAlert(title: String(title.prefix(80)), text: String(text.prefix(lookStyle ? 600 : 300)), symbol: symbol, icon: icon, actionLabel: label, actionID: actionID, action2Label: label2, action2ID: actionID2, lookStyle: lookStyle, eventProposal: eventProposal) }
+            _ = emit(["ok": true])
+        case "notch.calendar_note":
+            // An event myOS just made in Google for the user (Look's Approve): the notch's calendar shows it at once, instead of after the Mac's
+            // Calendar has synced it down, and drops its own copy when the Calendar has the real one.
+            guard let made = CalendarStore.MyOSEvent.parse(object) else { return fail("title, account, start and end (seconds) are required, and the event must be a plausible one") }
+            _ = await CalendarStore.shared.noteFromMyOS(made)
             _ = emit(["ok": true])
         case "notch.connections_set":
             // The state of every connector, for the Connections tab (and its badge).

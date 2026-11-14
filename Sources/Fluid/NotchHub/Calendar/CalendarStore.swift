@@ -595,13 +595,17 @@ extension CalendarStore {
     /// Reads your photo and the owner address of each calendar, once, off the main thread (it is only needed when the form is opened).
     func loadIdentityIfNeeded() {
         guard !self.identityLoaded, !self.isSample else { return }
+        Task { await self.loadIdentity() }
+    }
+
+    /// The same, for a caller that needs the answer before it goes on (once loaded it returns at once).
+    func loadIdentity() async {
+        guard !self.identityLoaded, !self.isSample else { return }
         self.identityLoaded = true
-        Task {
-            let loaded = await Task.detached(priority: .utility) { (CalendarOwner.ownerEmails(), CalendarOwner.me()) }.value
-            self.ownerEmails = loaded.0.emails
-            self.me = loaded.1.map { CalendarMe(photo: $0.thumbnail.flatMap { NSImage(data: $0) }, initials: $0.initials) }
-            DebugLogger.shared.info("Calendar owners: \(loaded.0.summary); Me card: \(loaded.1 == nil ? "not available" : (loaded.1?.thumbnail == nil ? "no photo" : "photo"))", source: "Calendar")
-        }
+        let loaded = await Task.detached(priority: .utility) { (CalendarOwner.ownerEmails(), CalendarOwner.me()) }.value
+        self.ownerEmails = loaded.0.emails
+        self.me = loaded.1.map { CalendarMe(photo: $0.thumbnail.flatMap { NSImage(data: $0) }, initials: $0.initials) }
+        DebugLogger.shared.info("Calendar owners: \(loaded.0.summary); Me card: \(loaded.1 == nil ? "not available" : (loaded.1?.thumbnail == nil ? "no photo" : "photo"))", source: "Calendar")
     }
 
     func rememberNewEventCalendar(_ id: String) {
@@ -642,14 +646,49 @@ extension CalendarStore {
         return made
     }
 
+    /// An event myOS made in Google for the user (Look's Approve button) and wants in the notch at once, as the engine socket's
+    /// `notch.calendar_note` carries it: times are seconds since 1970, and `account` is the Google address it was made in.
+    struct MyOSEvent: Equatable {
+        var title: String
+        var start: Date
+        var end: Date
+        var isAllDay: Bool
+        var location: String?
+        var account: String
+
+        /// nil when the request is not a plausible event (no title or account, an end before the start, a year ago or years away).
+        static func parse(_ object: [String: Any], now: Date = Date()) -> MyOSEvent? {
+            func seconds(_ key: String) -> Date? { (object[key] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) } }
+            let title = Self.flat((object["title"] as? String) ?? "", max: 200)
+            let account = ((object["account"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !title.isEmpty, account.contains("@"), let start = seconds("start"), let end = seconds("end"), end > start else { return nil }
+            guard start > now.addingTimeInterval(-2 * 86400), start < now.addingTimeInterval(3 * 366 * 86400), end.timeIntervalSince(start) <= 8 * 86400 else { return nil }
+            let place = Self.flat((object["location"] as? String) ?? "", max: 200)
+            return MyOSEvent(title: title, start: start, end: end, isAllDay: (object["all_day"] as? Bool) == true, location: place.isEmpty ? nil : place, account: account)
+        }
+
+        private static func flat(_ text: String, max: Int) -> String {
+            String(text.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines).prefix(max))
+        }
+    }
+
+    /// Shows an event myOS made in Google for the user until the Mac's Calendar has synced it down (it takes that a while), in the colour of the
+    /// calendar that account owns when the Mac knows it.
+    @discardableResult
+    func noteFromMyOS(_ made: MyOSEvent) async -> Event {
+        await self.loadIdentity()
+        let calendarID = self.saveTargets().first { $0.email == made.account }?.id
+        return self.noteCreatedElsewhere(title: made.title, start: made.start, end: made.end, calendarID: calendarID, joinURL: nil, googleEmail: made.account, location: made.location, isAllDay: made.isAllDay)
+    }
+
     /// Shows an event that was created in Google (not yet in the Mac's Calendar) until the Calendar has it, and returns it.
     @discardableResult
-    func noteCreatedElsewhere(title: String, start: Date, end: Date, calendarID: String?, joinURL: URL?, googleID: String? = nil, googleEmail: String? = nil, guests: [CalendarGuest] = []) -> Event {
+    func noteCreatedElsewhere(title: String, start: Date, end: Date, calendarID: String?, joinURL: URL?, googleID: String? = nil, googleEmail: String? = nil, guests: [CalendarGuest] = [], location: String? = nil, isAllDay: Bool = false) -> Event {
         let info = self.writableCalendars.first { $0.id == calendarID }
         let clean = Self.cleanTitle(title)
         let event = Event(
-            id: "google|\(start.timeIntervalSince1970)|\(title)", title: clean, start: start, end: end, isAllDay: false,
-            color: info?.color ?? .blue, location: nil, joinURL: joinURL, attendeeCount: guests.count, calendarTitle: info?.title ?? "",
+            id: "google|\(start.timeIntervalSince1970)|\(title)", title: clean, start: start, end: end, isAllDay: isAllDay,
+            color: info?.color ?? .blue, location: location, joinURL: joinURL, attendeeCount: guests.count, calendarTitle: info?.title ?? "",
             calendarID: calendarID ?? "", canModify: true,
             attendees: guests.map { EventAttendee(name: $0.name, email: $0.email) }, googleID: googleID, googleEmail: googleEmail
         )
@@ -667,10 +706,17 @@ extension CalendarStore {
         self.recentlyCreated.removeAll { now.timeIntervalSince($0.at) > 600 }
         self.recentlyDeleted.removeAll { now.timeIntervalSince($0.at) > 1800 }
         self.recentlyInvited.removeAll { now.timeIntervalSince($0.at) > 1800 }
+        var added = false
         for (event, _) in self.recentlyCreated {
             func has(_ list: [Event]) -> Bool { list.contains { $0.title == event.title && $0.start == event.start } }
-            if !has(self.monthEvents) { self.monthEvents.append(event) }
-            if event.end > self.now, !has(self.events) { self.events.append(event) }
+            if !has(self.monthEvents) { self.monthEvents.append(event); added = true }
+            if event.end > self.now, !has(self.events) { self.events.append(event); added = true }
+        }
+        if added {
+            // A meeting added at the end of the list would show after the evening's; the Calendar's own order is all-day first, then by start.
+            func inOrder(_ a: Event, _ b: Event) -> Bool { (a.isAllDay ? 0 : 1, a.start) < (b.isAllDay ? 0 : 1, b.start) }
+            self.events.sort(by: inOrder)
+            self.monthEvents.sort(by: inOrder)
         }
         if !self.recentlyDeleted.isEmpty {
             let gone = Set(self.recentlyDeleted.map(\.key))

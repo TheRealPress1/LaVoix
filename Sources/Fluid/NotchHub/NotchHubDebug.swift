@@ -1824,6 +1824,25 @@ enum NotchHubDebug {
             check("a deleted meeting leaves the day and the month at once", !shown.events.contains { $0.id == design.id } && !shown.monthEvents.contains { $0.id == design.id })
             shown.noteCreatedElsewhere(title: design.title, start: design.start, end: design.end, calendarID: nil, joinURL: nil)
             check("a meeting made again at the same time is not hidden by the earlier delete", shown.events.contains { $0.title == design.title })
+            // An event myOS made in Google (Look's Approve) is shown at once, with its place, in time order, and read from the socket's words
+            let later = shown.noteCreatedElsewhere(title: "Later thing", start: now.addingTimeInterval(3 * 3600), end: now.addingTimeInterval(4 * 3600), calendarID: nil, joinURL: nil, location: "12 Rue Cler")
+            shown.noteCreatedElsewhere(title: "Sooner thing", start: now.addingTimeInterval(2 * 3600), end: now.addingTimeInterval(3 * 3600), calendarID: nil, joinURL: nil)
+            let order = shown.events.map(\.title)
+            check("an event made elsewhere shows its place and sits in time order, not at the end of the day",
+                  later.location == "12 Rue Cler" && !later.isAllDay && (order.firstIndex(of: "Sooner thing") ?? .max) < (order.firstIndex(of: "Later thing") ?? .min))
+            let allDayNote = shown.noteCreatedElsewhere(title: "Day off", start: Calendar.current.startOfDay(for: now.addingTimeInterval(86400)), end: Calendar.current.startOfDay(for: now.addingTimeInterval(2 * 86400)), calendarID: nil, joinURL: nil, isAllDay: true)
+            check("an all-day event made elsewhere is all-day", allDayNote.isAllDay && shown.monthEvents.first { $0.title == "Day off" }?.isAllDay == true)
+            let soon = now.addingTimeInterval(3600).timeIntervalSince1970
+            let fromMyOS = CalendarStore.MyOSEvent.parse(["title": "  Dinner with Sam \n", "account": " Me@Example.com ", "start": soon, "end": soon + 5400, "location": "12 Rue Cler", "all_day": false], now: now)
+            check("myOS's words are read: title trimmed, address lower case, times in seconds, the place kept",
+                  fromMyOS?.title == "Dinner with Sam" && fromMyOS?.account == "me@example.com" && fromMyOS?.location == "12 Rue Cler" && fromMyOS?.end.timeIntervalSince(fromMyOS?.start ?? .distantPast) == 5400 && fromMyOS?.isAllDay == false)
+            check("a request with no title or no address, an end before the start, a year ago or a decade away is refused",
+                  CalendarStore.MyOSEvent.parse(["title": " ", "account": "a@b.co", "start": soon, "end": soon + 60], now: now) == nil
+                  && CalendarStore.MyOSEvent.parse(["title": "x", "account": "nobody", "start": soon, "end": soon + 60], now: now) == nil
+                  && CalendarStore.MyOSEvent.parse(["title": "x", "account": "a@b.co", "start": soon, "end": soon - 60], now: now) == nil
+                  && CalendarStore.MyOSEvent.parse(["title": "x", "account": "a@b.co", "start": soon - 365 * 86400, "end": soon - 365 * 86400 + 60], now: now) == nil
+                  && CalendarStore.MyOSEvent.parse(["title": "x", "account": "a@b.co", "start": soon + 3650 * 86400, "end": soon + 3650 * 86400 + 60], now: now) == nil
+                  && CalendarStore.MyOSEvent.parse(["account": "a@b.co", "start": soon, "end": soon + 60], now: now) == nil)
 
             var utc = Calendar(identifier: .gregorian); utc.timeZone = TimeZone(identifier: "UTC")!
             let us = Locale(identifier: "en_US")
