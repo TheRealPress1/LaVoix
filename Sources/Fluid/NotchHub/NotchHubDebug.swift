@@ -2027,6 +2027,36 @@ enum NotchHubDebug {
         }
     }
 
+    /// `LAVOIX_NOTCH_PRIORITY_AUTOTEST=1` checks who may be on screen at the closed notch when several things want it (NotchPriority): the music strip and the System Fix badge
+    /// step aside for the hub, dictation, a meeting card in ANY phase and a message card, and come back when those go. Pure logic: nothing is drawn and nothing is touched.
+    @MainActor static func notchPriorityAutotestIfRequested() {
+        guard ProcessInfo.processInfo.environment["LAVOIX_NOTCH_PRIORITY_AUTOTEST"] == "1" else { return }
+        Task { @MainActor in
+            var failures = 0
+            func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)"); if !ok { failures += 1 } }
+            func may(_ who: NotchPriority.Occupant, hub: Bool = false, dictating: Bool = false, meeting: Bool = false, banner: Bool = false) -> Bool {
+                NotchPriority.mayShow(who, hubOpen: hub, dictating: dictating, meeting: meeting, banner: banner)
+            }
+            check("the order is hub, dictation, meeting card, message card, music, badge", NotchPriority.Occupant.allCases == [.hub, .dictation, .meeting, .banner, .music, .badge])
+            check("with nothing else on screen the music and the badge may show", may(.music) && may(.badge))
+            check("a meeting card (the 'Writing notes' one) makes the music step aside", !may(.music, meeting: true) && !may(.badge, meeting: true))
+            check("the music is back when the meeting card has gone", may(.music, meeting: false))
+            check("the hub, dictation and a message card each make the music step aside", !may(.music, hub: true) && !may(.music, dictating: true) && !may(.music, banner: true))
+            check("a meeting card never steps aside for the music, the badge or a message card (only for the hub and dictation)", may(.meeting) && may(.meeting, banner: true) && !may(.meeting, hub: true) && !may(.meeting, dictating: true))
+            check("the hub outranks everything, the badge yields to the music's own cases too", may(.hub) && !may(.dictation, hub: true) && !may(.badge, banner: true) && !may(.badge, dictating: true))
+            check("a message card steps aside for a meeting card in progress, as before", !may(.banner, meeting: true) && may(.banner))
+            // the strip's own rule, with its old arguments and the new one
+            func strip(meetingLive: Bool = false, banner: Bool = false, card: Bool = false, hub: Bool = false, playing: Bool = true, enabled: Bool = true) -> Bool {
+                NotchNowPlayingAmbientSettings.shouldShow(enabled: enabled, playing: playing, hubOpen: hub, meetingLive: meetingLive, bannerShowing: banner, meetingCardShowing: card)
+            }
+            check("the music strip shows while something plays and nothing else holds the notch", strip())
+            check("the music strip steps aside for a meeting card in any phase (writing notes, starting, failed...) even when no recording is live", !strip(card: true) && !strip(meetingLive: true))
+            check("it still steps aside for a message card and the open hub, and needs music playing and the setting on", !strip(banner: true) && !strip(hub: true) && !strip(playing: false) && !strip(enabled: false))
+            print(failures == 0 ? "NOTCH PRIORITY AUTOTEST ALL PASSED" : "NOTCH PRIORITY AUTOTEST \(failures) FAILED")
+            exit(failures == 0 ? 0 : 1)
+        }
+    }
+
     /// `LAVOIX_AVATAR_AUTOTEST=1` checks how a conversation with no picture of its own gets one from myOS: the person is found by phone number, email or Contacts id in a
     /// made-up database, a merged person is followed, an unsafe id is refused, and a picture is scaled down to avatar size. Made-up people and files in a temporary place only.
     @MainActor static func avatarAutotestIfRequested() {

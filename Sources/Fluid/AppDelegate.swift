@@ -51,7 +51,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     func applicationDidFinishLaunching(_ notification: Notification) {
         StallRecorder.shared.start()
         if NotchHubSettings.isEnabled { NotchNowPlayingStrip.shared.start(); SystemFixStrip.shared.start() }
-        BookshelfCapture.shared.start()
+        // A test, probe or render run is a second copy of the app: it must not read the Bookshelf sign-in from the Keychain (macOS asks about a re-signed copy and waits, which
+        // froze such a run for minutes) or poll Bookshelf beside the real engine.
+        if !DiagnosticRun.isActive { BookshelfCapture.shared.start() }
         LocalCleanupController.shared.warmUpIfEnabled()
         NotchHubController.shared.applyEnabledSetting()
         if SettingsStore.shared.shareContactsWithMyOSEnabled { ContactsInboxScheduler.shared.start() }

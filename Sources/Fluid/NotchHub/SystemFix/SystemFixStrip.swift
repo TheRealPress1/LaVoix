@@ -20,13 +20,18 @@ final class SystemFixStrip {
         self.started = true
         SystemFixAgent.shared.$phase.receive(on: RunLoop.main).sink { [weak self] _ in self?.refresh() }.store(in: &self.bag)
         NotchHubController.shared.model.$isOpen.receive(on: RunLoop.main).sink { [weak self] _ in self?.refresh() }.store(in: &self.bag)
+        // Anything ranked above the badge (see NotchPriority) comes and goes: step aside at once.
+        NotchHubController.shared.model.$banner.receive(on: RunLoop.main).sink { [weak self] _ in self?.refresh() }.store(in: &self.bag)
+        NotchMeetingCardController.shared.showingChanged.receive(on: RunLoop.main).sink { [weak self] _ in self?.refresh() }.store(in: &self.bag)
         // The music strip comes and goes on its own; keep clear of it.
         Timer.publish(every: 2, on: .main, in: .common).autoconnect().sink { [weak self] _ in self?.refresh() }.store(in: &self.bag)
     }
 
     private func refresh() {
         let state = SystemFixStripModel.State(SystemFixAgent.shared.phase)
-        guard state != .hidden, !NotchHubController.shared.model.isOpen, let screen = NotchGeometry.targetScreen() else {
+        let mayShow = NotchPriority.mayShow(.badge, hubOpen: NotchHubController.shared.model.isOpen, dictating: AppServices.shared.asr.isRunning,
+                                            meeting: NotchMeetingCardController.shared.isShowing, banner: NotchHubController.shared.model.banner != nil)
+        guard state != .hidden, mayShow, let screen = NotchGeometry.targetScreen() else {
             self.window?.orderOut(nil)
             return
         }

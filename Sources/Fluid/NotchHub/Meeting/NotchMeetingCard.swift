@@ -607,6 +607,9 @@ final class NotchMeetingCardController {
     /// True while the card is on screen.
     var isShowing: Bool { self.shouldShow }
 
+    /// Says when the card appears or goes, so the strips that rank below it (the music, the System Fix badge) step aside or come back at once, not at their next timer.
+    let showingChanged = CurrentValueSubject<Bool, Never>(false)
+
     /// Only a live recording (or its transcription) keeps message cards away. A "meeting starting" or "meeting ended"
     /// card is just a prompt, so a new message replaces it instead of being swallowed.
     var blocksBanners: Bool {
@@ -1159,8 +1162,10 @@ final class NotchMeetingCardController {
     private func syncPanel() {
         guard self.shouldShow, let screen = NotchGeometry.targetScreen() else {
             self.panel?.orderOut(nil)
+            if self.showingChanged.value { self.showingChanged.send(false) }
             return
         }
+        if !self.showingChanged.value { self.showingChanged.send(true) }
         self.model.notchWidth = NotchGeometry.closedSize(for: screen).width
         let frame = NotchGeometry.meetingCardFrame(
             for: screen,
