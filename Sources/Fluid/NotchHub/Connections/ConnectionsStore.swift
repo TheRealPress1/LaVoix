@@ -60,26 +60,39 @@ final class ConnectionsStore: ObservableObject {
 }
 
 /// The buttons pressed in the notch, waiting for myOS to pick them up. myOS asks with a long wait (`notch.action_wait`), so a press reaches it
-/// at once without myOS having to be reachable from here.
+/// at once without myOS having to be reachable from here. A press made while myOS is not running waits here, and `press` starts myOS for it; one
+/// that is still unclaimed after `maxAge` is dropped, so a sign-in a person pressed and walked away from cannot pop up minutes later by surprise.
+/// An idea typed into the notch (`idea:`) is the person's own words, so it is kept until myOS takes it.
 actor ConnectionActions {
     static let shared = ConnectionActions()
-    private var queue: [String] = []
+    nonisolated static let maxAge: TimeInterval = 180
+
+    private var queue: [(id: String, at: Date)] = []
     private var waiter: CheckedContinuation<String?, Never>?
     private var token = 0
 
-    func push(_ id: String) {
+    func push(_ id: String, now: Date = Date()) {
         if let waiter {
             self.waiter = nil
             waiter.resume(returning: id)
         } else {
-            self.queue.append(id)
+            self.queue.append((id, now))
             if self.queue.count > 20 { self.queue.removeFirst() }
         }
     }
 
+    /// The oldest press that is still worth acting on.
+    private func takeFresh(now: Date) -> String? {
+        while !self.queue.isEmpty {
+            let first = self.queue.removeFirst()
+            if first.id.hasPrefix("idea:") || now.timeIntervalSince(first.at) <= Self.maxAge { return first.id }
+        }
+        return nil
+    }
+
     /// The next pressed button, or nil after `timeout` seconds.
-    func next(timeout: TimeInterval) async -> String? {
-        if !self.queue.isEmpty { return self.queue.removeFirst() }
+    func next(timeout: TimeInterval, now: Date = Date()) async -> String? {
+        if let fresh = self.takeFresh(now: now) { return fresh }
         if let old = self.waiter {
             self.waiter = nil
             old.resume(returning: nil)
@@ -293,11 +306,13 @@ struct ConnectionsWidgetView: View {
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(0.1)))
     }
 
-    /// A button: the Full Disk Access one opens System Settings here; every other is handed to myOS.
+    /// A button: the Full Disk Access one opens System Settings here; every other is handed to myOS, which is started first when it is not
+    /// running (the reconnect flow lives in myOS, so with myOS closed a press used to wait in the queue and nothing happened).
     @MainActor static func press(_ id: String) {
         if id == self.fullDiskAccess {
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
         } else {
+            MyOSLink.startIfNeeded(reason: String(id.prefix(while: { $0 != ":" })))
             Task { await ConnectionActions.shared.push(id) }
         }
     }

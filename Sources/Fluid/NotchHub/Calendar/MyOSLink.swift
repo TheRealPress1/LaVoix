@@ -22,6 +22,29 @@ nonisolated enum MyOSLink {
 
     static var isInstalled: Bool { FileManager.default.fileExists(atPath: self.appURL.path) }
 
+    /// myOS's own bundle identifier (the engine inside it has another one).
+    static let bundleIdentifier = "com.gaspard.myos"
+
+    static var isRunning: Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: self.bundleIdentifier).isEmpty }
+
+    /// Starts myOS in the background when it is not running, so a button pressed in the notch can be answered by it. Nothing is brought forward:
+    /// what the press starts (a sign-in in the browser, say) comes forward by itself. Returns false when myOS is not installed. `reason` is only
+    /// the kind of button (never an address), because it goes in the log.
+    @MainActor @discardableResult
+    static func startIfNeeded(reason: String) -> Bool {
+        guard self.isInstalled else { return false }
+        guard !self.isRunning else { return true }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        NSWorkspace.shared.openApplication(at: self.appURL, configuration: configuration) { _, error in
+            if let error {
+                DebugLogger.shared.warning("myOS link: could not start myOS for a '\(reason)' button: \(error.localizedDescription)", source: "Connections")
+            }
+        }
+        DebugLogger.shared.info("myOS link: myOS was not running, starting it for a '\(reason)' button", source: "Connections")
+        return true
+    }
+
     /// Writes the request and brings myOS forward (starting it when it is not running). Returns false when myOS is not installed.
     @MainActor @discardableResult
     static func open(path: String, query: String, to url: URL? = nil) -> Bool {
