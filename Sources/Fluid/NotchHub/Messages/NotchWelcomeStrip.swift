@@ -17,8 +17,8 @@ struct NotchWelcomeStripView: View {
     @State private var wave: Double = 0
 
     private static let font = Font.system(size: 13, weight: .medium)
-    /// The room between a word and the notch's edge.
-    private static let gap: CGFloat = 14
+    /// The room between the words and the strip's outer ends: the same on both sides, so "Welcome back" and the name with its hand sit evenly from the edges.
+    private static let edge: CGFloat = 20
 
     init(notchWidth: CGFloat, staticLayout: Bool = false, name: String? = Self.firstName(from: NSFullUserName())) {
         self.notchWidth = notchWidth
@@ -39,8 +39,8 @@ struct NotchWelcomeStripView: View {
                 .font(Self.font)
                 .lineLimit(1)
                 .tracking(0.3)
-                .padding(.trailing, Self.gap)
-                .frame(width: NotchGeometry.welcomeWing, alignment: .trailing)
+                .padding(.leading, Self.edge)
+                .frame(width: NotchGeometry.welcomeWing, alignment: .leading)
                 // The words come out of the notch as the strip widens: this one slides left, the other right.
                 .offset(x: self.shown ? 0 : 16)
             Spacer(minLength: self.notchWidth)
@@ -53,8 +53,8 @@ struct NotchWelcomeStripView: View {
                     .font(.system(size: 13))
                     .rotationEffect(.degrees(self.wave), anchor: UnitPoint(x: 0.7, y: 0.9))
             }
-            .padding(.leading, Self.gap)
-            .frame(width: NotchGeometry.welcomeWing, alignment: .leading)
+            .padding(.trailing, Self.edge)
+            .frame(width: NotchGeometry.welcomeWing, alignment: .trailing)
             .offset(x: self.shown ? 0 : -16)
         }
         .opacity(self.shown ? 1 : 0)

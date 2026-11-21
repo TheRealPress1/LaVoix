@@ -8,7 +8,8 @@ struct TerminalWidgetView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            self.header
+            // The notch's own title band already says "Terminal" beside its toggle, so the tab adds only its status and buttons, and only once open.
+            if self.store.isUnlocked { self.header }
             if self.store.isUnlocked { self.terminal } else { self.lockedBody }
         }
         .foregroundStyle(.white)
@@ -26,10 +27,6 @@ struct TerminalWidgetView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Text("Terminal")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.5))
-                .textCase(.uppercase)
             if self.store.isUnlocked {
                 Circle().fill(self.statusColor).frame(width: 6, height: 6)
                 Text(self.statusText).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
