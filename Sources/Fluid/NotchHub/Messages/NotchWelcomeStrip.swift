@@ -2,13 +2,15 @@ import AppKit
 import SwiftUI
 
 /// What shows when the notch comes back on (the app opening, or the notch being switched on again): the notch's own strip widens outwards to both sides of the
-/// camera, "Welcome" on its left and "Back" with a waving hand on its right, then draws back in. It never drops down. The shape itself is drawn by NotchHubView
-/// (its size comes from `NotchGeometry.bannerSize`); this is what is written on it.
+/// camera, "Welcome back" on its left and the person's first name with a waving hand on its right, then draws back in. It never drops down. The shape itself
+/// is drawn by NotchHubView (its size comes from `NotchGeometry.bannerSize`); this is what is written on it.
 struct NotchWelcomeStripView: View {
     /// The width of the hardware notch (or the closed notch's stand-in), which the two words leave clear.
     let notchWidth: CGFloat
     /// A still preview draws no animation and shows everything at once.
     var staticLayout = false
+    /// The first name written beside the hand (from the Mac's account name); with none, the hand stands alone.
+    let name: String?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var shown: Bool
@@ -18,16 +20,24 @@ struct NotchWelcomeStripView: View {
     /// The room between a word and the notch's edge.
     private static let gap: CGFloat = 14
 
-    init(notchWidth: CGFloat, staticLayout: Bool = false) {
+    init(notchWidth: CGFloat, staticLayout: Bool = false, name: String? = Self.firstName(from: NSFullUserName())) {
         self.notchWidth = notchWidth
         self.staticLayout = staticLayout
+        self.name = name
         self._shown = State(initialValue: staticLayout)
+    }
+
+    /// The first word of a full name ("Gaspard Seuge" -> "Gaspard"); nil when there is nothing to show.
+    nonisolated static func firstName(from fullName: String) -> String? {
+        let word = fullName.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
+        return (word?.isEmpty ?? true) ? nil : word
     }
 
     var body: some View {
         HStack(spacing: 0) {
-            Text("Welcome")
+            Text("Welcome back")
                 .font(Self.font)
+                .lineLimit(1)
                 .tracking(0.3)
                 .padding(.trailing, Self.gap)
                 .frame(width: NotchGeometry.welcomeWing, alignment: .trailing)
@@ -35,7 +45,10 @@ struct NotchWelcomeStripView: View {
                 .offset(x: self.shown ? 0 : 16)
             Spacer(minLength: self.notchWidth)
             HStack(spacing: 5) {
-                Text("Back").font(Self.font).tracking(0.3)
+                if let name = self.name {
+                    // A long first name is cut with an ellipsis rather than pushed into the notch.
+                    Text(name).font(Self.font).tracking(0.3).lineLimit(1).truncationMode(.tail)
+                }
                 Text("👋")
                     .font(.system(size: 13))
                     .rotationEffect(.degrees(self.wave), anchor: UnitPoint(x: 0.7, y: 0.9))
@@ -51,7 +64,7 @@ struct NotchWelcomeStripView: View {
         .contentShape(Rectangle())
         .onTapGesture { NotchHubController.shared.dismissBanner() }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Welcome back")
+        .accessibilityLabel(self.name.map { "Welcome back, \($0)" } ?? "Welcome back")
         .task {
             guard !self.staticLayout else { return }
             // The strip is already widening: the words follow it.

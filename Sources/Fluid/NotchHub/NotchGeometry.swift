@@ -52,8 +52,9 @@ enum NotchGeometry {
         return NSRect(x: screen.frame.midX - size.width / 2 - 8, y: screen.frame.maxY - size.height - 8, width: size.width + 16, height: size.height + 8)
     }
 
-    /// How far the "Welcome back" strip reaches out on each side of the notch: room for a word and a gap either side of it.
-    static let welcomeWing: CGFloat = 92
+    /// How far the "Welcome back" strip reaches out on each side of the notch: room for "Welcome back" on the left, and a first name with a hand on the right
+    /// (a longer name is cut with an ellipsis), each with a gap to the notch's edge.
+    static let welcomeWing: CGFloat = 124
 
     static let meetingCardPadding: CGFloat = 16
 
