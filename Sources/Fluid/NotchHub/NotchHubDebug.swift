@@ -251,6 +251,14 @@ enum NotchHubDebug {
                     NotchWidget(id: "shelf", title: "Shelf", systemImage: "tray.fill") { AnyView(ShelfWidgetView(store: shelf, staticLayout: true)) },
                 ])
                 model.selectedWidgetID = isClip ? "clipboard" : "shelf"
+            } else if widgetName.hasPrefix("terminal") {
+                // terminal (unlocked, invented output) / terminal-locked: the Terminal tab.
+                let terminal = TerminalStore.sample(unlocked: widgetName != "terminal-locked")
+                model = NotchHubModel(widgets: [
+                    NotchWidget(id: "system", title: "System", systemImage: "gauge.with.dots.needle.33percent") { AnyView(EmptyView()) },
+                    NotchWidget(id: "terminal", title: "Terminal", systemImage: "terminal") { AnyView(TerminalWidgetView(store: terminal, staticLayout: true)) },
+                ])
+                model.selectedWidgetID = "terminal"
             } else if widgetName.hasPrefix("messages") {
                 let store = MessagesStore.sample(access: widgetName == "messages-denied" ? .needsFullDiskAccess : .granted)
                 if widgetName == "messages-group" { store.select(5) }

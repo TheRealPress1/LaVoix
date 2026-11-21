@@ -161,6 +161,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        TerminalStore.shared.shutdown()
         #if DEBUG
         if let observer = self.updateUISimulationObserver {
             DistributedNotificationCenter.default().removeObserver(observer)

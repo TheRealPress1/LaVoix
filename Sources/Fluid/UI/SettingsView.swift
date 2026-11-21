@@ -405,6 +405,21 @@ struct SettingsView: View {
                             Divider().opacity(0.2)
 
                             self.settingsToggleRow(
+                                title: "Terminal in the notch",
+                                description: "A small command line for quick things (aws, vercel, supabase, git). It opens only with your fingerprint, takes only keys from your own keyboard, and nothing else on this Mac, no assistant and no model, can type in it or read it.",
+                                footnote: "Turning this on only adds the tab. It stays locked until Touch ID. It cannot run sudo, and programs that take over the whole screen (vim) belong in the Terminal app.",
+                                isOn: Binding(
+                                    get: { NotchTerminalSettings.isEnabled },
+                                    set: { enabled in
+                                        NotchTerminalSettings.isEnabled = enabled
+                                        NotchHubController.shared.widgetSettingsChanged()
+                                        SettingsStore.shared.objectWillChange.send()
+                                    }
+                                )
+                            )
+                            Divider().opacity(0.2)
+
+                            self.settingsToggleRow(
                                 title: "iMessage in the notch",
                                 description: "See new messages and reply from the notch. Needs Full Disk Access to read your messages, and Contacts to show names. Everything stays on this Mac.",
                                 footnote: "Replies are sent through the Messages app; macOS will ask to let LaVoix control it the first time.",

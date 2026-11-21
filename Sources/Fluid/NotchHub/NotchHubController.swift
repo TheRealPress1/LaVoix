@@ -153,6 +153,7 @@ final class NotchHubController {
         self.startMessagesIfEnabled()
         self.startWhatsAppAlertsIfEnabled()
         ConnectionsStore.shared.restoreBadge()
+        TerminalStore.shared.attach(to: self)
         NotchMeetingCardController.shared.hubStateChanged()
         if NotchClipboardSettings.isEnabled { ClipboardStore.shared.start() }
         self.startCalendarIfEnabled()
@@ -245,8 +246,15 @@ final class NotchHubController {
     // MARK: - Clipboard and shelf
 
     /// Called when the clipboard or shelf setting changes.
+    /// Keeps the notch out of screenshots and screen recordings (measured to work for screencapture and ScreenCaptureKit on macOS 26): used only while the terminal
+    /// tab is open and unlocked, so a screenshot-based tool sees the desktop behind the notch, not the scrollback.
+    func setCaptureHidden(_ hidden: Bool) {
+        self.window?.sharingType = hidden ? .none : .readOnly
+    }
+
     func widgetSettingsChanged() {
         guard self.isRunning else { return }
+        if !NotchTerminalSettings.isEnabled { TerminalStore.shared.shutdown() }
         self.model.reloadWidgets()
         if NotchClipboardSettings.isEnabled { ClipboardStore.shared.start() } else { ClipboardStore.shared.stop() }
         self.startCalendarIfEnabled()
@@ -976,6 +984,8 @@ final class NotchHubController {
     /// `fieldHoldsDraft` for whatever has the cursor in the notch right now.
     private var notchFieldHoldsDraft: Bool {
         guard let textView = self.window?.firstResponder as? NSTextView else { return false }
+        // The terminal's line keeps every arrow key for itself, empty or not (Left and Right move its cursor, they must not change the tab).
+        if textView is TerminalInputTextView { return true }
         return Self.fieldHoldsDraft(isEditable: textView.isEditable, text: textView.string, hasMarkedText: textView.hasMarkedText())
     }
 
