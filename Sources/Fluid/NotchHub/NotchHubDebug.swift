@@ -1454,6 +1454,12 @@ enum NotchHubDebug {
             store.select(1)
             print("\(store.thread.map(\.id) == before ? "PASS" : "FAIL") switching back restores the first thread")
 
+            // Clicking a person in the New message search opens their chat at once (an empty chat first, the real one swapped in when found), and leaves the search.
+            let searched = MessagesStore.sample()
+            searched.startCompose()
+            searched.openResult(MessagesStore.ComposeResult(id: "h:+15550001111", name: "Maya Chen", detail: "+15550001111", handle: "+15550001111", group: nil))
+            print("\(searched.newChat == MessagesStore.NewChat(name: "Maya Chen", handle: "+15550001111") && !searched.composing && searched.composeResults.isEmpty && searched.thread.isEmpty && searched.selectedChatID == nil ? "PASS" : "FAIL") clicking a search result opens that chat in the same tick and leaves the search")
+
             // The times above messages (invented dates, a fixed calendar and locale so the words do not depend on the machine).
             do {
                 var cal = Calendar(identifier: .gregorian)

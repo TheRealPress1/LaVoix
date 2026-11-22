@@ -651,10 +651,10 @@ final class MessagesStore: ObservableObject {
         }
         self.composeResults = results
         let database = self.database
+        guard self.readsDatabase else { return }
         Task {
-            let groups = await withCheckedContinuation { (continuation: CheckedContinuation<[MessageConversation], Never>) in
-                Self.readQueue.async { continuation.resume(returning: database.groupChats(matching: q) ?? []) }
-            }
+            // Not on the shared background queue: typing in the search must not wait behind the notch's own refresh.
+            let groups = await Task.detached(priority: .userInitiated) { database.groupChats(matching: q) ?? [] }.value
             guard self.composeQuery == q, !groups.isEmpty else { return }
             let more = groups.map { ComposeResult(id: "g:\($0.id)", name: self.title(for: $0), detail: "Group", handle: nil, group: $0) }
             self.composeResults += more.filter { m in !self.composeResults.contains { $0.id == m.id } }
@@ -662,6 +662,9 @@ final class MessagesStore: ObservableObject {
     }
 
     /// Opens the chat with that person (or group). With no chat yet, it opens an empty one that is created by the first message.
+    /// It answers at once: the chat's header and reply box show on the click, as an empty chat, and the real chat (if there is one) replaces it when the lookup lands.
+    /// The lookup used to run on the shared background queue (low priority, one job at a time, busy with the notch's own refresh), so on a loaded Mac the click seemed
+    /// to do nothing until that queue got to it. It now runs on its own, at the priority of a click, like opening a chat from the list.
     func openResult(_ result: ComposeResult) {
         if let group = result.group {
             self.show(group)
@@ -669,20 +672,27 @@ final class MessagesStore: ObservableObject {
             return
         }
         guard let handle = result.handle else { return }
+        let draft = NewChat(name: result.name == handle ? handle : result.name, handle: handle)
+        self.selectedChatID = nil
+        self.thread = []
+        self.sendError = nil
+        self.newChat = draft
+        self.composing = false
+        self.composeResults = []
+        self.requestReplyFocus()
+        guard self.readsDatabase else { return }
         let database = self.database
         Task {
-            let found = await withCheckedContinuation { (continuation: CheckedContinuation<MessageConversation?, Never>) in
-                Self.readQueue.async {
-                    let chat = database.oneToOneChat(handles: [handle])?.first
-                    continuation.resume(returning: chat.flatMap { database.conversation(id: $0.id) })
-                }
-            }
-            if let found { self.show(found); self.requestReplyFocus(); return }
-            self.selectedChatID = nil
-            self.thread = []
-            self.sendError = nil
-            self.newChat = NewChat(name: result.name == handle ? handle : result.name, handle: handle)
-            self.composing = false
+            let started = Date()
+            let found = await Task.detached(priority: .userInitiated) { () -> MessageConversation? in
+                let chat = database.oneToOneChat(handles: [handle])?.first
+                return chat.flatMap { database.conversation(id: $0.id) }
+            }.value
+            // Only the time and the outcome are logged: never a name or a number.
+            DebugLogger.shared.info("Messages: a chat opened from the search looked itself up in \(Int(Date().timeIntervalSince(started) * 1000)) ms (\(found == nil ? "no chat yet" : "found"))", source: "Messages")
+            // The person may have moved on (picked another chat, cancelled) while it looked.
+            guard let found, self.newChat == draft else { return }
+            self.show(found)
             self.requestReplyFocus()
         }
     }
