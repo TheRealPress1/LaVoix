@@ -14,6 +14,10 @@ final class TerminalInputTextView: NSTextView {
     var onHistoryUp: ((String) -> String?)?
     var onHistoryDown: (() -> String?)?
     var onBlocked: (() -> Void)?
+    /// Told how many line breaks a paste joined (see `TerminalGuard.unwrapped`).
+    var onPasteJoined: ((Int) -> Void)?
+    /// Where pastes come from. Only a test changes it.
+    var pasteboard = NSPasteboard.general
 
     private var hardwareKeyInFlight = false
     private var internalEdit = false
@@ -65,21 +69,39 @@ final class TerminalInputTextView: NSTextView {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool { false }
     override func readSelection(from pboard: NSPasteboard) -> Bool { false }
 
+    /// True while a hardware key is being handled: either this view is inside one of its own key handlers, or the key event being dispatched right now (a menu
+    /// shortcut such as Command-V reaches `paste:` after the view's key handler has returned) came from the keyboard hardware. An Accessibility call, a script
+    /// or a service has no such event, so it is refused.
+    private var hardwareContext: Bool {
+        if self.hardwareKeyInFlight { return true }
+        guard let event = NSApp.currentEvent, event.type == .keyDown else { return false }
+        return TerminalGuard.isHardware(event)
+    }
+
     /// The one choke point for the text: only a hardware key, or the field's own housekeeping, may change it.
     override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
-        guard self.hardwareKeyInFlight || self.internalEdit else { self.onBlocked?(); return false }
+        guard self.hardwareContext || self.internalEdit else { self.onBlocked?(); return false }
         return super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
     }
 
     override func insertText(_ string: Any, replacementRange: NSRange) {
-        guard self.hardwareKeyInFlight || self.internalEdit else { self.onBlocked?(); return }
+        guard self.hardwareContext || self.internalEdit else { self.onBlocked?(); return }
         super.insertText(string, replacementRange: replacementRange)
     }
 
+    /// Command-V: a copied command lands in the field with the line breaks the screen added joined up (see `TerminalGuard.unwrapped`). It never runs by itself.
     override func paste(_ sender: Any?) {
-        guard self.hardwareKeyInFlight else { self.onBlocked?(); return }
-        guard let text = NSPasteboard.general.string(forType: .string) else { return }
-        // Several lines stay in the field until he presses Enter: a paste never runs by itself.
+        guard self.hardwareContext else { self.onBlocked?(); return }
+        guard let text = self.pasteboard.string(forType: .string) else { return }
+        let result = TerminalGuard.unwrapped(text)
+        self.insertText(result.text, replacementRange: self.selectedRange())
+        if result.joined > 0 { self.onPasteJoined?(result.joined) }
+    }
+
+    /// Shift-Command-V: exactly as copied (control characters still removed), line breaks kept.
+    func pasteAsWritten() {
+        guard self.hardwareContext else { self.onBlocked?(); return }
+        guard let text = self.pasteboard.string(forType: .string) else { return }
         self.insertText(TerminalGuard.sanitized(text), replacementRange: self.selectedRange())
     }
 
@@ -98,10 +120,21 @@ final class TerminalInputTextView: NSTextView {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.type == .keyDown else { return super.performKeyEquivalent(with: event) }
+        let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        guard flags.contains(.command) else { return super.performKeyEquivalent(with: event) }
         guard TerminalGuard.isHardware(event) else { self.onBlocked?(); return true }
         self.hardwareKeyInFlight = true
         defer { self.hardwareKeyInFlight = false }
-        return super.performKeyEquivalent(with: event)
+        // The editing shortcuts are handled here, not left to a menu (the engine runs without a visible menu bar, and a menu would call back after this returns).
+        switch (event.charactersIgnoringModifiers ?? "").lowercased() {
+        case "v":
+            if flags.contains(.shift) { self.pasteAsWritten() } else { self.paste(nil) }
+            return true
+        case "c" where !flags.contains(.shift): self.copy(nil); return true
+        case "x" where !flags.contains(.shift): self.cut(nil); return true
+        case "a" where !flags.contains(.shift): self.selectAll(nil); return true
+        default: return super.performKeyEquivalent(with: event)
+        }
     }
 
     override func keyDown(with event: NSEvent) {
@@ -161,6 +194,7 @@ struct TerminalInputField: NSViewRepresentable {
         text.onHistoryUp = { current in MainActor.assumeIsolated { store.historyPrevious(current: current) } }
         text.onHistoryDown = { MainActor.assumeIsolated { store.historyNext() } }
         text.onBlocked = { MainActor.assumeIsolated { store.noteBlockedInput() } }
+        text.onPasteJoined = { count in MainActor.assumeIsolated { store.noteJoinedPaste(lines: count) } }
         scroll.documentView = text
         return scroll
     }

@@ -27,6 +27,35 @@ nonisolated enum TerminalGuard {
         return String(String.UnicodeScalarView(unified.unicodeScalars.filter { $0 == "\n" || $0 == "\t" || ($0.value >= 0x20 && $0.value != 0x7F && !($0.value >= 0x80 && $0.value < 0xA0)) }))
     }
 
+    /// Text copied from a screen (a chat, a web page, a terminal) usually carries the line breaks the screen added where it wrapped a long command. Pasted as
+    /// they are, each piece would run as its own command. So a pasted block is joined into one command: the break and the next line's indent become one space,
+    /// unless the line ran to the full width of the block (then a word was split mid-token, a long URL or path, and the pieces join with no space).
+    /// Kept as written: a break after a trailing backslash (a real continuation), a block with a blank line in it (deliberately separate), and a single line.
+    /// `joined` is how many breaks were joined, so the tab can say so. Shift-Command-V pastes without any of this.
+    static func unwrapped(_ raw: String) -> (text: String, joined: Int) {
+        var lines = self.sanitized(raw).split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+            var s = String(line)
+            while let last = s.last, last == " " || last == "\t" { s.removeLast() }
+            return s
+        }
+        while lines.first?.isEmpty == true { lines.removeFirst() }
+        while lines.last?.isEmpty == true { lines.removeLast() }
+        guard lines.count > 1 else { return (lines.first ?? "", 0) }
+        if lines.contains(where: { $0.isEmpty }) { return (lines.joined(separator: "\n"), 0) }
+        let width = lines.map(\.count).max() ?? 0
+        var out = lines[0]
+        var joined = 0
+        for i in 1 ..< lines.count {
+            let previous = lines[i - 1]
+            let next = lines[i]
+            if previous.hasSuffix("\\") { out += "\n" + next; continue }
+            let splitMidToken = width >= 40 && previous.count >= width - 1 && next.first.map { !$0.isWhitespace } == true
+            out += (splitMidToken ? "" : " ") + next.drop(while: { $0 == " " || $0 == "\t" })
+            joined += 1
+        }
+        return (out, joined)
+    }
+
     /// sudo and su ask for a password, and there is no safe place to type one here. Guidance, not a security boundary (the Mac's own rules still apply).
     static func refusesPasswordCommand(_ text: String) -> Bool {
         text.range(of: #"(?m)(^|[;&|(`])\s*(sudo|su)(\s|$)"#, options: .regularExpression) != nil

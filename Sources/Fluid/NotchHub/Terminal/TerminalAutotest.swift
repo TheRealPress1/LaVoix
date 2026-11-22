@@ -65,6 +65,13 @@ extension NotchHubDebug {
             let fake = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, characters: "x", charactersIgnoringModifiers: "x", isARepeat: false, keyCode: 7)
             check("an event with no CGEvent behind it is refused (fail closed)", fake != nil && !TerminalGuard.isHardware(fake!))
             check("escape and control characters are stripped, line breaks unified", TerminalGuard.sanitized("a\u{1B}[201~b\r\nc\u{07}d\re") == "a[201~b\ncd\ne")
+            let wrapped = TerminalGuard.unwrapped("aws s3 cp ./build\n  s3://my-bucket/site --recursive")
+            check("a copied command wrapped at a word is joined with one space", wrapped.text == "aws s3 cp ./build s3://my-bucket/site --recursive" && wrapped.joined == 1)
+            let url = TerminalGuard.unwrapped("curl https://example.com/api/v1/organizations/pa\nrt/of/the/path?x=1&y=2")
+            check("a line that ran to the full width and split a long word is joined with no space", url.text == "curl https://example.com/api/v1/organizations/part/of/the/path?x=1&y=2" && url.joined == 1)
+            check("a trailing backslash keeps the break (a real continuation)", TerminalGuard.unwrapped("docker run \\\n  -p 80:80 image").text == "docker run \\\n  -p 80:80 image")
+            check("a block with a blank line is kept as written", TerminalGuard.unwrapped("cd project\n\nls").text == "cd project\n\nls" && TerminalGuard.unwrapped("cd project\n\nls").joined == 0)
+            check("one line, and stray blank lines around it, come out as the line", TerminalGuard.unwrapped("\n  ls -la  \n\n").text == "  ls -la" && TerminalGuard.unwrapped("ls").joined == 0)
             check("a pasted block cannot end the bracketed paste early", !TerminalGuard.wire(for: "x\u{1B}[201~rm\ny").dropFirst(6).dropLast(7).contains("\u{1B}"))
             check("one line goes as itself plus Enter, several as one bracketed paste", TerminalGuard.wire(for: "ls") == "ls\n" && TerminalGuard.wire(for: "a\nb") == "\u{1B}[200~a\nb\u{1B}[201~\n")
             check("sudo and su are refused in command position only", ["sudo ls", "  sudo ls", "ls && sudo rm", "su", "x\nsudo y"].allSatisfy(TerminalGuard.refusesPasswordCommand) && !["echo sudo", "pseudo ls", "git status", "ls sudoers.txt"].contains(where: TerminalGuard.refusesPasswordCommand))
@@ -105,6 +112,26 @@ extension NotchHubDebug {
             if let fake { field.keyDown(with: fake) }
             check("a key event that is not from the hardware is dropped", field.string.isEmpty && blocked == 3)
             check("the field is not an Accessibility element, has no children, no menu", !field.isAccessibilityElement() && (field.accessibilityChildren() ?? []).isEmpty && field.menu(for: fake ?? NSEvent()) == nil)
+
+            let board = NSPasteboard(name: NSPasteboard.Name("lavoix.terminal.autotest"))
+            board.clearContents()
+            board.setString("aws s3 ls\n  s3://my-bucket", forType: .string)
+            field.pasteboard = board
+            var joinedBreaks = 0
+            field.onPasteJoined = { joinedBreaks = $0 }
+            field.paste(nil)
+            check("a paste outside a hardware key is refused even with something to paste", field.string.isEmpty)
+            field.performAsHardwareKey { field.paste(nil) }
+            check("a paste inside a hardware key lands in the field with the wrapped lines joined, and says so", field.string == "aws s3 ls s3://my-bucket" && joinedBreaks == 1)
+            field.setText("")
+            field.performAsHardwareKey { field.pasteAsWritten() }
+            check("Shift-Command-V pastes the block exactly as copied", field.string == "aws s3 ls\n  s3://my-bucket")
+            field.setText("")
+            let fakeCommandV = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command], timestamp: 0, windowNumber: 0, context: nil, characters: "v", charactersIgnoringModifiers: "v", isARepeat: false, keyCode: 9)
+            let blockedBefore = blocked
+            let swallowed = fakeCommandV.map { field.performKeyEquivalent(with: $0) } ?? false
+            check("a Command-V that did not come from the keyboard hardware is swallowed, counted, and pastes nothing", swallowed && blocked == blockedBefore + 1 && field.string.isEmpty)
+            board.releaseGlobally()
 
             // MARK: a real shell on a real pseudo-terminal
             if !TerminalSession.canStartSafely {
@@ -187,6 +214,9 @@ extension NotchHubDebug {
                 check("through the store: a line is run and drawn", ran && drawn)
                 check("through the store: sudo is refused with a sentence and the line is kept", store.submit("sudo ls") == false && (store.notice ?? "").contains("password"))
                 check("through the store: Up recalls the last line, Down comes back to what was being typed", store.historyPrevious(current: "draft") == "echo VIA-STORE-$((3*3))" && store.historyNext() == "draft")
+                let pastedWrap = TerminalGuard.unwrapped("echo AA\n  BB-$((6*7))")
+                _ = store.submit(pastedWrap.text)
+                check("through the store: a wrapped pasted command runs as ONE command", await waitUntil(5) { store.rendered.contains { String($0.text.characters) == "AA BB-42" } })
                 store.lock()
                 check("through the store: locking blanks the drawing but not the session", store.rendered.isEmpty && store.sessionState == .running)
                 store.shutdown()

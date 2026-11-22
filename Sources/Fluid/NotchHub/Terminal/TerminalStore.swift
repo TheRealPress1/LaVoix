@@ -289,6 +289,11 @@ final class TerminalStore: ObservableObject {
         self.notice = "A key that did not come from the keyboard was ignored."
     }
 
+    /// A paste had line breaks joined: say so, and how to paste it as copied.
+    func noteJoinedPaste(lines: Int) {
+        self.notice = "\(lines + 1) lines joined into one command. Shift-Command-V pastes them as they were copied."
+    }
+
     /// The tab's width in columns, so programs wrap where the tab does.
     func setSize(width: CGFloat) {
         let columns = max(40, Int(width / 7.3))
