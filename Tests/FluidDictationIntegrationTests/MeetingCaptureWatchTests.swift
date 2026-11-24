@@ -12,16 +12,18 @@ final class MeetingCaptureWatchTests: XCTestCase {
         XCTAssertTrue(longer.text.contains("3 minutes"))
     }
 
-    func testAnUnprotectedMicrophoneWarnsAfterThirtySecondsOfSettling() throws {
-        XCTAssertNil(MeetingCaptureWatch.evaluate(mode: .onlineCall, callAudioSilentFor: 0, microphoneUnprotectedFor: 29))
-        let warning = try XCTUnwrap(MeetingCaptureWatch.evaluate(mode: .onlineCall, callAudioSilentFor: 0, microphoneUnprotectedFor: 30))
-        XCTAssertEqual(warning.kind, .microphoneUnprotected)
+    func testAnUnprotectedMicrophoneNoLongerWarns() {
+        // Removed 2026-11-24: a raw microphone is kept and its text is checked against the call audio's, so there is nothing for the person to do.
+        for seconds in [0.0, 29, 30, 600] {
+            XCTAssertNil(MeetingCaptureWatch.evaluate(mode: .onlineCall, callAudioSilentFor: 0, microphoneUnprotectedFor: seconds), "\(seconds)")
+        }
     }
 
-    func testBothProblemsAreOneCardThatSaysWhatWillHappen() throws {
+    func testASilentCallTrackWithAnUnprotectedMicrophoneIsJustTheSilentCallCard() throws {
         let warning = try XCTUnwrap(MeetingCaptureWatch.evaluate(mode: .onlineCall, callAudioSilentFor: 120, microphoneUnprotectedFor: 120))
-        XCTAssertEqual(warning.kind, .callAudioSilentAndMicrophoneUnprotected)
-        XCTAssertTrue(warning.text.contains("microphone alone"))
+        XCTAssertEqual(warning.kind, .callAudioSilent)
+        XCTAssertTrue(warning.text.contains("2 minutes"))
+        XCTAssertFalse(warning.text.contains("echo"), "no word about echo protection")
     }
 
     func testAnInRoomMeetingIsNeverJudgedOnCallAudio() {

@@ -20,35 +20,22 @@ nonisolated enum MeetingCaptureWatch {
     /// The microphone has been without echo protection this long. Short: the echo canceller needs a few seconds to settle after the start.
     static let unprotectedMicrophoneSeconds: TimeInterval = 30
 
-    /// `callAudioSilentFor` is the call-audio track's current run of silence; `microphoneUnprotectedFor` is how long the microphone has been
-    /// without echo protection (nil while protected or unknown). Only online calls are judged: an in-room meeting has no call audio.
+    /// `callAudioSilentFor` is the call-audio track's current run of silence. Only online calls are judged: an in-room meeting has no call audio.
+    ///
+    /// The microphone's echo protection is NOT warned about any more (removed 2026-11-24 at the user's request). A microphone recorded raw is kept when the
+    /// transcript is made and its text is checked against the call audio's (`MeetingMicrophoneEchoProtection.textEchoChecked`), so its words are not left out;
+    /// the warning appeared in every call and told the person something that no longer matters. `microphoneUnprotectedFor` stays a parameter so its
+    /// callers and the clock that measures it need no change; it is ignored.
     static func evaluate(
         mode: MeetingCaptureMode,
         callAudioSilentFor: TimeInterval?,
-        microphoneUnprotectedFor: TimeInterval?
+        microphoneUnprotectedFor _: TimeInterval?
     ) -> MeetingCaptureWarning? {
-        guard mode == .onlineCall else { return nil }
-        let silent = (callAudioSilentFor ?? 0) >= self.callAudioSilenceSeconds
-        let unprotected = (microphoneUnprotectedFor ?? 0) >= self.unprotectedMicrophoneSeconds
-        switch (silent, unprotected) {
-        case (true, true):
-            return MeetingCaptureWarning(
-                kind: .callAudioSilentAndMicrophoneUnprotected,
-                text: "No sound from the call, and the microphone is not echo-protected. The transcript will use the microphone alone."
-            )
-        case (true, false):
-            return MeetingCaptureWarning(
-                kind: .callAudioSilent,
-                text: "No sound from the call for \(self.spoken(callAudioSilentFor ?? 0)). If you can hear them, myOS is not receiving it."
-            )
-        case (false, true):
-            return MeetingCaptureWarning(
-                kind: .microphoneUnprotected,
-                text: "The microphone is not echo-protected, so its words may be left out of the transcript."
-            )
-        case (false, false):
-            return nil
-        }
+        guard mode == .onlineCall, (callAudioSilentFor ?? 0) >= self.callAudioSilenceSeconds else { return nil }
+        return MeetingCaptureWarning(
+            kind: .callAudioSilent,
+            text: "No sound from the call for \(self.spoken(callAudioSilentFor ?? 0)). If you can hear them, myOS is not receiving it."
+        )
     }
 
     /// A recording of the whole Mac has no call window whose closing would end it, so it would run on after the call. When nothing at all has played this long the
