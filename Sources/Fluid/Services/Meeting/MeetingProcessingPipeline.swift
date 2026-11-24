@@ -1402,8 +1402,14 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     ) async throws -> MeetingProcessingResult {
         // Never discard the only speech source: when the call's own audio was recorded as silence, the microphone is processed as room audio
         // instead of being refused for lack of echo protection (see MeetingMicrophoneOnlyFallback). Only this run sees the changed mode.
-        let effective = MeetingMicrophoneOnlyFallback.effectiveSession(for: savedSession)
+        let effective = await MeetingMicrophoneOnlyFallback.effectiveSession(for: savedSession, directory: sessionDirectory)
         let session = effective.session
+        if effective.reason == nil, MeetingMicrophoneOnlyFallback.keptUnprotectedMicrophone(saved: savedSession, effective: session) {
+            DebugLogger.shared.info(
+                "Meeting final processing: the microphone was recorded without echo protection; it is kept and its text is checked against the call audio's session=\(session.id.uuidString.prefix(8))",
+                source: "MeetingProcessingPipeline"
+            )
+        }
         if let reason = effective.reason {
             DebugLogger.shared.info(
                 "Meeting final processing: \(reason) session=\(session.id.uuidString.prefix(8))",

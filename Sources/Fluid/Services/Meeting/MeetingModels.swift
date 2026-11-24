@@ -492,6 +492,11 @@ nonisolated enum MeetingMicrophoneEchoProtection: String, Codable, Sendable {
     /// Microphone PCM processed by the pinned WebRTC AEC3 bridge after clock attestation and
     /// warm-up. This is software provenance, not a claim that the physical route is closed.
     case softwareEchoCancelled
+    /// Raw microphone audio from an `unprotected` capture era that a PROCESSING run chose to keep (capture never writes this; see
+    /// `MeetingMicrophoneOnlyFallback.effectiveSessionMeasuring`). The call's own audio is there to compare against, and the transcript backend removes every
+    /// microphone unit whose text repeats what the call audio said at the same moment (`MeetingTextOverlapEchoVerdictProvider`). Without it an unprotected era
+    /// dropped the person's own voice from the whole recording (every whole-Mac call from 2026-11-15 to 2026-11-24).
+    case textEchoChecked
     /// Pre-v9 audio that was historically transcribed without route evidence. It remains eligible
     /// for backward compatibility, but must never be rewritten as positively verified protection.
     case legacyUnclassified

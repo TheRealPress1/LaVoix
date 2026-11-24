@@ -320,6 +320,28 @@ final class MeetingAnalysisManifestTests: XCTestCase {
         XCTAssertNotEqual(appManifest.spans[0].analysisEpochID.trackID, micManifest.spans[0].analysisEpochID.trackID)
     }
 
+    func testATextEchoCheckedMicrophoneEraIsAdmittedWhileAnUnprotectedOneStaysAGap() throws {
+        let appChunk = self.chunk(sequence: 0, start: 100, end: 110)
+        let micChunk = self.chunk(sequence: 0, start: 100, end: 110)
+        let app = self.track(kind: .applicationAudio, chunks: [appChunk])
+        let checked = self.track(kind: .microphone, chunks: [micChunk], eras: [self.era(protection: .textEchoChecked, start: 0)])
+        let raw = self.track(kind: .microphone, chunks: [micChunk], eras: [self.era(protection: .unprotected, start: 0)])
+        for (mic, admitted) in [(checked, true), (raw, false)] {
+            let plan = self.plan(mode: .onlineCall, tracks: [app, mic])
+            let manifest = try MeetingAnalysisManifestBuilder(
+                plan: plan,
+                observer: self.observer([
+                    (app.id, appChunk, self.observed(appChunk, duration: 10)),
+                    (mic.id, micChunk, self.observed(micChunk, duration: 10)),
+                ])
+            ).build()
+            let micManifest = try XCTUnwrap(manifest.track(mic.id))
+            XCTAssertEqual(micManifest.spans.count, admitted ? 1 : 0)
+            XCTAssertEqual(micManifest.gaps.map(\.reason), admitted ? [] : [.inadmissibleCaptureEra])
+            if admitted { XCTAssertEqual(micManifest.spans[0].admission.rationale, .onlineMicrophoneTextEchoChecked) }
+        }
+    }
+
     func testSafeDeviceChangeAndRecordedDiscontinuityResetEpochs() throws {
         let first = self.chunk(sequence: 0, start: 100, end: 105)
         let second = self.chunk(

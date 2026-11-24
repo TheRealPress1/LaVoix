@@ -344,6 +344,8 @@ nonisolated enum MeetingCanonicalAdmissionRationale: String, Codable, CaseIterab
     case onlineMicrophoneVoiceProcessed
     case onlineMicrophoneAcousticallyClosed
     case onlineMicrophoneSoftwareEchoCancelled
+    /// Raw microphone audio kept by the processing run and checked against the call's text (see `MeetingMicrophoneEchoProtection.textEchoChecked`).
+    case onlineMicrophoneTextEchoChecked
     case onlineMicrophoneUnprotected
     /// Legacy-era audio stays usable only through the existing explicit legacy compatibility
     /// policy. The canonical backend has no such policy, so it is inadmissible here.
@@ -357,7 +359,8 @@ nonisolated enum MeetingCanonicalAdmissionRationale: String, Codable, CaseIterab
              .inRoomMicrophone,
              .onlineMicrophoneVoiceProcessed,
              .onlineMicrophoneAcousticallyClosed,
-             .onlineMicrophoneSoftwareEchoCancelled:
+             .onlineMicrophoneSoftwareEchoCancelled,
+             .onlineMicrophoneTextEchoChecked:
             return .admissible
         case .onlineMicrophoneUnprotected,
              .onlineMicrophoneLegacyUnclassified,
@@ -383,6 +386,7 @@ nonisolated enum MeetingCanonicalAdmission {
         case .voiceProcessed: return .onlineMicrophoneVoiceProcessed
         case .acousticallyClosed: return .onlineMicrophoneAcousticallyClosed
         case .softwareEchoCancelled: return .onlineMicrophoneSoftwareEchoCancelled
+        case .textEchoChecked: return .onlineMicrophoneTextEchoChecked
         case .unprotected: return .onlineMicrophoneUnprotected
         case .legacyUnclassified: return .onlineMicrophoneLegacyUnclassified
         case .none: return .onlineMicrophoneProtectionMissing
