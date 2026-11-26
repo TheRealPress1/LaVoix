@@ -8,8 +8,10 @@ import Vision
 
 /// What is on the screen right now, read once, for myOS's "Look": one window (the topmost one under the pointer, or the biggest window of an
 /// app the caller names), its app, title and page address, the text in it read by Apple's on-device text recognition, and (when asked) a
-/// screenshot file small enough to hand to a stronger model. One window, not the display: a display holds every other window too (a terminal,
+/// screenshot file small enough to hand to a stronger model. One window by default, not the display: a display holds every other window too (a terminal,
 /// a sidebar), and their words end up in the text. A window is captured even when another window covers part of it, and on any display.
+/// Scope "screen" (docs/23 in the myOS repo) is the display with every private window cut out of the picture itself (`EngineLookRules`), so neither the
+/// picture nor the words read from it can hold them; it needs the lists myOS pushes (`look.rules`) and without them reads one window instead.
 ///
 /// Rules this follows:
 /// - It never asks macOS for Screen Recording. Without it the answer says `screen_access: false` and carries no text; asking is a separate,
@@ -24,7 +26,8 @@ import Vision
 nonisolated protocol EngineLookProviding: Sendable {
     /// {screen_access, accessibility, scope, app?, bundle?, title?, url?, ocr_text, region_text?, screenshot?, width, height, ms, error?}
     /// `app` names an app (its name or bundle id) whose biggest window is read; without it the window under the pointer is. `scope` "display"
-    /// reads the whole display under the pointer instead. `region` is in global points. `find` is phrases to locate on the screen: the answer
+    /// reads the whole display under the pointer instead; "screen" reads it with the private windows cut out and adds `windows` (the apps and pages in the
+    /// picture, the front one marked) and `left_out` (which apps or pages were left out and why, by name only). `region` is in global points. `find` is phrases to locate on the screen: the answer
     /// then has `found`, one entry per phrase in the same order, {phrase, x, y, w, h, line, count} in global points (null when the phrase is
     /// not there), and `frame`, where the picture sits, {x, y, w, h}.
     func capture(region: CGRect?, save: Bool, app: String?, scope: String, find: [String]) async -> [String: Any]
@@ -64,6 +67,8 @@ nonisolated struct EngineLookRead: @unchecked Sendable {
     var screenAccess: Bool
     var error: String?
     var startedAt: Date
+    /// The windows of a screen read, front to back, with whether each was left out of the picture (the Look chooses between its two reads with this).
+    var layout: [EngineLookLayoutWindow] = []
 }
 
 nonisolated struct LiveEngineLook: EngineLookProviding {
@@ -73,6 +78,7 @@ nonisolated struct LiveEngineLook: EngineLookProviding {
 
     /// Picks the window, asks Accessibility about it and takes the picture. Reads no text yet.
     func read(app: String?, scope: String) async -> EngineLookRead {
+        if scope == "screen", app == nil { return await self.readScreen() }
         let started = Date()
         let pointer = CGEvent(source: nil)?.location ?? .zero
         // Which window: the named app's frontmost, else the one under the pointer. A named app with no window is an error, never a quiet
@@ -103,6 +109,76 @@ nonisolated struct LiveEngineLook: EngineLookProviding {
             return EngineLookRead(info: info, shot: shot, scope: "display", screenAccess: true, error: nil, startedAt: started)
         } catch {
             return EngineLookRead(info: info, shot: nil, scope: pick == nil ? "display" : "window", screenAccess: true, error: "The screen could not be read.", startedAt: started)
+        }
+    }
+
+    /// The display under the pointer with the private windows cut out. Every window on that display is judged by `EngineLookRules` (the app, and for a browser the
+    /// page it shows), the private ones are excluded from the capture itself, and the answer names what was left out. Without the lists myOS pushes this
+    /// reads one window instead (fail closed): an unfiltered display is never taken here.
+    func readScreen() async -> EngineLookRead {
+        guard let rules = EngineLookRulesStore.shared.current else { return await self.read(app: nil, scope: "window") }
+        let started = Date()
+        let pointer = CGEvent(source: nil)?.location ?? .zero
+        guard CGPreflightScreenCaptureAccess() else { return EngineLookRead(info: [:], shot: nil, scope: "screen", screenAccess: false, error: nil, startedAt: started) }
+        // The windows on the display the pointer is on, front to back; the front one is the one under the pointer, as for a one-window read.
+        var displays = [CGDirectDisplayID](repeating: 0, count: 4)
+        var count: UInt32 = 0
+        _ = CGGetDisplaysWithPoint(pointer, 4, &displays, &count)
+        let bounds = count > 0 ? CGDisplayBounds(displays[0]) : CGDisplayBounds(CGMainDisplayID())
+        let picks = EngineLookTarget.windows().filter { $0.bounds.intersects(bounds) }
+        let front = EngineLookTarget.underPointer(pointer) ?? picks.first
+        // Who each window is, quickly and all at once, within a couple of seconds; a window whose page address could not be read in time is judged without it.
+        let deadline = started.addingTimeInterval(2.5)
+        let facts: [CGWindowID: (facts: EngineLookWindowFacts, title: String?)] = await withTaskGroup(of: (CGWindowID, EngineLookWindowFacts, String?).self) { group in
+            for pick in picks {
+                let isFront = pick.windowID == front?.windowID
+                group.addTask(priority: .userInitiated) {
+                    let found = EngineLookWindow.lightFacts(pick, isFront: isFront, deadline: deadline)
+                    return (pick.windowID, found.facts, found.title)
+                }
+            }
+            var all: [CGWindowID: (facts: EngineLookWindowFacts, title: String?)] = [:]
+            for await (id, f, title) in group { all[id] = (f, title) }
+            return all
+        }
+        var excludedWindows = Set<CGWindowID>(), excludedApps = Set<pid_t>()
+        var layout: [EngineLookLayoutWindow] = [], visible: [[String: Any]] = [], leftOut: [[String: Any]] = [], seenLeftOut = Set<String>()
+        var frontLeftOut = false
+        for pick in picks {
+            guard let found = facts[pick.windowID] else { continue }
+            let verdict = rules.verdict(for: found.facts)
+            layout.append(EngineLookLayoutWindow(frame: pick.bounds, leftOut: verdict.isLeftOut))
+            switch verdict {
+            case .visible:
+                var entry: [String: Any] = ["app": String(found.facts.app.prefix(60)), "front": found.facts.isFront]
+                if let title = found.title { entry["title"] = title }
+                if let url = found.facts.url.flatMap(EngineLookWindow.cleaned) { entry["url"] = String(url.prefix(200)) }
+                visible.append(entry)
+            case let .leftOut(reason, wholeApp):
+                if wholeApp { excludedApps.insert(pick.pid) } else { excludedWindows.insert(pick.windowID) }
+                if found.facts.isFront { frontLeftOut = true }
+                // Names only: the app and why, never a title or an address.
+                let name = String(found.facts.app.prefix(60))
+                if seenLeftOut.insert(name + "|" + reason).inserted { leftOut.append(["app": name, "reason": reason]) }
+            }
+        }
+        // What the one-window read would say about the window in front (its title, address and links) when that window is in the picture; only a name when it is not.
+        var info: [String: Any] = await Task.detached(priority: .userInitiated) { EngineLookWindow.info(for: front) }.value
+        let frontApp = info["app"] as? String ?? "", frontBundle = info["bundle"] as? String ?? ""
+        if frontLeftOut || rules.appIsLeftOut(name: frontApp, bundle: frontBundle) {
+            info = ["app": frontApp, "bundle": frontBundle, "accessibility": info["accessibility"] ?? false]
+        }
+        info["windows"] = Array(visible.prefix(12))
+        info["left_out"] = Array(leftOut.prefix(8))
+        do {
+            let shot = try await EngineLookScreen.captureDisplay(pointer: pointer) { window in
+                guard let app = window.owningApplication else { return false }
+                // Every window of a private or conversation app (also the small ones and the banners the list above skips), and the pages judged one by one.
+                return excludedApps.contains(app.processID) || excludedWindows.contains(window.windowID) || rules.appIsLeftOut(name: app.applicationName, bundle: app.bundleIdentifier)
+            }
+            return EngineLookRead(info: info, shot: shot, scope: "screen", screenAccess: true, error: nil, startedAt: started, layout: layout)
+        } catch {
+            return EngineLookRead(info: info, shot: nil, scope: "screen", screenAccess: true, error: "The screen could not be read.", startedAt: started, layout: layout)
         }
     }
 
@@ -201,6 +277,21 @@ nonisolated enum EngineLookWindow {
         let links = self.links(in: window)
         if !links.isEmpty { result["links"] = links }
         return result
+    }
+
+    /// Who a window is, fast: its app and bundle, and for a browser its page address (found without the links and without a long walk). Used for every window
+    /// of a screen read; each Accessibility call is held to half a second and the whole thing to `deadline`, after which the address is simply missing.
+    static func lightFacts(_ pick: EngineLookTarget.Pick, isFront: Bool, deadline: Date) -> (facts: EngineLookWindowFacts, title: String?) {
+        let running = NSRunningApplication(processIdentifier: pick.pid)
+        var facts = EngineLookWindowFacts(app: running?.localizedName ?? pick.owner, bundle: running?.bundleIdentifier ?? "", url: nil, isFront: isFront)
+        let isBrowser = EngineLookRules.browserBundles.contains(facts.bundle.lowercased()) || EngineLookRules.browserNames.contains(EngineLookRules.fold(facts.app))
+        guard AXIsProcessTrusted(), Date() < deadline, let running else { return (facts, nil) }
+        let element = AXUIElementCreateApplication(running.processIdentifier)
+        AXUIElementSetMessagingTimeout(element, 0.5)
+        guard let window = self.axWindow(of: element, matching: pick.bounds) else { return (facts, nil) }
+        let title = self.string(window, kAXTitleAttribute).flatMap { $0.isEmpty ? nil : String($0.prefix(120)) }
+        if isBrowser, Date() < deadline { facts.url = self.pageURL(in: window) }
+        return (facts, title)
     }
 
     /// The page's links as {text, href}: http(s) addresses (query and fragment removed) and mailto: addresses, at most sixty, found by walking
@@ -331,12 +422,18 @@ nonisolated enum EngineLookScreen {
         return Shot(image: image, frame: window.frame, title: window.title)
     }
 
-    /// The display the pointer is on, at its real pixel size, with the pointer drawn and this app's own windows left out.
-    static func captureDisplay(pointer: CGPoint) async throws -> Shot {
+    /// The display the pointer is on, at its real pixel size, with the pointer drawn and this app's own windows left out. With `leaving`, every window it says
+    /// yes to is left out of the picture too (cut out by the capture itself, so what was behind it shows and nothing of it is in the pixels).
+    static func captureDisplay(pointer: CGPoint, leaving: ((SCWindow) -> Bool)? = nil) async throws -> Shot {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let display = content.displays.first(where: { $0.frame.contains(pointer) }) ?? content.displays.first else { throw EngineLookError.noDisplay }
         let own = Bundle.main.bundleIdentifier
-        let filter = SCContentFilter(display: display, excludingApplications: content.applications.filter { $0.bundleIdentifier == own }, exceptingWindows: [])
+        let filter: SCContentFilter
+        if let leaving {
+            filter = SCContentFilter(display: display, excludingWindows: content.windows.filter { $0.owningApplication?.bundleIdentifier == own || leaving($0) })
+        } else {
+            filter = SCContentFilter(display: display, excludingApplications: content.applications.filter { $0.bundleIdentifier == own }, exceptingWindows: [])
+        }
         let configuration = SCStreamConfiguration()
         let mode = CGDisplayCopyDisplayMode(display.displayID)
         configuration.width = mode?.pixelWidth ?? Int(display.frame.width * 2)

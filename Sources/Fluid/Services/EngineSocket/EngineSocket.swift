@@ -53,8 +53,9 @@ import SQLite3
 ///   {"op":"permissions.request","name"}                   -> {"ok":true}   (shows macOS's own question where there is one; Full Disk Access is refused, the user switches it on in System Settings)
 ///   {"op":"shortcuts.get"}                                -> {"ok":true,"shortcuts":{dictation:[...],edit,command,cancel,paste_last}}   (labels such as "Fn"; read-only)
 ///   {"op":"audio.inputs"}                                 -> {"ok":true,"audio":{inputs:[{uid,name,preferred,default}]}}   (read-only)
-///   {"op":"look.capture","app"?,"scope"?,"region"?:{x,y,w,h},"save"?,"find"?:[phrase]} -> {"ok":true,"look":{screen_access,accessibility,scope,app?,bundle?,title?,url?,ocr_text,region_text?,screenshot?,frame:{x,y,w,h},found?:[{phrase,x,y,w,h,line,count}|null],width,height,ms,error?}}   (reads ONE window once for myOS's Look: the biggest window of the app named in "app", else the topmost window under the pointer; "scope":"display" reads the whole display under the pointer instead; never asks for Screen Recording, refused while a meeting is recording; region is in global points, screenshot is a small JPEG in the private folder, kept 15 minutes)
-///   {"op":"look.configure","enabled"} / {"op":"look.status"}  -> {"ok":true,"look":{enabled,chord,active,pending}}   (the Fn+Control chord for Look is off until switched on here; the choice is kept)
+///   {"op":"look.capture","app"?,"scope"?,"region"?:{x,y,w,h},"save"?,"find"?:[phrase]} -> {"ok":true,"look":{screen_access,accessibility,scope,app?,bundle?,title?,url?,ocr_text,region_text?,screenshot?,frame:{x,y,w,h},found?:[{phrase,x,y,w,h,line,count}|null],width,height,ms,error?}}   (reads ONE window once for myOS's Look: the biggest window of the app named in "app", else the topmost window under the pointer; "scope":"display" reads the whole display under the pointer instead; "scope":"screen" reads the display with the private windows cut out of the picture (needs look.rules; else one window is read) and adds windows:[{app,title?,url?,front}] and left_out:[{app,reason}]; never asks for Screen Recording, refused while a meeting is recording; region is in global points, screenshot is a small JPEG in the private folder, kept 15 minutes)
+///   {"op":"look.configure","enabled"?,"screen"?} / {"op":"look.status"}  -> {"ok":true,"look":{enabled,chord,active,pending,screen,rules_loaded}}   (the Fn+Control chord for Look is off until switched on here; the choice is kept. "screen" switches whole-screen mode: the chord also reads the display with private windows cut out, and it only works while rules_loaded is true)
+///   {"op":"look.rules","private_apps":[...],"private_sites"?:[...],"private_host_words"?:[...],"messaging_apps"?:[...],"messaging_sites"?:[...]}  -> {"ok":true,"rules":{loaded,private_apps,private_sites,private_host_words,messaging_apps,messaging_sites}}   (myOS pushes what a whole-screen Look leaves out of the picture; kept in memory only, so a restarted engine has none until myOS pushes again, and without them whole-screen Looks are not taken: fail closed. private_apps is required and may not be empty)
 ///   {"op":"look.buddy","state":"thinking"|"done"}          -> {"ok":true}   (the cursor companion: thinking shows the spinner at the pointer, done lets it go; refused while a meeting is recording, except done)
 ///   {"op":"look.point","x","y","label"?,"hold"?}          -> {"ok":true}   (the companion flies to a global screen point, origin top-left of the main display, says label (60 characters at most) for hold seconds (0.5 to 30, default 3), then flies back to the pointer; refused while a meeting is recording)
 ///   {"op":"french.wait","timeout"?}                       -> {"ok":true,"request":{id,text,allow,target}|null}   (text typed into the tab, with the language it should come out in; long poll, like look.wait)
@@ -459,10 +460,16 @@ nonisolated enum EngineSocket {
         case "look.configure", "look.status":
             guard let control = services.lookControl else { return fail("Look is not available") }
             if op == "look.configure" {
-                guard let enabled = object["enabled"] as? Bool else { return fail("enabled must be true or false") }
-                await control.setEnabled(enabled)
+                let enabled = object["enabled"] as? Bool, screen = object["screen"] as? Bool
+                guard enabled != nil || screen != nil else { return fail("enabled or screen must be true or false") }
+                if let enabled { await control.setEnabled(enabled) }
+                if let screen { await control.setScreen(screen) }
             }
             _ = emit(["ok": true, "look": await control.status()])
+        case "look.rules":
+            guard let rules = EngineLookRules.parse(object) else { return fail("private_apps must be a list of app names, and not empty") }
+            EngineLookRulesStore.shared.current = rules
+            _ = emit(["ok": true, "rules": ["loaded": true, "private_apps": rules.privateApps.count, "private_sites": rules.privateSites.count, "private_host_words": rules.privateHostWords.count, "messaging_apps": rules.messagingApps.count, "messaging_sites": rules.messagingSites.count]])
         case "look.buddy", "look.point":
             guard let buddy = services.buddy else { return fail("the cursor companion is not available") }
             let state = op == "look.point" ? "point" : (object["state"] as? String ?? "")
@@ -520,7 +527,7 @@ nonisolated enum EngineSocket {
             }
             let save = object["save"] as? Bool ?? false
             let app = (object["app"] as? String).flatMap { $0.count <= 100 ? $0 : nil }
-            let scope = (object["scope"] as? String) == "display" ? "display" : "window"
+            let scope = ["display", "screen"].contains(object["scope"] as? String ?? "") ? (object["scope"] as? String ?? "window") : "window"
             let find = EngineLookFind.phrases(from: object["find"])
             if let result = await EngineTimeout.run(seconds: 20, { await look.capture(region: region, save: save, app: app, scope: scope, find: find) }) {
                 _ = emit(["ok": true, "look": result])
@@ -1378,8 +1385,13 @@ private final class FakeActivity: EngineActivityProviding, @unchecked Sendable {
 private final class FakeLookControl: EngineLookControlProviding, @unchecked Sendable {
     private let lock = NSLock()
     private var on = false
+    private var screenOn = false
     func setEnabled(_ on: Bool) async { self.lock.lock(); self.on = on; self.lock.unlock() }
-    func status() async -> [String: Any] { self.lock.lock(); defer { self.lock.unlock() }; return ["enabled": self.on, "chord": "fn+control", "active": false, "pending": false] }
+    func setScreen(_ on: Bool) async { self.lock.lock(); self.screenOn = on; self.lock.unlock() }
+    func status() async -> [String: Any] {
+        self.lock.lock(); defer { self.lock.unlock() }
+        return ["enabled": self.on, "chord": "fn+control", "active": false, "pending": false, "screen": self.screenOn, "rules_loaded": EngineLookRulesStore.shared.current != nil]
+    }
 }
 
 private final class FakeLook: EngineLookProviding, @unchecked Sendable {
@@ -2179,6 +2191,44 @@ nonisolated enum EngineSocketAutotest {
                 let sweep: [CGPoint] = [CGPoint(x: 100, y: 300), CGPoint(x: 200, y: 300), CGPoint(x: 400, y: 300)]
                 let sweepBox = LookPath.region(from: sweep)
                 check("a straight sweep gets a box at least sixty points high", sweepBox != nil && (sweepBox?.height ?? 0) >= 60 && (sweepBox?.width ?? 0) >= 300)
+            }
+            // look: what a whole-screen Look leaves out of the picture (docs/23), and which of its two reads is used
+            do {
+                EngineLookRulesStore.shared.current = nil
+                check("look.rules refuses a push with no private apps, and nothing is loaded", ask(#"{"op":"look.rules"}"#)?["ok"] as? Bool == false && ask(#"{"op":"look.rules","private_apps":[]}"#)?["ok"] as? Bool == false && ask(#"{"op":"look.rules","private_apps":[7,""]}"#)?["ok"] as? Bool == false && EngineLookRulesStore.shared.current == nil)
+                check("look.status says no rules are loaded until myOS pushes them", ((ask(#"{"op":"look.status"}"#)?["look"] as? [String: Any])?["rules_loaded"] as? Bool) == false)
+                let pushed = ask(#"{"op":"look.rules","private_apps":["Wallet"," Passwords ","myOS","passwords",7,""],"private_sites":["chase.com","paypal.com"],"private_host_words":["bank"],"messaging_apps":["Messages","Mail","WhatsApp"],"messaging_sites":["mail.google.com"]}"#)?["rules"] as? [String: Any]
+                check("look.rules keeps the lists, lower case, without duplicates, empties or numbers", pushed?["loaded"] as? Bool == true && pushed?["private_apps"] as? Int == 3 && pushed?["private_sites"] as? Int == 2 && pushed?["messaging_apps"] as? Int == 3 && EngineLookRulesStore.shared.current?.privateApps == ["myos", "passwords", "wallet"])
+                check("look.status then says they are loaded", ((ask(#"{"op":"look.status"}"#)?["look"] as? [String: Any])?["rules_loaded"] as? Bool) == true)
+                let screenOn = ask(#"{"op":"look.configure","screen":true}"#)?["look"] as? [String: Any]
+                check("look.configure switches whole-screen mode on by itself, and still refuses a call with neither switch", screenOn?["screen"] as? Bool == true && ask(#"{"op":"look.configure"}"#)?["ok"] as? Bool == false)
+                _ = ask(#"{"op":"look.configure","screen":false}"#)
+                _ = ask(#"{"op":"look.capture","scope":"screen"}"#)
+                check("look.capture passes the screen scope through, and no app name goes with it", fakeLook.calls.scopes.last == "screen" && fakeLook.calls.apps.last! == nil)
+                // (an empty set if the push was lost, so the checks below fail loudly instead of the run stopping)
+                let rules = EngineLookRulesStore.shared.current ?? EngineLookRules(privateApps: [], privateSites: [], privateHostWords: [], messagingApps: [], messagingSites: [])
+                func verdict(_ app: String, _ bundle: String = "", _ url: String? = nil, front: Bool = false) -> EngineLookVerdict {
+                    rules.verdict(for: EngineLookWindowFacts(app: app, bundle: bundle, url: url, isFront: front))
+                }
+                let privateWhole = EngineLookVerdict.leftOut(reason: "private", wholeApp: true)
+                let talkWhole = EngineLookVerdict.leftOut(reason: "conversation", wholeApp: true)
+                check("a password manager, the keychain, myOS and the Notification Center are left out whole", verdict("Passwords", "com.apple.Passwords") == privateWhole && verdict("Keychain Access", "com.apple.keychainaccess") == privateWhole && verdict("myOS", "com.gaspard.myos") == privateWhole && verdict("Wallet") == privateWhole && verdict("NotificationCenter", "com.apple.notificationcenterui") == privateWhole)
+                check("Messages, Mail and WhatsApp are left out whole, WhatsApp even with the invisible mark in its name or under another name", verdict("Messages") == talkWhole && verdict("Mail", "com.apple.mail") == talkWhole && verdict("\u{200E}WhatsApp") == talkWhole && verdict("Something else", "net.whatsapp.WhatsApp") == talkWhole)
+                check("a browser page on a bank or payment site is left out, that window only", verdict("Dia", "company.thebrowser.dia", "https://secure.chase.com/accounts") == .leftOut(reason: "private", wholeApp: false) && verdict("Brave Browser", "com.brave.Browser", "https://www.mybank.example/login") == .leftOut(reason: "private", wholeApp: false) && verdict("Safari", "com.apple.Safari", "https://paypal.com/") == .leftOut(reason: "private", wholeApp: false))
+                check("a browser page on Gmail is left out as a conversation, that window only", verdict("Dia", "company.thebrowser.dia", "https://mail.google.com/mail/u/0/#inbox") == .leftOut(reason: "conversation", wholeApp: false))
+                check("a browser page that is fine is in the picture, even for a site whose name only ends like a private one", verdict("Dia", "company.thebrowser.dia", "https://jobs.ashbyhq.com/plot/abc") == .visible && verdict("Safari", "com.apple.Safari", "https://example.com") == .visible && verdict("Dia", "company.thebrowser.dia", "https://notchase.com/") == .visible)
+                check("a browser window whose address could not be read is left out unless it is the front one", verdict("Dia", "company.thebrowser.dia", nil) == .leftOut(reason: "address unreadable", wholeApp: false) && verdict("Google Chrome", "com.google.Chrome", nil) == .leftOut(reason: "address unreadable", wholeApp: false) && verdict("Dia", "company.thebrowser.dia", nil, front: true) == .visible)
+                check("an ordinary app with no page address is in the picture", verdict("Xcode", "com.apple.dt.Xcode") == .visible && verdict("Conductor") == .visible && verdict("Finder", "com.apple.finder") == .visible)
+                check("an app with no window in the list (a banner, a pop-up) is judged by its app rules alone", rules.appIsLeftOut(name: "Notification Center", bundle: "com.apple.notificationcenterui") && rules.appIsLeftOut(name: "\u{200E}WhatsApp", bundle: "") && rules.appIsLeftOut(name: "Messages", bundle: "") && !rules.appIsLeftOut(name: "Dia", bundle: "company.thebrowser.dia"))
+                check("a host is read without www and a missing address is empty", EngineLookRules.host(of: "https://www.Example.com/a?b=c") == "example.com" && EngineLookRules.host(of: nil) == "" && EngineLookRules.host(of: "not a url") == "")
+                // which of the two reads a Look uses: a visible window in front of a left-out one
+                let layout = [EngineLookLayoutWindow(frame: CGRect(x: 0, y: 0, width: 500, height: 400), leftOut: false), EngineLookLayoutWindow(frame: CGRect(x: 300, y: 100, width: 600, height: 500), leftOut: true)]
+                check("with no circle the screen read is used", EngineLookChoice.useScreen(region: nil, layout: layout))
+                check("a circle over a window that is in the picture uses the screen read", EngineLookChoice.useScreen(region: CGRect(x: 50, y: 50, width: 100, height: 100), layout: layout))
+                check("a circle over a window that was left out uses the one-window read", !EngineLookChoice.useScreen(region: CGRect(x: 700, y: 300, width: 100, height: 100), layout: layout))
+                check("a circle where a visible window covers the left-out one uses the screen read", EngineLookChoice.useScreen(region: CGRect(x: 350, y: 150, width: 100, height: 100), layout: layout))
+                check("a circle over bare desktop, or a screen read with no windows, uses the screen read", EngineLookChoice.useScreen(region: CGRect(x: 1500, y: 1500, width: 100, height: 100), layout: layout) && EngineLookChoice.useScreen(region: CGRect(x: 5, y: 5, width: 100, height: 100), layout: []))
+                EngineLookRulesStore.shared.current = nil
             }
             // look: the cursor companion's ops and its pure rules
             do {

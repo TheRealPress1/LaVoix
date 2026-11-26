@@ -17,10 +17,14 @@ import Foundation
 final class LookSession {
     static let shared = LookSession()
     private static let enabledKey = "LookChordEnabled"
+    private static let screenKey = "LookScreenEnabled"
     /// How long after Fn is released a pending Look may still claim the stop.
     private static let graceAfterRelease: TimeInterval = 2
 
     private(set) var enabled = UserDefaults.standard.bool(forKey: LookSession.enabledKey)
+    /// Whole-screen mode (docs/23): with the chord on, also read the display with the private windows cut out. myOS switches it on after the user said Always
+    /// once, and it only takes effect while myOS has pushed the lists of what to leave out.
+    private(set) var screenMode = UserDefaults.standard.bool(forKey: LookSession.screenKey)
     var persists = true
 
     private var isDictating: () -> Bool = { false }
@@ -34,8 +38,8 @@ final class LookSession {
     private var pending = false
     private var pendingDeadline: Date?
     private var path: [CGPoint] = []
-    private var read: Task<EngineLookRead?, Never>?
-    private var taken: (path: [CGPoint], read: Task<EngineLookRead?, Never>?)?
+    private var read: Task<LookReads?, Never>?
+    private var taken: (path: [CGPoint], read: Task<LookReads?, Never>?)?
 
     /// Called once by the dictation screen: how to tell that a plain dictation is being recorded right now, and the microphone level the
     /// cursor companion's waveform follows while it is.
@@ -52,7 +56,15 @@ final class LookSession {
         if on { self.startObserving() } else { self.stopObserving() }
     }
 
-    var statusText: [String: Any] { ["enabled": self.enabled, "chord": "fn+control", "active": self.sessionActive, "pending": self.pending] }
+    func setScreenMode(_ on: Bool) {
+        guard on != self.screenMode else { return }
+        self.screenMode = on
+        if self.persists { UserDefaults.standard.set(on, forKey: Self.screenKey) }
+    }
+
+    var statusText: [String: Any] {
+        ["enabled": self.enabled, "chord": "fn+control", "active": self.sessionActive, "pending": self.pending, "screen": self.screenMode, "rules_loaded": EngineLookRulesStore.shared.current != nil]
+    }
 
     // MARK: Watching the modifier keys
 
@@ -118,7 +130,13 @@ final class LookSession {
             if let start = self.path.first { LookBuddy.shared.addTrail(quartz: start) }
             self.levelSubscription = self.levels?.receive(on: DispatchQueue.main).sink { level in MainActor.assumeIsolated { LookBuddy.shared.setLevel(level) } }
             DebugLogger.shared.info("Look: started", source: "LookSession")
-            return await LiveEngineLook().read(app: nil, scope: "window")
+            // Both reads are taken now, while the user is still talking: only afterwards is it known whether they circled something. The window read is the
+            // one Look has always taken; the screen read (the display with private windows cut out) is taken only in whole-screen mode with the rules in hand.
+            let wantsScreen = self.screenMode && EngineLookRulesStore.shared.current != nil
+            async let window = LiveEngineLook().read(app: nil, scope: "window")
+            guard wantsScreen else { return LookReads(window: await window, screen: nil) }
+            async let screen = LiveEngineLook().read(app: nil, scope: "screen")
+            return LookReads(window: await window, screen: await screen)
         }
     }
 
@@ -173,8 +191,13 @@ final class LookSession {
         guard let taken = self.taken else { LookBuddy.shared.end(); return }
         self.taken = nil
         let region = LookPath.region(from: taken.path)
-        guard let read = await taken.read?.value else { LookBuddy.shared.end(); return }
-        let capture = await LiveEngineLook().finish(read, region: region, save: false)
+        guard let reads = await taken.read?.value else { LookBuddy.shared.end(); return }
+        // No circle: the whole screen. A circle over a window that is in the picture: the screen, narrowed. A circle over a window that was left out (a private
+        // or conversation app): the one-window read, whose rules are unchanged. A screen read that found nothing to see (no screen access, an error) is not used.
+        let screen = reads.screen.flatMap { $0.shot != nil ? $0 : nil }
+        let useScreen = screen != nil && EngineLookChoice.useScreen(region: region, layout: screen?.layout ?? [])
+        let chosen = useScreen ? screen! : reads.window
+        let capture = await LiveEngineLook().finish(chosen, region: region, save: useScreen)
         var event: [String: Any] = ["kind": "captured", "said": String(said.prefix(1000)), "path_points": taken.path.count, "capture": capture]
         if let region { event["region"] = ["x": region.minX, "y": region.minY, "w": region.width, "h": region.height] }
         guard let data = try? JSONSerialization.data(withJSONObject: event), let json = String(data: data, encoding: .utf8) else { LookBuddy.shared.end(); return }
@@ -193,6 +216,12 @@ final class LookSession {
         self.read?.cancel()
         self.read = nil
     }
+}
+
+/// What was read when Control went down: the one window under the pointer, and (in whole-screen mode) the display with private windows cut out.
+nonisolated struct LookReads: @unchecked Sendable {
+    var window: EngineLookRead
+    var screen: EngineLookRead?
 }
 
 /// The two modifier keys of the chord: Fn and Control, and nothing else held.
@@ -271,10 +300,12 @@ actor LookEvents {
 /// The switch for the chord and its state, for myOS.
 nonisolated protocol EngineLookControlProviding: Sendable {
     func setEnabled(_ on: Bool) async
+    func setScreen(_ on: Bool) async
     func status() async -> [String: Any]
 }
 
 nonisolated struct LiveEngineLookControl: EngineLookControlProviding {
     func setEnabled(_ on: Bool) async { await MainActor.run { LookSession.shared.setEnabled(on) } }
+    func setScreen(_ on: Bool) async { await MainActor.run { LookSession.shared.setScreenMode(on) } }
     func status() async -> [String: Any] { await MainActor.run { LookSession.shared.statusText } }
 }
